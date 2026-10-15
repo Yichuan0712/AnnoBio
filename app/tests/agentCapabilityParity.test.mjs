@@ -4,9 +4,8 @@ import { imageCell, normalizeDatasetContent, pdfCell } from '../src/datasetConte
 import { planChangeSet } from '../src/agent/operations/changeSet.js';
 import { inspectWorkflowNode, readNodeRows } from '../src/agent/canvas/workflowNodeInspector.js';
 import { buildWorkspaceSummary } from '../src/agent/context/workspaceSummary.js';
+import { extractInputFields } from '../src/promptText.js';
 
-const extractInputFields = (sections) => [...new Set(sections.flatMap((section) =>
-  [...String(section.content || '').matchAll(/\{([^{}]+)\}/g)].map((match) => match[1])))];
 const context = { extractInputFields };
 const plan = (state, operations, extra = {}) => planChangeSet(state, operations, { ...context, ...extra });
 const find = (result, ref) => result.state.nodes.find((node) => node.nodeId === (result.refs[ref] || ref));
@@ -17,7 +16,7 @@ const source = () => ({ nodes: [{ type: 'dataset', nodeId: 'source', name: 'Sour
 
 test('Agent schemas retain Allow None and numeric/list examples across inspection and new versions', () => {
   const original = plan({ nodes: [], connections: [] }, [{ op: 'add_prompt', ref: '$prompt', name: 'Extract',
-    sections: [{ name: 'Task', content: 'Read {text}.' }],
+    text: 'Read {text}.',
     output: { return_shape: 'single', fields: [
       { key: 'genes', type: 'list_str', description: 'Gene symbols', allow_none: true, examples: [['A', 'B']] },
       { key: 'weights', type: 'list_float', description: 'Weights', examples: [[0, '1.5']] },
@@ -37,11 +36,11 @@ test('Agent schemas retain Allow None and numeric/list examples across inspectio
 });
 
 test('Agent schema edits reject duplicate names and malformed list/numeric examples', () => {
-  const add = { op: 'add_prompt', sections: [{ name: 'Task', content: 'Read.' }],
+  const add = { op: 'add_prompt', text: 'Read.',
     output: { fields: [{ key: 'a', type: 'str', description: 'Answer' }] } };
   const empty = { nodes: [], connections: [] };
   assert.equal(plan(empty, [add]).state.nodes[0].outputFormat.returnShape, 'table');
-  assert.throws(() => plan(empty, [{ ...add, sections: [...add.sections, { name: 'task', content: 'Again.' }] }]), /Section names must be unique/);
+  assert.throws(() => plan(empty, [{ ...add, text: '   ' }]), /text must be the prompt text/);
   assert.throws(() => plan(empty, [{ ...add, output: { fields: [{ key: 'a', type: 'list_str', examples: ['A,B'] }] } }]), /each list example as an array/);
   assert.throws(() => plan(empty, [{ ...add, output: { fields: [{ key: 'a', type: 'float', examples: ['bad'] }] } }]), /numeric examples/);
 });

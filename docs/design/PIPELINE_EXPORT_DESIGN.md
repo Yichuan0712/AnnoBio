@@ -58,7 +58,7 @@ can continue to consume an older archive by checking `format_version`.
 ```json
 {
   "format": "annobio.pipeline",
-  "format_version": 1,
+  "format_version": 2,
   "name": "site-extraction",
   "entrypoint": "main.py",
   "generated_at": "2026-09-23T17:00:00Z",
@@ -165,7 +165,7 @@ saved Run results and cached Process results are not exported as execution state
 
 A selected Prompt version and its selected Run become one executable Prompt step:
 
-- Prompt sections are preserved in order and combined with blank lines, matching the app.
+- The Prompt text is exported as one `PROMPT` string (trimmed), matching the app.
 - Run input-to-column mappings and Prompt input types are preserved.
 - Legacy Runs with no saved mapping may infer `{field} -> field` only when exactly one Dataset
   column has that name (case-insensitive); ambiguous matches still require an explicit mapping.
@@ -179,7 +179,7 @@ A selected Prompt version and its selected Run become one executable Prompt step
 #### Duplicated and manually edited Prompts
 
 A duplicated Prompt is an independent snapshot. If the user edits it afterward, the exporter reads
-the duplicate node's current name, sections, input types, and output schema; it does not inherit
+the duplicate node's current name, text, input types, and output schema; it does not inherit
 from, diff against, or import the original Prompt. The selected Run contributes only its current
 input-column mapping and non-secret model configuration.
 

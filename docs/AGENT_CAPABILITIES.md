@@ -5,7 +5,7 @@ Agent 的写入继续通过提案卡片确认，执行代码和模型任务通�
 
 | 功能 | Agent 入口与规则 |
 | --- | --- |
-| Prompt sections、输入类型、输出 schema | `add_prompt`、`add_prompt_version`、`update`；保留 Allow None、数字和嵌套列表示例；名称大小写不敏感地唯一 |
+| Prompt 文本、输入类型、输出 schema | `add_prompt`、`add_prompt_version`、`update`；文本整段替换（`text`）或按片段替换（`text_edits`，每个 old 只出现一次）；保留 Allow None、数字和嵌套列表示例；字段名大小写不敏感地唯一 |
 | Dataset 行列与类型 | `add_dataset`、`update`；Text/Image/PDF 列；已有文件单元格保持结构，`row_ids` 保留删除/重排行的身份 |
 | Dataset 副本与版本 | `duplicate_dataset`；版本通过 Dataset 版本边连接，保留行身份；副本独立；均不计为新的 Sample 输出 |
 | 表格内移动图片 | `move_image`；同一 Dataset 的图片列间移动，源单元格移除，目标追加；遵守内容锁 |

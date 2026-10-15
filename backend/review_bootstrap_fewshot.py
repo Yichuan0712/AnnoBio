@@ -4,8 +4,8 @@ BootstrapFewShotWithRandomSearch review method — a thin wrapper around DSPy's 
 review_gepa.py/review_miprov2.py). Same "wrap the official code" approach as those two methods, and
 reuses their shared DSPy-bridging layer (review_dspy_shared.py) rather than re-deriving it.
 
-Unlike GEPA (evolves the section's whole text) and MIPROv2 (jointly optimizes instructions AND
-few-shot demos via Bayesian search), this optimizer does NOT touch the section's instructions at all —
+Unlike GEPA (evolves the prompt's whole text) and MIPROv2 (jointly optimizes instructions AND
+few-shot demos via Bayesian search), this optimizer does NOT touch the prompt's instructions at all —
 it only searches over which few-shot examples to attach, and how many. Concretely (see
 dspy.BootstrapFewShotWithRandomSearch.compile in the installed package): it tries a zero-shot baseline, a
 labels-only baseline, an unshuffled bootstrap, then `bootstrap_fewshot_num_candidates` random subsets of
@@ -15,9 +15,8 @@ the same example set, and keeps whichever scored best. It is the simplest of the
 methods here — no LLM-driven instruction/demo proposal, purely bootstrap + random sampling + evaluation —
 so it's also the cheapest per candidate (no reflection/proposal calls, only task-model calls).
 
-Same architecture scope as review_miprov2.py: optimizes the target section IN ISOLATION (its own
-`{placeholder}` keys become dspy.InputFields; other sections aren't shown to the optimizer). See that
-module's docstring for why.
+Same prompt-to-Signature mapping as review_miprov2.py: the prompt text becomes the instructions and its
+`{placeholder}` keys become dspy.InputFields. See that module's docstring for why.
 
 Cost note: `bootstrap_fewshot_num_candidates` (its own setting, default 10) is the primary cost dial —
 each candidate bootstraps and evaluates against the full example set, so cost is roughly
@@ -46,10 +45,10 @@ from review_dspy_shared import (
     format_demos_block,
     make_metric,
     make_mean_score_fn,
-    SectionModule,
+    PromptModule,
 )
 from review_gepa import _build_training_examples
-from review_pipeline import PromptEditSuggestion, _sanitize_prompt_edits, _sec_name_content
+from review_pipeline import PromptEditSuggestion, _sanitize_prompt_edits
 from score_mapping_bundle import parse_score_mapping_bundle
 from score_run_gt_pairing import flatten_score_rules
 from safe_stdio import safe_print as _print
@@ -72,17 +71,14 @@ def run_bootstrap_fewshot(
 ) -> None:
     """Drive BootstrapFewShotWithRandomSearch. Emits: plan, stage(prepare|compile|select), suggestions
     (at most one), done."""
-    sections = list(getattr(body, "prompt_sections", None) or [])
+    prompt = str(getattr(body, "prompt", "") or "")
+    seed_text = prompt.strip()
     comparison_rows = list(getattr(body, "comparison_rows", None) or [])
 
-    if not sections:
-        append_event({"type": "plan", "summary": "No prompt sections to optimize.", "diagnosis_total": 0})
+    if not seed_text:
+        append_event({"type": "plan", "summary": "The prompt is empty; nothing to optimize.", "diagnosis_total": 0})
         append_event({"type": "done"})
         return
-
-    target_idx = getattr(body, "target_section_index", None)
-    target_idx = target_idx if isinstance(target_idx, int) and 0 <= target_idx < len(sections) else 0
-    section_name, seed_text = _sec_name_content(sections[target_idx])
 
     output_schema = getattr(body, "output_schema", None) or {}
     if not output_schema.get("fields"):
@@ -124,8 +120,8 @@ def run_bootstrap_fewshot(
     append_event({
         "type": "plan",
         "summary": (
-            f"BootstrapFewShotWithRandomSearch: selecting few-shot examples for section \"{section_name}\" "
-            f"in isolation ({len(input_keys)} placeholder field(s) it sees) against {len(examples)} "
+            f"BootstrapFewShotWithRandomSearch: selecting few-shot examples for the prompt "
+            f"({len(input_keys)} placeholder field(s)) against {len(examples)} "
             f"example(s) via the official dspy.BootstrapFewShotWithRandomSearch, trying "
             f"{num_candidates + 3} candidate demo sets. Instructions are not changed by this method — "
             "only which examples get attached."
@@ -141,8 +137,8 @@ def run_bootstrap_fewshot(
     dspy_examples = build_dspy_examples(examples=examples, input_keys=input_keys, output_field_keys=output_field_keys, gt_column_by_field=gt_column_by_field)
     metric = make_metric(output_root=output_root, output_leaves=output_leaves, output_field_keys=output_field_keys)
 
-    signature = build_signature(instructions=seed_text, input_keys=input_keys, output_schema=output_schema, signature_name="BootstrapFewShotSection")
-    student = SectionModule(signature)
+    signature = build_signature(instructions=seed_text, input_keys=input_keys, output_schema=output_schema, signature_name="BootstrapFewShotPrompt")
+    student = PromptModule(signature)
     lm = build_dspy_lm(provider=provider, model=model, api_key=api_key, base_url=base_url, max_tokens=max_tokens)
     mean_score = make_mean_score_fn(dspy_examples=dspy_examples, input_keys=input_keys, metric=metric, lm=lm, is_cancelled=is_cancelled, log_prefix="BootstrapFewShot")
 
@@ -199,14 +195,14 @@ def run_bootstrap_fewshot(
 
     target_labels = sorted({label for ex in examples for label in ex.score_labels}) or [1]
     edit = PromptEditSuggestion(
-        name=f"BootstrapFewShot: examples for \"{section_name}\"",
-        phase1_addresses=["BootstrapFewShotWithRandomSearch selected few-shot examples for this section"],
+        name="BootstrapFewShot: examples for the prompt",
+        phase1_addresses=["BootstrapFewShotWithRandomSearch selected few-shot examples for the prompt"],
         old_sentence=seed_text,
         new_sentence=best_text,
         reason=f"Empirically improved from {seed_score:.0%} to {best_score:.0%} on {len(examples)} example(s) by attaching selected examples.",
         target_score_row_indices=target_labels,
     )
-    batch = _sanitize_prompt_edits(sections, [edit], comparison_rows)
+    batch = _sanitize_prompt_edits(prompt, [edit], comparison_rows)
     if not batch:
         append_event({"type": "stage", "stage_id": "select", "kind": "done", "payload": {"improved": True, "dropped": "old_sentence did not resolve uniquely"}})
         append_event({"type": "done"})

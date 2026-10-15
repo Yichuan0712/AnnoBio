@@ -58,7 +58,7 @@ Agent 是 **Pipeline 协作者**，覆盖用户的整条工作线，Prompt 优�
   "summary": "给抽取 Prompt 建新版本，在最后 3 行上跑，并和 gt_depod_last3 对比",
   "operations": [
     {"op": "add_prompt_version", "ref": "$v4", "prompt": "n_1772485936959_624104739",
-     "section_edits": [{"name": "Objective", "content": "... 没有明确证据时返回空列表 ..."}]},
+     "text_edits": [{"old": "...", "new": "... 没有明确证据时返回空列表 ..."}]},
     {"op": "add_run", "ref": "$run", "prompt": "$v4", "input_dataset": "n_1778093075454_188030617",
      "input_mapping": {"title": "Title", "excerpt": "Abstract"}},
     {"op": "add_score", "run": "$run", "ground_truth": "n_1778108712899_475963798",
@@ -185,8 +185,8 @@ guide 放在 `backend/agent/guides/*.md`，随后端发布。
 | `import_dataset` | 按 id 从 PubMed / ClinicalTrials.gov / ChEMBL / 预印本导入；应用时走现有的 `/api/<source>/import` 任务 |
 | `add_sampler` | Sampler 和它产出的 Dataset：随机 N 行 / 百分比 / 指定行 |
 | `add_process` | 新 Process，代码必须定义 `process(df)`，用到的 `df_<alias>` 必须对应画布上的 Dataset；不运行 |
-| `add_prompt` | 新 Prompt：sections、输入类型、输出 schema |
-| `add_prompt_version` | 新版本：`section_edits`（按名字替换或追加 section）或完整 `sections`，其余复制 |
+| `add_prompt` | 新 Prompt：文本 `text`、输入类型、输出 schema |
+| `add_prompt_version` | 新版本：`text_edits`（`[{old, new}]`，每个 old 在文本里必须只出现一次）或完整 `text`，其余复制 |
 | `add_run` | 新 Run：Prompt、输入 Dataset、完整的输入映射；使用 Settings 中的 Run 默认模型，不启动 |
 | `add_score` | 新 Score：配对规则、比较规则、组合方式与匹配选项，或自定义 `match_code` |
 | `save_run_results` | 把 Run 结果存成 Dataset，表格与画布 "Save to workspace" 完全相同（共用 `app/src/runResultsExport.js`） |

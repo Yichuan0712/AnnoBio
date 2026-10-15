@@ -1,6 +1,6 @@
 /**
  * Score detail modal: left = Dataset as ground truth picker + field mapping table; right = results.
- * @param {{ node: HTMLElement, getWorkingSets?: () => Array<...>, getRunResultColumns?: () => Array<...>, getGroundTruthHeaders?: (wsNodeId: string) => string[], getReviewPayload?: () => { prompt_sections, run_results, output_fields, comparison_rows } | null }} options
+ * @param {{ node: HTMLElement, getWorkingSets?: () => Array<...>, getRunResultColumns?: () => Array<...>, getGroundTruthHeaders?: (wsNodeId: string) => string[], getReviewPayload?: () => { prompt, run_results, output_fields, comparison_rows } | null }} options
  */
 
 import { EditorView, basicSetup } from 'codemirror';
@@ -12,7 +12,6 @@ import { attachModalPaneCycle } from './paneToggleButton.js';
 import { executionIdleLabel } from './executionResumeState.js';
 import { showExecutionError } from './executionErrorPanel.js';
 import { buildMatchGtRowDict, buildMatchRunRowInputDict, buildMatchRunRowOutputDict } from './scoreCodeRunClient.js';
-import { extractInputFieldsFromSections } from './promptDetailModal.js';
 import { computeGreedyRunToGtPairing, flattenScoreRules, isScoreInputSideRuleKey } from './scoreRunGtPairing.js';
 import {
   parseScoreMappingBundle,
@@ -528,13 +527,13 @@ function parseFlexibleNonNegativeNumber(raw) {
 
 /**
  * Create Review node and start review API (job-based, like Run). Polling is handled by workflowCanvas.
- * @param {{ scoreNodeId: string, getReviewPayload: () => { prompt_sections, prompt_full_text?, run_results, output_fields, comparison_rows } | null, credentialId: string, at?: { x: number, y: number } }} options
+ * @param {{ scoreNodeId: string, getReviewPayload: () => { prompt, run_results, output_fields, comparison_rows } | null, credentialId: string, at?: { x: number, y: number } }} options
  *   at: where the new Review goes on the canvas (a line let go over empty canvas)
  * @returns {Promise<{ reviewNodeId: string } | null>} reviewNodeId after node is created; null if payload/credential invalid
  */
 export async function runReviewFromScore({ scoreNodeId, getReviewPayload, credentialId, at }) {
   const payload = await Promise.resolve(getReviewPayload && getReviewPayload());
-  if (!credentialId || !payload || !payload.prompt_sections || !payload.prompt_sections.length) return Promise.resolve(null);
+  if (!credentialId || !payload || !String(payload.prompt || '').trim()) return Promise.resolve(null);
   const addEvent = new CustomEvent('workflow:add-prompt-review-node', { detail: { scoreNodeId, at } });
   document.dispatchEvent(addEvent);
   const reviewNodeId = addEvent.detail?.reviewNodeId || '';
@@ -554,31 +553,6 @@ function reviewPreviewCellHtml(raw) {
   if (s.length <= max) return escapeHtml(s);
   const short = `${s.slice(0, max)}…`;
   return `<span class="review-selection-preview-clip" title="${escapeAttr(s)}">${escapeHtml(short)}</span>`;
-}
-
-function buildReviewPreviewInputBlock(rowInput, promptSections) {
-  const obj = rowInput && typeof rowInput === 'object' ? rowInput : {};
-  const ordered = extractInputFieldsFromSections(Array.isArray(promptSections) ? promptSections : []);
-  const seen = new Set();
-  /** @type {{ k: string, raw: unknown }[]} */
-  const pairs = [];
-  for (const k of ordered) {
-    if (Object.prototype.hasOwnProperty.call(obj, k)) {
-      pairs.push({ k, raw: obj[k] });
-      seen.add(k);
-    }
-  }
-  for (const k of Object.keys(obj).sort()) {
-    if (!seen.has(k)) pairs.push({ k, raw: obj[k] });
-  }
-  if (pairs.length === 0) {
-    return '<p class="review-selection-preview-empty">No prompt placeholders / inputs for this worksheet row.</p>';
-  }
-  return `<dl class="review-selection-preview-kv">${pairs.map(({ k, raw }) => `
-    <div class="review-selection-preview-kv-pair">
-      <dt>${escapeHtml(k)}</dt>
-      <dd>${reviewPreviewCellHtml(raw)}</dd>
-    </div>`).join('')}</dl>`;
 }
 
 /**
@@ -762,8 +736,8 @@ function buildReviewPreviewGroundTruthTable(rows, outputFields) {
 export async function openReviewSelectionPreviewModal({ getReviewPayload }) {
   if (typeof getReviewPayload !== 'function') return;
   const payload = await Promise.resolve(getReviewPayload());
-  if (!payload || !payload.prompt_sections || !payload.prompt_sections.length) {
-    showAlert('Cannot build Optimize data. Ensure the Evaluate node is connected to a Run with a prompt that has sections.', { title: 'Debug: Optimize rows' });
+  if (!payload || !String(payload.prompt || '').trim()) {
+    showAlert('Cannot build Optimize data. Ensure the Evaluate node is connected to a Run with a prompt that has text.', { title: 'Debug: Optimize rows' });
     return;
   }
   const comparisonRows = Array.isArray(payload.comparison_rows) ? payload.comparison_rows : [];
@@ -912,9 +886,8 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
     review_session_id: reviewNodeId,
     review_method: payload.review_method || undefined,
     score_mapping: payload.score_mapping || undefined,
-    target_section_index: Number.isInteger(payload.target_section_index) ? payload.target_section_index : undefined,
     settings_overrides: payload.settings_overrides || undefined,
-    prompt_sections: payload.prompt_sections,
+    prompt: payload.prompt,
     run_results: payload.run_results || [],
     output_fields: payload.output_fields || [],
     output_schema: payload.output_schema || undefined,
@@ -934,11 +907,6 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
       score_table_row: typeof r.score_table_row === 'number' && !Number.isNaN(r.score_table_row) ? r.score_table_row : null,
     })),
   };
-  const promptFullText = payload.prompt_full_text || (payload.prompt_sections || []).map((s) => `## ${(s.name || '').trim() || '(unnamed)'}\n\n${(s.content || '').trim()}`).join('\n\n');
-  const sectionsCopy = (Array.isArray(payload.prompt_sections) && payload.prompt_sections.length > 0)
-    ? payload.prompt_sections.map((s) => ({ name: String(s?.name ?? ''), content: String(s?.content ?? '').slice() }))
-    : [];
-  const workingSectionsInitial = sectionsCopy.map((s) => ({ name: s.name || '', content: (s.content || '').slice() }));
   document.dispatchEvent(new CustomEvent('workflow:review-progress', { detail: { reviewNodeId, percent: 0 } }));
   document.dispatchEvent(new CustomEvent('workflow:save-review-result', {
     detail: {
@@ -948,9 +916,8 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
         suggestions: [],
         data_refinement: [],
         row_diagnostics: [],
-        promptSections: sectionsCopy,
-        promptFullText: promptFullText || '',
-        workingSections: workingSectionsInitial,
+        promptText: String(payload.prompt || ''),
+        workingText: String(payload.prompt || ''),
         streamComplete: false,
         reviewProgress: 0,
         run_results: body.run_results || [],
@@ -3348,7 +3315,7 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
   async function updateReviewButtonState() {
     const payload = await Promise.resolve(getReviewPayload());
     const reviewDisabled =
-      !payload || !payload.prompt_sections || payload.prompt_sections.length === 0 || !selectedNodeId;
+      !payload || !String(payload.prompt || '').trim() || !selectedNodeId;
     if (addPromptReviewBtn) addPromptReviewBtn.disabled = reviewDisabled;
     if (reviewPayloadPreviewBtn) reviewPayloadPreviewBtn.disabled = reviewDisabled;
     await updateSaveToWorkspaceButton();

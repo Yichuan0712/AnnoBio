@@ -9,7 +9,7 @@ export function legacyCanvas() {
       { type: 'dataset', nodeId: 'raw', name: 'Raw', datasetContent: table('raw') },
       { type: 'dataset', nodeId: 'lookup', name: 'Lookup', datasetContent: table('lookup') },
       { type: 'dataset', nodeId: 'notes', name: 'Lookup', datasetContent: table('notes') },
-      { type: 'prompt', nodeId: 'prompt', name: 'Prompt', sections: [{ name: 'Task', content: 'Say {{text}}' }], outputFormat: { returnShape: 'single', fields: [{ key: 'answer', type: 'str' }] }, inputTypes: {} },
+      { type: 'prompt', nodeId: 'prompt', name: 'Prompt', text: 'Say {{text}}', outputFormat: { returnShape: 'single', fields: [{ key: 'answer', type: 'str' }] }, inputTypes: {} },
       { type: 'run', nodeId: 'run', runWorkingSetId: 'raw', runInputToColumn: '{"text":"text"}' },
       // A recorded primary plus an input saved under an alias its name would not give.
       { type: 'process', nodeId: 'saved', dfCode: 'def process(df, df_lookup_table):\n    return df\n', primaryDatasetId: 'raw', datasetAliases: JSON.stringify({ raw: 'df', lookup: 'df_lookup_table' }) },

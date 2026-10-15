@@ -12,7 +12,7 @@ import { sampleSourceIndices, sampledOutputs } from '../../samplerQuota.js';
 import { buildSamplerNodeSpec, formatSamplerModeSummary } from './sampler_node_shared.js';
 import { PORT_TYPES, applyPortOp, checkConnect, checkDisconnect, keepSharedMapping, nodePorts } from '../../nodePorts.js';
 import { referencedDatasetAliasNames } from '../../processDatasetBindings.js';
-import { rebuildWorkingFromApplied } from '../../reviewWorkingSections.js';
+import { rebuildWorkingFromApplied } from '../../reviewWorkingText.js';
 import { effectiveProcessOutputs } from '../../processOutputPorts.js';
 import { savedProcessOutputs, savedRunOutput } from '../../savedDatasets.js';
 import {
@@ -87,11 +87,7 @@ function datasetColumns(node) {
 
 function promptInputs(node, extractInputFields) {
   const types = node?.inputTypes && typeof node.inputTypes === 'object' ? node.inputTypes : {};
-  return extractInputFields(node?.sections || []).map((name) => ({ name, type: types[name] || 'text' }));
-}
-
-function sectionsText(sections) {
-  return (sections || []).map((s) => `## ${s.name}\n${s.content}`).join('\n\n');
+  return extractInputFields(node?.text || '').map((name) => ({ name, type: types[name] || 'text' }));
 }
 
 function outputText(output) {
@@ -254,33 +250,30 @@ export function planChangeSet(state, operations, ctx) {
 
   // ---------- normalizers for operation payloads ----------
 
-  function normalizeSections(value) {
-    if (!Array.isArray(value) || value.length === 0) fail('sections must be a non-empty list of {name, content}.');
-    const sections = value.map((s) => ({ name: clean(s?.name), content: String(s?.content ?? '') }));
-    if (sections.some((s) => !s.name)) fail('Every section needs a name.');
-    if (sections.some((s) => !s.content.trim())) fail('Every section needs content.');
-    if (new Set(sections.map((s) => s.name.toLowerCase())).size !== sections.length) fail('Section names must be unique.');
-    return sections;
+  function normalizeText(value) {
+    if (typeof value !== 'string' || !value.trim()) fail('text must be the prompt text, with a {variable} for each input.');
+    return value;
   }
 
-  /** Replace sections by name, or append ones with a new name; the rest stay as they are. */
-  function editSections(current, edits) {
-    if (!Array.isArray(edits) || edits.length === 0) fail('section_edits must be a non-empty list of {name, content}.');
-    const sections = (current || []).map((s) => ({ name: String(s.name ?? ''), content: String(s.content ?? '') }));
+  /** The text with each {old, new} edit applied in turn; every `old` must appear exactly once in the text so far. */
+  function editText(current, edits) {
+    if (!Array.isArray(edits) || edits.length === 0) fail('text_edits must be a non-empty list of {old, new}.');
+    let text = String(current || '');
     for (const edit of edits) {
-      const name = clean(edit?.name);
-      if (!name) fail('Every section edit needs the section name.');
-      const target = sections.find((s) => s.name === name);
-      if (target) target.content = String(edit?.content ?? '');
-      else sections.push({ name, content: String(edit?.content ?? '') });
+      const old = String(edit?.old ?? '');
+      if (!old) fail('Every text edit needs the old text it replaces.');
+      const at = text.indexOf(old);
+      if (at < 0) fail(`text_edits: "${old.slice(0, 80)}" is not in the prompt text.`);
+      if (text.indexOf(old, at + 1) >= 0) fail(`text_edits: "${old.slice(0, 80)}" appears more than once; include more of the text around it.`);
+      text = text.slice(0, at) + String(edit?.new ?? '') + text.slice(at + old.length);
     }
-    return normalizeSections(sections);
+    return normalizeText(text);
   }
 
-  function nextSections(current, op) {
-    if (op.sections != null && op.section_edits != null) fail('Give either sections or section_edits, not both.');
-    if (op.section_edits != null) return editSections(current, op.section_edits);
-    if (op.sections != null) return normalizeSections(op.sections);
+  function nextText(current, op) {
+    if (op.text != null && op.text_edits != null) fail('Give either text or text_edits, not both.');
+    if (op.text_edits != null) return editText(current, op.text_edits);
+    if (op.text != null) return normalizeText(op.text);
     return null;
   }
 
@@ -330,11 +323,11 @@ export function planChangeSet(state, operations, ctx) {
     return { returnShape, fields };
   }
 
-  function normalizeInputTypes(value, sections) {
-    const names = ctx.extractInputFields(sections);
+  function normalizeInputTypes(value, text) {
+    const names = ctx.extractInputFields(text);
     const types = value && typeof value === 'object' ? value : {};
     for (const [name, type] of Object.entries(types)) {
-      if (!names.includes(name)) fail(`input_types names "${name}", which is not a {variable} in the sections.`);
+      if (!names.includes(name)) fail(`input_types names "${name}", which is not a {variable} in the prompt text.`);
       if (!INPUT_TYPES.includes(type)) fail(`Input "${name}" has type "${type}"; use text, image or pdf.`);
     }
     return Object.fromEntries(Object.entries(types).filter(([, type]) => type !== 'text'));
@@ -738,20 +731,20 @@ export function planChangeSet(state, operations, ctx) {
     },
 
     add_prompt(op) {
-      const sections = normalizeSections(op.sections);
+      const text = normalizeText(op.text);
       const outputFormat = normalizeOutput(op.output);
-      const inputTypes = normalizeInputTypes(op.input_types, sections);
+      const inputTypes = normalizeInputTypes(op.input_types, text);
       const name = uniqueName(clean(op.name) || 'Prompt', takenNames('prompt'));
       const node = addNode({
         type: 'prompt', nodeId: generateNodeId(), ...placeNear(null), name, note: String(op.note ?? ''),
-        sections, outputFormat, inputTypes, nodeOrigin: 'agent',
+        text, outputFormat, inputTypes, nodeOrigin: 'agent',
       });
       registerRef(op, node.nodeId);
       return {
         kind: 'add', type: 'prompt', title: `New prompt "${name}"`, nodeIds: [node.nodeId],
         lines: [`Inputs: ${promptInputs(node, ctx.extractInputFields).map((i) => `${i.name} (${i.type})`).join(', ') || '(none)'}`],
         diffs: [
-          { label: 'Sections', before: '', after: sectionsText(sections) },
+          { label: 'Prompt', before: '', after: text },
           { label: 'Output', before: '', after: outputText(outputFormat) },
         ],
       };
@@ -759,21 +752,21 @@ export function planChangeSet(state, operations, ctx) {
 
     add_prompt_version(op) {
       const source = resolve(op.prompt, 'prompt', ['prompt']);
-      const sections = nextSections(source.sections, op) || source.sections.map((s) => ({ ...s }));
+      const text = nextText(source.text, op) ?? String(source.text || '');
       const outputFormat = op.output != null ? normalizeOutput(op.output, source.outputFormat) : JSON.parse(JSON.stringify(source.outputFormat || { returnShape: 'single', fields: [] }));
       const inputTypes = op.input_types != null
-        ? normalizeInputTypes(op.input_types, sections)
-        : Object.fromEntries(Object.entries(source.inputTypes || {}).filter(([k]) => ctx.extractInputFields(sections).includes(k)));
+        ? normalizeInputTypes(op.input_types, text)
+        : Object.fromEntries(Object.entries(source.inputTypes || {}).filter(([k]) => ctx.extractInputFields(text).includes(k)));
       const name = uniqueName(clean(op.name) || nodeTitle(source), takenNames('prompt'));
       const node = addNode({
         type: 'prompt', nodeId: generateNodeId(), ...placeNear(source), name,
         note: op.note != null ? String(op.note) : String(source.note || ''),
-        sections, outputFormat, inputTypes, nodeOrigin: 'agent',
+        text, outputFormat, inputTypes, nodeOrigin: 'agent',
       });
       connect(source.nodeId, node.nodeId, 'prompt-to-prompt');
       registerRef(op, node.nodeId);
       const diffs = [];
-      if (op.sections != null || op.section_edits != null) diffs.push({ label: 'Sections', before: sectionsText(source.sections), after: sectionsText(sections) });
+      if (op.text != null || op.text_edits != null) diffs.push({ label: 'Prompt', before: String(source.text || ''), after: text });
       if (op.output != null) diffs.push({ label: 'Output', before: outputText(source.outputFormat), after: outputText(outputFormat) });
       return { kind: 'add', type: 'prompt', title: `New version "${name}" of "${nodeTitle(source)}"`, nodeIds: [node.nodeId],
         lines: diffs.length ? [] : ['Same content as the source prompt.'], diffs };
@@ -894,7 +887,7 @@ export function planChangeSet(state, operations, ctx) {
       const lines = [];
       const diffs = [];
       const allowed = {
-        prompt: ['name', 'note', 'sections', 'section_edits', 'input_types', 'output'],
+        prompt: ['name', 'note', 'text', 'text_edits', 'input_types', 'output'],
         dataset: ['name', 'note', 'columns', 'rows', 'row_ids'],
         process: ['name', 'code', 'primary_input', 'primary_branch'],
         run: ['name', 'prompt', 'input', 'input_branch', 'input_mapping'],
@@ -922,7 +915,7 @@ export function planChangeSet(state, operations, ctx) {
       }
 
       // Include samples added earlier in this proposal as well as locks from existing History.
-      const contentKeys = { prompt: ['sections', 'section_edits', 'input_types', 'output'], dataset: ['columns', 'rows', 'row_ids'] }[node.type] || [];
+      const contentKeys = { prompt: ['text', 'text_edits', 'input_types', 'output'], dataset: ['columns', 'rows', 'row_ids'] }[node.type] || [];
       if (contentKeys.some((k) => k in set)) assertContentEditable(node);
 
       if (node.type === 'sampler' && ['sampling', 'size', 'size_unit', 'rows'].some((key) => key in set)) {
@@ -938,13 +931,13 @@ export function planChangeSet(state, operations, ctx) {
       }
 
       if (node.type === 'prompt') {
-        if ('sections' in set || 'section_edits' in set) {
-          const sections = nextSections(node.sections, set);
-          diffs.push({ label: 'Sections', before: sectionsText(node.sections), after: sectionsText(sections) });
-          node.sections = sections;
-          node.inputTypes = Object.fromEntries(Object.entries(node.inputTypes || {}).filter(([k]) => ctx.extractInputFields(sections).includes(k)));
+        if ('text' in set || 'text_edits' in set) {
+          const text = nextText(node.text, set);
+          diffs.push({ label: 'Prompt', before: String(node.text || ''), after: text });
+          node.text = text;
+          node.inputTypes = Object.fromEntries(Object.entries(node.inputTypes || {}).filter(([k]) => ctx.extractInputFields(text).includes(k)));
         }
-        if ('input_types' in set) node.inputTypes = normalizeInputTypes(set.input_types, node.sections);
+        if ('input_types' in set) node.inputTypes = normalizeInputTypes(set.input_types, node.text);
         if ('output' in set) {
           const outputFormat = normalizeOutput(set.output, node.outputFormat);
           diffs.push({ label: 'Output', before: outputText(node.outputFormat), after: outputText(outputFormat) });
@@ -1125,22 +1118,23 @@ export function planChangeSet(state, operations, ctx) {
       const run = score ? byId().get(next.connections.find((c) => c.type === 'run-to-score' && c.toId === score.nodeId)?.fromId) : null;
       const source = run ? byId().get(next.connections.find((c) => c.type === 'prompt-to-run' && c.toId === run.nodeId)?.fromId) : null;
       if (!source) fail(`Optimize "${nodeTitle(review)}" is not connected through a score and run to a prompt.`);
-      const originals = (Array.isArray(reviewResult.promptSections) && reviewResult.promptSections.length ? reviewResult.promptSections : source.sections)
-        .map((s) => ({ name: String(s?.name ?? ''), content: String(s?.content ?? '') }));
+      const originalText = typeof reviewResult.promptText === 'string' && reviewResult.promptText.trim()
+        ? reviewResult.promptText
+        : String(source.text || '');
       const chosen = new Set(ids);
       const marked = suggestions.map((s) => ({ ...s, applied: chosen.has(clean(s?.suggestion_id)) }));
-      const sections = rebuildWorkingFromApplied(originals, marked);
-      if (!sections || sectionsText(sections) === sectionsText(originals)) {
+      const text = rebuildWorkingFromApplied(originalText, marked);
+      if (text == null || text === originalText) {
         fail('None of the chosen suggestions could be applied: their text no longer matches the prompt the Optimize node analyzed.');
       }
       const unverified = ids.filter((id) => (reviewResult.verify_states?.[id] || '') !== 'verified');
       if (unverified.length) warnings.push(`Not verified yet: suggestion ${unverified.join(', ')}. Its effect on the failing rows is unknown until the new version is run.`);
-      review.reviewResult = JSON.stringify({ ...reviewResult, suggestions: marked, workingSections: sections });
+      review.reviewResult = JSON.stringify({ ...reviewResult, suggestions: marked, workingText: text });
       const name = uniqueName(clean(op.name) || nodeTitle(source), takenNames('prompt'));
       const node = addNode({
         type: 'prompt', nodeId: generateNodeId(), ...placeNear(review), name,
         note: String(op.note ?? `Created from Optimize "${nodeTitle(review)}" (suggestions ${ids.join(', ')}).`),
-        sections: normalizeSections(sections),
+        text: normalizeText(text),
         outputFormat: JSON.parse(JSON.stringify(source.outputFormat || { returnShape: 'single', fields: [] })),
         inputTypes: { ...(source.inputTypes || {}) },
         nodeOrigin: 'agent',
@@ -1150,7 +1144,7 @@ export function planChangeSet(state, operations, ctx) {
       return {
         kind: 'add', type: 'prompt', title: `New prompt "${name}" from Optimize "${nodeTitle(review)}"`, nodeIds: [node.nodeId],
         lines: [`Applies suggestion${ids.length === 1 ? '' : 's'} ${ids.join(', ')} to "${nodeTitle(source)}"`],
-        diffs: [{ label: 'Sections', before: sectionsText(originals), after: sectionsText(sections) }],
+        diffs: [{ label: 'Prompt', before: originalText, after: text }],
       };
     },
 

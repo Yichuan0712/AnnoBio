@@ -2,6 +2,8 @@
 
 状态：Phase 1 已完成；编译器、导出器、Runner 和静态分支兼容使用同一契约。编译器为 `backend/pipeline_compile.py`，消费者为 `backend/pipeline_export_spec.py` 与 `backend/pipeline_runner.py`。整体计划见 [PIPELINE_EXECUTION_PLAN.md](PIPELINE_EXECUTION_PLAN.md)。
 
+`format_version` 2：Prompt 不再分 section，LLM job 的 `config.sections` 改为一段文本 `config.prompt`。不兼容版本 1。
+
 ## 调用与结果
 
 ```python
@@ -37,7 +39,7 @@ diagnostic 包含 `severity`、稳定的 `code`、`node_id`、`node_name`、`fie
 ```json
 {
   "format": "annobio.pipeline-spec",
-  "format_version": 1,
+  "format_version": 2,
   "inputs": ["dataset:raw"],
   "jobs": [{
     "id": "llm:run-extract",
@@ -46,7 +48,7 @@ diagnostic 包含 `severity`、稳定的 `code`、`node_id`、`node_name`、`fie
     "outputs": {"result": ["output:llm:run-extract:result"]},
     "depends_on": [],
     "config": {
-      "sections": [{"name": "Task", "content": "Extract {text}"}],
+      "prompt": "Extract {text}",
       "input_types": {"text": "text"},
       "input_mapping": {"text": "text"},
       "output_schema": {"return_shape": "single", "fields": [
@@ -88,7 +90,7 @@ artifact 的 `name` 用于导出的工作表和变量：入口 Dataset 用 Datas
 
 ## 配置和凭据边界
 
-LLM job 使用 Prompt+Run 配置快照；只复制列映射、输入类型、sections、输出字段以及支持的数字 Run 设置。继承设置与节点覆盖合并；未提供的默认设置进入 `unresolved_settings` 并产生 warning。
+LLM job 使用 Prompt+Run 配置快照；只复制列映射、输入类型、Prompt 文本（`prompt`，去掉首尾空白）、输出字段以及支持的数字 Run 设置。继承设置与节点覆盖合并；未提供的默认设置进入 `unresolved_settings` 并产生 warning。
 
 `model_binding.run_node_id` 是符号绑定位置，不是凭据 ID。启动时必须解析并冻结模型、有效设置、可用凭据及输入快照；单有 compiled spec 不表示模型已准备好。导出时解析非敏感模型配置，并去除内部绑定/来源信息。编译器不会复制 canvas 的 credential 字段、缓存结果、Dataset rows 或任意额外属性。用户主动写进 Prompt/代码的内容会作为源代码保留，不承担内容脱敏功能。
 

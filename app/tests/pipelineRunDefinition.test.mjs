@@ -13,7 +13,7 @@ function fixture() {
       headers: ['text', 'image'], columnTypes: ['text', 'image'], rowIds: ['row-a'],
       rows: [['PRIVATE_INPUT', { kind: 'images', assetIds: ['sha256:a'], names: ['a.png'] }]],
     } },
-    { type: 'prompt', nodeId: 'p', sections: [{ name: 'Task', content: 'Read {text}' }] },
+    { type: 'prompt', nodeId: 'p', text: 'Read {text}' },
     { type: 'run', nodeId: 'r', runInputToColumn: { text: 'text' }, runResults: 'PRIVATE_CACHE' },
     { type: 'dataset', nodeId: 'out', savedFrom: { kind: 'run', nodeId: 'r', port: 'result', recordId: 'rec' }, datasetContent: {
       headers: ['Output: answer'], rows: [['STALE_OUTPUT']],

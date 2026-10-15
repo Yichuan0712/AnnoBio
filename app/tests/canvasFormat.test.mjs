@@ -43,9 +43,10 @@ test('aliases are the ones version 2 ran with: saved, derived from the name, or 
 });
 
 test('History signatures after the upgrade are the ones version 2 recorded', async () => {
-  // Captured from legacyCanvas() with the version 2 code, before the storage switch.
+  // Captured from legacyCanvas() with the version 2 code, before the storage switch; the Run's since a
+  // Prompt became one text rather than sections.
   const recorded = {
-    run: 'sha256:fa48cd2cd583d28c7c0c976f1ae1f2e102fd99d2fb9582ecec0325c577b63503',
+    run: 'sha256:10fb964d12b807b8088665f5dab8b81eda6ae961a30bbb1ed08ad26bd018c24f',
     saved: 'sha256:df7ad4207c8f532b737199540ce3b94431998c5d25f51d175e5fae3841cf4651',
     implicit: 'sha256:9b39e52e8028f371fc724317f2cebcee5a77c9f2ed94a74054d90504cbebfdaf',
     clash: 'sha256:612203794f6c2c7208afa1146515c2eb12ab0c86bfc27225c7a6f21e0b530541',

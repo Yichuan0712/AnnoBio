@@ -45,7 +45,7 @@ export function exportCanvasDefinition(canvasState, route) {
           nodeId: node.nodeId,
           name: node.name,
           note: node.note,
-          sections: node.sections,
+          text: node.text,
           outputFormat: node.outputFormat,
           inputTypes: node.inputTypes,
         };

@@ -17,7 +17,7 @@ const canvas = () => ({ historyVersion: 1,
     { type: 'score', nodeId: 'score', scoreGroundTruthId: 'raw' },
     { type: 'score', nodeId: 'unscored' },
     { type: 'sampler', nodeId: 'sample', sourceNodeId: 'raw', samplingType: 'without-replacement', sampleSizeType: 'rows', sampleSize: 1 },
-    { type: 'promptReview', nodeId: 'optimize', reviewResult: JSON.stringify({ streamComplete: true, workingSections: [{ name: 'Task', content: 'Classify.' }] }) },
+    { type: 'promptReview', nodeId: 'optimize', reviewResult: JSON.stringify({ streamComplete: true, workingText: 'Classify.' }) },
     { type: 'promptReview', nodeId: 'unfinished' },
   ], connections: [ { type: 'run-to-score', fromId: 'done', toId: 'score' } ],
 });

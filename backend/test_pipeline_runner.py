@@ -29,7 +29,7 @@ def dataset(node_id, headers, rows, **extra):
 
 def prompt(node_id, text, field, return_shape="single"):
     return {"type": "prompt", "nodeId": node_id, "name": node_id,
-            "sections": [{"name": "Task", "content": text}],
+            "text": text,
             "outputFormat": {"returnShape": return_shape,
                              "fields": [{"key": field, "type": "str"}]}}
 
@@ -373,7 +373,7 @@ class PipelineRunnerTests(unittest.TestCase):
 
     def test_table_llm_output_expands_rows_with_source_indices(self):
         job = {"id": "llm:table", "config": {
-            "sections": [{"name": "Task", "content": "List {text}"}],
+            "text": "List {text}",
             "input_mapping": {"text": "text"}, "input_types": {"text": "text"},
             "output_schema": {"return_shape": "table", "fields": [
                 {"key": "item", "display": "Item", "type": "str", "allow_none": False},

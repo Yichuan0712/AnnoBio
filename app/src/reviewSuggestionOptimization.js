@@ -16,7 +16,7 @@
  * and reuses the Score output->gt rules for pass-rate evaluation.
  */
 
-import { rebuildWorkingFromApplied } from './reviewWorkingSections.js';
+import { rebuildWorkingFromApplied } from './reviewWorkingText.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { evaluateScoreOutputGt } from './scoreOutputGtMatcher.js';
 import { compileReviewInputs } from './runInputBuilder.js';
@@ -160,13 +160,13 @@ export async function runVerifyPassRate({
  *   oldSentence: string,
  *   newSentence: string,          — starting point (suggestion.new_sentence)
  *   improvementRationale: string, — suggestion.reason
- *   sectionContext?: string,      — full prompt section/paragraph (read-only context for candidates LLM)
+ *   promptContext?: string,       — the prompt paragraph holding the sentence (read-only context for candidates LLM)
  *   maxSegments?: number,         — default 5
  *   candidatesPerSegment?: number,— default 4
  *   maxTrials?: number,           — default 40
  *   allSuggestions: object[],
  *   sugIdx: number,
- *   originals: object[],
+ *   originalText: string,         — the prompt text the suggestion applies to
  *   inputEntries: Array<[number, {row:object, gtRows:object[]}]>,
  *   outputSchema: object,
  *   outputFields?: Array<object>,
@@ -183,13 +183,13 @@ export async function runSuggestionOptimizationCompositional(options) {
     oldSentence = '',
     newSentence,
     improvementRationale = '',
-    sectionContext = '',
+    promptContext = '',
     maxSegments = 5,
     candidatesPerSegment = 4,
     maxTrials = 40,
     allSuggestions,
     sugIdx,
-    originals,
+    originalText,
     inputEntries,
     outputSchema,
     outputFields = [],
@@ -254,7 +254,7 @@ export async function runSuggestionOptimizationCompositional(options) {
           segment_text: seg,
           prefix,
           suffix,
-          section_context: sectionContext,
+          prompt_context: promptContext,
           num_candidates: kCand,
           segment_index: i,
           total_segments: segments.length,
@@ -307,14 +307,14 @@ export async function runSuggestionOptimizationCompositional(options) {
         applied: i === sugIdx,
         ...(i === sugIdx ? { new_sentence: composed } : {}),
       }));
-      const testSections = rebuildWorkingFromApplied(originals, patched);
-      if (!testSections || testSections.length !== originals.length) {
+      const testText = rebuildWorkingFromApplied(String(originalText || ''), patched);
+      if (testText == null) {
         for (let s = 0; s < S; s++) beta[s][picks[s]] += 1;
         trialLog.push({ round: t + 1, picks: picks.slice(), preview: composed.slice(0, 120), passRate: null, ok: false, note: 'rebuild failed' });
         continue;
       }
 
-      const templateText = testSections.map((sec) => (sec.content || '').trim()).filter(Boolean).join('\n\n');
+      const templateText = testText.trim();
 
       let metrics;
       try {

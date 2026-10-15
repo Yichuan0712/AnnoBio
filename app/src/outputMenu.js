@@ -61,9 +61,9 @@ function creationItems(state, node) {
   ];
   if (node.type === 'promptReview') {
     const result = parsed(node.reviewResult, {});
-    const sections = result.workingSections?.length ? result.workingSections : result.promptSections;
+    const text = typeof result.workingText === 'string' ? result.workingText : result.promptText;
     return [item(node, LINEAGE_PORT, 'review-export', 'Create new Prompt',
-      result.streamComplete === true && sections?.length ? '' : 'Finish optimization before creating a new Prompt.')];
+      result.streamComplete === true && String(text || '').trim() ? '' : 'Finish optimization before creating a new Prompt.')];
   }
   if (node.type === 'sampler') {
     const sourceId = (state.connections || []).find(edge => edge.type === 'dataset-to-sampler' && edge.toId === nodeIdOf(node))?.fromId || node.sourceNodeId;

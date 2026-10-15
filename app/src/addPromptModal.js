@@ -1,8 +1,8 @@
-import { openPromptSectionEditor, renderPromptSectionCards } from './promptSectionUi.js';
 import { openPromptFieldEditor, renderPromptFieldCards } from './promptSchemaUi.js';
+import { inputsToViewHtml } from './promptDetailModal.js';
 
 /**
- * Three-step Prompt creator. Section and field editors open inside this window.
+ * Three-step Prompt creator: name, the prompt text, the output schema. Field editors open inside this window.
  */
 
 function escapeHtml(str) {
@@ -45,13 +45,10 @@ export function openAddPromptModal(workflowCanvasApi) {
             </div>
           </div>
           <div class="prompt-step prompt-step-2">
-            <p class="prompt-step-label">Step 2 of 3 — Sections</p>
-            <p class="prompt-hint">Add named sections and enter your prompt content. You can add or remove sections.</p>
+            <p class="prompt-step-label">Step 2 of 3 — Prompt</p>
+            <p class="prompt-hint">Write the prompt. Use <code>{variable}</code> for each input a Run fills from a dataset column; <code>{{</code> for a literal brace.</p>
             <div class="prompt-step-scroll prompt-step-2-scroll">
-              <div class="prompt-sections"></div>
-              <div class="prompt-add-section-wrap">
-                <button type="button" class="btn btn-secondary prompt-add-section">+ Add a section</button>
-              </div>
+              <textarea id="prompt-text-input" class="dataset-meta-input dataset-meta-textarea prompt-text-input" aria-label="Prompt text" spellcheck="false"></textarea>
             </div>
             <div class="prompt-form-error prompt-modal-error" role="alert" aria-live="polite" hidden></div>
             <div class="prompt-actions">
@@ -82,7 +79,7 @@ export function openAddPromptModal(workflowCanvasApi) {
           </div>
         </div>
         <div class="prompt-preview-wrap">
-          <h3 class="prompt-preview-title">Prompt sections</h3>
+          <h3 class="prompt-preview-title">Prompt inputs</h3>
           <div class="prompt-preview" aria-readonly="true"></div>
         </div>
         <div class="prompt-schema-preview-wrap">
@@ -108,17 +105,15 @@ export function openAddPromptModal(workflowCanvasApi) {
   const panel = overlay.querySelector('.modal-panel--prompt');
   const modalBody = panel.querySelector('.modal-body');
   const promptMain = panel.querySelector('.prompt-main');
-  const container = overlay.querySelector('.prompt-sections');
-  const addBtn = overlay.querySelector('.prompt-add-section');
+  const textInput = overlay.querySelector('#prompt-text-input');
   const previewEl = overlay.querySelector('.prompt-preview');
-  let sections = [];
   let activeEditor = null;
 
   function openInlineEditor(kind, openEditor) {
     if (activeEditor) return;
     const side = document.createElement('aside');
     side.className = 'prompt-detail-editor-panel prompt-create-editor-panel';
-    side.setAttribute('aria-label', kind === 'section' ? 'Edit prompt section' : 'Edit output field');
+    side.setAttribute('aria-label', 'Edit output field');
     const host = document.createElement('div');
     host.className = 'prompt-detail-editor-panel__child-host';
     side.appendChild(host);
@@ -183,7 +178,7 @@ export function openAddPromptModal(workflowCanvasApi) {
     }
     clearPromptError();
     goToStep(2);
-    renderSections();
+    textInput.focus();
   });
 
   overlay.querySelector('#prompt-name-input')?.addEventListener('input', clearPromptError);
@@ -192,16 +187,7 @@ export function openAddPromptModal(workflowCanvasApi) {
   overlay.querySelector('.prompt-btn-back-from-2').addEventListener('click', () => goToStep(1));
 
   function validateStep2() {
-    const sectionsPayload = sections.map((s) => ({ name: s.name, content: s.content }));
-    const sectionsWithBoth = sectionsPayload.filter((s) => (s.name || '').trim() && (s.content ?? '').trim());
-    const hasPartialSection = sectionsPayload.some((s) => {
-      const n = (s.name || '').trim();
-      const c = (s.content ?? '').trim();
-      return (n || c) && (!n || !c);
-    });
-    if (hasPartialSection) return { valid: false, message: 'Section name and content are required for each section.' };
-    if (sectionsWithBoth.length === 0) return { valid: false, message: 'At least one section with name and content is required.' };
-    if (hasDuplicateSectionNames(sectionsWithBoth)) return { valid: false, message: 'Section names must be unique. Please fix duplicate names.' };
+    if (!textInput.value.trim()) return { valid: false, message: 'Please write the prompt.' };
     return { valid: true };
   }
 
@@ -410,62 +396,21 @@ export function openAddPromptModal(workflowCanvasApi) {
     updateSchemaPreview();
   }
 
+  /** The inputs the text uses, as the Prompt window lists them. */
   function updatePreview() {
-    const blocks = sections.filter((s) => s.name || s.content);
-    if (blocks.length === 0) {
-      previewEl.innerHTML = '';
-      previewEl.textContent = 'Enter sections on the left to see the combined prompt here';
-      previewEl.classList.add('prompt-preview--empty');
+    const text = textInput.value;
+    previewEl.classList.toggle('prompt-preview--empty', !text.trim());
+    if (!text.trim()) {
+      previewEl.textContent = 'Write the prompt on the left; each {input} it uses shows here.';
       return;
     }
-    previewEl.classList.remove('prompt-preview--empty');
-    previewEl.innerHTML = blocks
-      .map(
-        (s) => `
-      <div class="preview-field-block">
-        <div class="preview-field-divider">
-          <span class="preview-field-line" aria-hidden="true"></span>
-          <span class="preview-field-name">${escapeHtml(s.name || 'Unnamed')}</span>
-          <span class="preview-field-line" aria-hidden="true"></span>
-        </div>
-        <div class="preview-field-content">${escapeHtml(s.content)}</div>
-      </div>
-    `
-      )
-      .join('');
+    previewEl.innerHTML = inputsToViewHtml(text);
   }
 
-  function renderSections() {
-    renderPromptSectionCards({
-      sections,
-      container,
-      onChange: renderSections,
-      onEdit: (sectionIndex) => openInlineEditor('section', (host, onClose) => openPromptSectionEditor({
-        sections,
-        sectionIndex,
-        onDone: renderSections,
-        host,
-        onClose,
-      })),
-    });
+  textInput.addEventListener('input', () => {
+    clearPromptError();
     updatePreview();
-  }
-
-  addBtn.addEventListener('click', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    openInlineEditor('section', (host, onClose) => openPromptSectionEditor({
-      sections,
-      onDone: renderSections,
-      host,
-      onClose,
-    }));
   });
-
-  function hasDuplicateSectionNames(sectionsList) {
-    const names = sectionsList.map((s) => (s.name || '').trim().toLowerCase());
-    return names.length !== new Set(names).size;
-  }
 
   function hasDuplicateFieldNames(fieldsList) {
     const keys = fieldsList.map((o) => (o.key || '').trim().toLowerCase());
@@ -473,24 +418,10 @@ export function openAddPromptModal(workflowCanvasApi) {
   }
 
   overlay.querySelector('.prompt-generate-node').addEventListener('click', () => {
-    const sectionsPayload = sections.map((s) => ({ name: s.name, content: s.content }));
     clearPromptError();
-    const sectionsWithBoth = sectionsPayload.filter((s) => (s.name || '').trim() && (s.content ?? '').trim());
-    const hasPartialSection = sectionsPayload.some((s) => {
-      const n = (s.name || '').trim();
-      const c = (s.content ?? '').trim();
-      return (n || c) && (!n || !c);
-    });
-    if (hasPartialSection) {
-      showPromptError('Section name and content are required for each section.');
-      return;
-    }
-    if (sectionsWithBoth.length === 0) {
-      showPromptError('At least one section with name and content is required.');
-      return;
-    }
-    if (hasDuplicateSectionNames(sectionsWithBoth)) {
-      showPromptError('Section names must be unique within this prompt. Please fix duplicate section names.');
+    const text = textInput.value;
+    if (!text.trim()) {
+      showPromptError('Please write the prompt.');
       return;
     }
     const outputFormat = {
@@ -539,12 +470,12 @@ export function openAddPromptModal(workflowCanvasApi) {
       return;
     }
     document.dispatchEvent(
-      new CustomEvent('workflow:add-prompt-node', { detail: { name, note, sections: sectionsWithBoth, outputFormat } })
+      new CustomEvent('workflow:add-prompt-node', { detail: { name, note, text, outputFormat } })
     );
     close();
   });
 
-  renderSections();
+  updatePreview();
   renderOutputFieldCards();
 
   const close = () => {

@@ -5,15 +5,14 @@ import { buildWorkspaceSummary } from '../src/agent/context/workspaceSummary.js'
 import { ChangeSetError, planChangeSet } from '../src/agent/operations/changeSet.js';
 import { upgradeCanvasState } from '../src/canvasFormat.js';
 import { DATA_EDGE, RESULT_PORT, processInputAliases, validateStepInputs } from '../src/stepInputs.js';
+import { extractInputFields } from '../src/promptText.js';
 
-const extractInputFields = (sections) => [...new Set(sections
-  .flatMap((section) => [...String(section.content || '').matchAll(/\{([^{}]+)\}/g)].map((match) => match[1])))];
 
 const canvas = () => upgradeCanvasState({
   nodes: [
     { type: 'dataset', nodeId: 'raw', name: 'Raw', datasetContent: { headers: ['text'], columnTypes: ['text'], rows: [['a']] } },
     { type: 'dataset', nodeId: 'gt', name: 'GT', datasetContent: { headers: ['answer'], columnTypes: ['text'], rows: [['A']] } },
-    { type: 'prompt', nodeId: 'p', name: 'Extract', sections: [{ name: 'Task', content: 'Read {text}' }],
+    { type: 'prompt', nodeId: 'p', name: 'Extract', text: 'Read {text}',
       outputFormat: { returnShape: 'single', fields: [{ key: 'answer', type: 'str' }] } },
     { type: 'run', nodeId: 'r', runName: 'Run', runWorkingSetId: 'raw', runInputToColumn: JSON.stringify({ text: 'text' }) },
     { type: 'score', nodeId: 's', scoreName: 'Score', scoreGroundTruthId: 'gt' },
@@ -101,7 +100,7 @@ test('the summary uses the panel selection and identifies Pipeline result proven
 test('the summary names a version made by applying a Review', async () => {
   const state = canvas();
   state.nodes.push({ type: 'promptReview', nodeId: 'rev', promptReviewName: 'Review 1' },
-    { type: 'prompt', nodeId: 'p2', name: 'Extract v2', sections: [], outputFormat: { fields: [] } });
+    { type: 'prompt', nodeId: 'p2', name: 'Extract v2', text: '', outputFormat: { fields: [] } });
   state.connections.push({ fromId: 's', toId: 'rev', type: 'score-to-prompt-review' },
     { fromId: 'rev', toId: 'p2', type: 'prompt-review-to-prompt' });
   const summary = await buildWorkspaceSummary(state, { extractInputFields });

@@ -326,14 +326,14 @@ class _Compiler:
         if self.inputs_to(rid, "prompt-to-run") != [pid]:
             self.report("PROMPT_RUN_MISMATCH", rid, "prompt_node_id", "Run must have exactly the selected Prompt as its upstream Prompt.")
         aid = self.input_artifact(rid, self.run_input(rid))
-        sections = prompt.get("sections", [])
-        if not isinstance(sections, list) or any(not isinstance(s, dict) for s in sections):
-            self.report("INVALID_SECTIONS", pid, "sections", "Prompt sections must be objects.")
-            sections = []
-        sections = [{"name": str(s.get("name") or ""), "content": str(s.get("content") or "")} for s in sections]
-        if not any(s["content"].strip() for s in sections):
-            self.report("EMPTY_PROMPT", pid, "sections", "Prompt must have content.")
-        placeholders = list(dict.fromkeys(PLACEHOLDER.findall("\n\n".join(s["content"] for s in sections))))
+        text = prompt.get("text", "")
+        if not isinstance(text, str):
+            self.report("INVALID_PROMPT_TEXT", pid, "text", "Prompt text must be a string.")
+            text = ""
+        text = text.strip()
+        if not text:
+            self.report("EMPTY_PROMPT", pid, "text", "Prompt must have text.")
+        placeholders = list(dict.fromkeys(PLACEHOLDER.findall(text)))
         input_types = self.obj(prompt.get("inputTypes"), pid, "inputTypes")
         types = {}
         for name in placeholders:
@@ -389,7 +389,7 @@ class _Compiler:
             self.report("UNRESOLVED_RUN_DEFAULTS", rid, "runSettings", "Supply Run defaults before starting an execution.", "warning")
         mapping = self.obj(run.get("runInputToColumn"), rid, "runInputToColumn")
         self.jobs[jid] = {"id": jid, "type": "llm", "inputs": {"data": aid}, "outputs": {}, "depends_on": [],
-                          "config": {"sections": sections, "input_types": types,
+                          "config": {"prompt": text, "input_types": types,
                                      "input_mapping": {name: mapping.get(name) for name in placeholders},
                                      "output_schema": {"return_shape": shape, "fields": normalize_output_fields(normalized)},
                                      "mapping_policy": self.mapping_policy,
@@ -540,7 +540,7 @@ class _Compiler:
         if any(d["severity"] == "error" for d in diagnostics):
             return {"spec": None, "diagnostics": diagnostics}
         consumed = {aid for job in self.jobs.values() for aid in job["inputs"].values()}
-        return {"spec": {"format": "annobio.pipeline-spec", "format_version": 1,
+        return {"spec": {"format": "annobio.pipeline-spec", "format_version": 2,
                          "inputs": sorted(a for a, v in self.artifacts.items() if v["producer"] is None),
                          "jobs": [self.jobs[jid] for jid in order or []],
                          "artifacts": [self.artifacts[a] for a in sorted(self.artifacts)],

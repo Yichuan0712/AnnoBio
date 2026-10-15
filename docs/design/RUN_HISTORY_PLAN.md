@@ -48,7 +48,7 @@
 
 | | Run | Process |
 |---|---|---|
-| 主体 | Input prompt：节点 + 内容（sections、输出格式、输入类型） | 代码 |
+| 主体 | Input prompt：节点 + 内容（文本、输出格式、输入类型） | 代码 |
 | 数据 | Input dataset 的节点 ID 和签名，见下文"Dataset 的签名" | 全部输入 Dataset 的节点 ID 和签名，包括哪个是 `df`、各自的别名 |
 | 其他 | 列映射 | — |
 | 不算输入，只记录 | 模型（Settings 默认值） | Python 环境 |

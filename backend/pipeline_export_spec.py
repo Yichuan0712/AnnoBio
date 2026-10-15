@@ -80,7 +80,7 @@ def export_compiled_pipeline(*, spec, models, name, author_name="", generated_at
     This is an internal API for trusted compiler output, not an arbitrary spec upload endpoint.
     Capability restrictions here do not change compiler validity (e.g. multi-input graphs).
     """
-    if spec.get("format") != "annobio.pipeline-spec" or spec.get("format_version") != 1:
+    if spec.get("format") != "annobio.pipeline-spec" or spec.get("format_version") != 2:
         raise render.PipelineExportError("Unsupported compiled PipelineSpec version.")
     if not spec["inputs"]:
         raise render.PipelineExportError("Python export needs at least one starting Dataset.")

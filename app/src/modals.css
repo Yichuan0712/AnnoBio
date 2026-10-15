@@ -3503,7 +3503,7 @@
   padding: 4px 10px;
 }
 
-/* Rule card (like prompt-section-card in Add section): a summary row; open, the rule's form (or a
+/* Rule card: a summary row; open, the rule's form (or a
    group's rules) sits under it, edited in place. */
 .score-rule-card {
   display: flex;
@@ -4009,7 +4009,7 @@
   margin-bottom: 12px;
 }
 
-/* Middle column: Prompt sections — 右侧 chat 栏移除后扩至 70% */
+/* Middle column: the prompt — 右侧 chat 栏移除后扩至 70% */
 .review-detail-preview-wrap {
   flex: 70 1 0;
   min-width: 0;
@@ -4109,7 +4109,7 @@
   color: var(--text-muted);
 }
 
-/* Export new prompt：放在 Prompt sections 下方 */
+/* Export new prompt：放在 prompt 下方 */
 .review-detail-prompt-footer {
   flex-shrink: 0;
   margin: 12px -20px 0 -20px;
@@ -6779,32 +6779,6 @@ body.wd-row-resizing {
   overflow: hidden;
 }
 
-.prompt-detail-sections-footer {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 8px;
-  padding-top: 12px;
-  margin-top: 12px;
-  border-top: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
-.prompt-detail-sections-edit-btns {
-  display: none !important;
-}
-
-.prompt-detail-sections-wrap[data-prompt-sections-mode="edit"] .prompt-detail-sections-btn-edit {
-  display: none !important;
-}
-
-.prompt-detail-sections-wrap[data-prompt-sections-mode="edit"] .prompt-detail-sections-edit-btns {
-  display: flex !important;
-  align-items: center;
-  gap: 10px;
-}
-
 .prompt-detail-sections-view {
   flex: 1;
   min-height: 0;
@@ -6833,24 +6807,58 @@ body.wd-row-resizing {
   outline: none;
 }
 
-.prompt-detail-sections-edit {
-  display: none;
-  flex-direction: column;
-  gap: 14px;
+/* Prompt window: the text is laid out exactly like its editor (same box, line height and full-height
+   blank lines), so clicking it to edit (unless content-locked) moves nothing. */
+.prompt-detail-text-view {
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--control-radius, 3px);
+  outline: none;
+}
+
+.prompt-detail-text-view .preview-field-content {
+  gap: 0;
+}
+
+.prompt-detail-text-view .preview-field-content-line {
+  padding-top: 0;
+  padding-bottom: 0;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+.prompt-detail-text-view .preview-field-content-line:empty::before {
+  content: '\200b';
+}
+
+.prompt-detail-text-view--editable {
+  cursor: text;
+}
+
+.prompt-detail-text-view--editable:hover,
+.prompt-detail-text-view--editable:focus-visible {
+  border-style: dashed;
+  border-color: var(--border);
+}
+
+.prompt-detail-text-editor-wrap {
   flex: 1;
   min-height: 0;
-  min-width: 0;
-  width: 100%;
-  overflow-y: auto;
-  overflow-x: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.prompt-detail-sections-wrap[data-prompt-sections-mode="edit"] .prompt-detail-sections-view {
-  display: none !important;
+.prompt-detail-text-editor-wrap[hidden] {
+  display: none;
 }
 
-.prompt-detail-sections-wrap[data-prompt-sections-mode="edit"] .prompt-detail-sections-edit {
-  display: flex !important;
+.prompt-detail-text-editor {
+  flex: 1;
+  min-height: 240px;
+  resize: none;
+  line-height: 1.5;
 }
 
 /* Output schema block: overflow hidden so edit content cannot push width */
@@ -6911,32 +6919,6 @@ body.wd-row-resizing {
 
 .prompt-detail-schema-wrap[data-prompt-schema-mode="edit"] .prompt-detail-schema-edit {
   display: flex !important;
-}
-
-.prompt-detail-section-edit-row {
-  padding: 12px;
-  background: var(--bg-bar);
-  border: 1px solid var(--border);
-  border-radius: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-width: 0;
-}
-
-.prompt-detail-section-edit-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.prompt-detail-section-edit-header .prompt-detail-section-name-inp {
-  flex: 1;
-  min-width: 0;
-}
-
-.prompt-detail-sections-add-row {
-  align-self: flex-start;
 }
 
 .prompt-detail-inputs-wrap {
@@ -7037,7 +7019,7 @@ body.wd-row-resizing {
   flex-shrink: 0;
 }
 
-/* Step 2: sections list + Add section in one scrollable block, actions at bottom */
+/* Step 2: the prompt text box fills the step, actions at bottom */
 .prompt-step-2-scroll {
   flex: 1;
   min-height: 0;
@@ -7047,13 +7029,16 @@ body.wd-row-resizing {
   gap: 12px;
 }
 
-.prompt-step-2-scroll .prompt-sections {
-  flex: 0 0 auto;
-}
-
 .prompt-step-2 .prompt-actions {
   margin-top: auto;
   flex-shrink: 0;
+}
+
+.prompt-step-2-scroll .prompt-text-input {
+  flex: 1 1 auto;
+  min-height: 260px;
+  resize: vertical;
+  line-height: 1.5;
 }
 
 /* Step 3: keys list + Add field in one scrollable block, actions at bottom */
@@ -7505,7 +7490,7 @@ body.wd-row-resizing {
   display: none;
 }
 
-/* Step 2: two columns — left (Sections), right (Prompt sections only); equal width */
+/* Step 2: two columns — left (prompt text), right (Prompt inputs only); equal width */
 .modal-panel--prompt[data-add-prompt-step="2"] .prompt-schema-preview-wrap {
   display: none;
 }
@@ -7520,7 +7505,7 @@ body.wd-row-resizing {
   min-width: 0;
 }
 
-/* Step 3: three columns — left (Output schema input), Prompt sections, Output schema); equal width */
+/* Step 3: three columns — left (Output schema input), Prompt inputs, Output schema; equal width */
 .modal-panel--prompt[data-add-prompt-step="3"] .prompt-preview-wrap,
 .modal-panel--prompt[data-add-prompt-step="3"] .prompt-schema-preview-wrap {
   display: flex;
@@ -7788,99 +7773,6 @@ body.wd-row-resizing {
   color: var(--text-muted);
 }
 
-.prompt-sections {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  overflow-y: auto;
-}
-
-.prompt-add-section-wrap {
-  display: flex;
-  justify-content: flex-start;
-}
-
-.prompt-add-section-wrap .prompt-add-section {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  min-height: 36px;
-  padding: 6px 10px;
-  font-size: 13px;
-  color: var(--text-muted);
-  background: transparent;
-  border: 1px dashed var(--border);
-  border-radius: 6px;
-  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
-}
-
-.prompt-add-section-wrap .prompt-add-section:hover {
-  border-color: var(--text-muted);
-  color: var(--text);
-  background: var(--hover);
-}
-
-/* Section card: click row to edit, × to remove */
-.prompt-section-card {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  min-height: 36px;
-  overflow: hidden;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.prompt-section-card:hover {
-  border-color: var(--text-muted);
-  box-shadow: 0 1px 3px var(--shadow);
-}
-
-.prompt-section-card-inner {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  padding: 6px 10px;
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--text);
-  transition: background 0.15s ease;
-}
-
-.prompt-section-card-inner:hover {
-  background: var(--hover);
-}
-
-.prompt-section-card-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.prompt-section-card-remove {
-  flex-shrink: 0;
-  padding: 4px 10px;
-  font-size: 14px;
-  line-height: 1;
-  color: var(--text-muted);
-  background: none;
-  border: none;
-  border-left: 1px solid var(--border);
-  cursor: pointer;
-  transition: color 0.15s ease, background 0.15s ease;
-}
-
-.prompt-section-card-remove:hover {
-  color: var(--text);
-  background: var(--hover);
-}
-
 /* Section editor modal (on top of add-prompt) */
 .modal-overlay--section-editor {
   z-index: 1001;
@@ -7968,59 +7860,6 @@ body.wd-row-resizing {
   flex-shrink: 0;
   justify-content: flex-end;
   gap: 10px;
-}
-
-/* Edit sections popup (prompt detail): same look as Add prompt step 2 left */
-.modal-panel--edit-sections {
-  width: min(620px, 96vw);
-  min-width: min(480px, 96vw);
-  max-width: 96vw;
-  max-height: 90vh;
-  min-height: 320px;
-  display: flex;
-  flex-direction: column;
-}
-
-.modal-panel--edit-sections .modal-body {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  padding: 0;
-  overflow: hidden;
-}
-
-.modal-panel--edit-sections .prompt-main--edit-sections {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  padding: 6px 0 20px 0;
-  overflow: hidden;
-}
-
-.modal-panel--edit-sections .prompt-step-2 {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.modal-panel--edit-sections .prompt-step-2 .prompt-actions {
-  margin-top: auto;
-  flex-shrink: 0;
-  justify-content: flex-end;
-}
-
-.modal-panel--edit-sections .prompt-step-2 > .prompt-hint {
-  margin-top: 14px;
-}
-
-.modal-panel--edit-sections .prompt-sections--edit {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  flex: 0 0 auto;
 }
 
 /* Edit output schema popup: same structure as Add prompt step 3 left */
@@ -8130,11 +7969,6 @@ body.wd-row-resizing {
 
 .modal-panel--section-editor .section-editor-error {
   margin: 0;
-}
-
-.modal-panel--section-editor #section-editor-content {
-  min-height: 240px;
-  resize: vertical;
 }
 
 .section-editor-hint {
@@ -8331,12 +8165,6 @@ body.wd-row-resizing {
     max-width: calc(100vw - 16px);
   }
 
-  .modal-panel--edit-sections {
-    width: calc(100vw - 16px);
-    min-width: 0;
-    max-width: calc(100vw - 16px);
-  }
-
   .modal-panel--edit-schema,
   .modal-panel--field-editor {
     width: calc(100vw - 16px);
@@ -8356,9 +8184,6 @@ body.wd-row-resizing {
     max-width: 100%;
   }
 
-  .modal-panel--section-editor #section-editor-content {
-    min-height: 180px;
-  }
 }
 
 /* Output schema key block reuses same look as section */
@@ -8447,8 +8272,7 @@ body.wd-row-resizing {
   margin-bottom: 8px;
 }
 
-.prompt-detail-footer .prompt-detail-inline-error,
-.prompt-detail-sections-footer .prompt-detail-inline-error {
+.prompt-detail-footer .prompt-detail-inline-error {
   flex-basis: 100%;
 }
 
@@ -9177,12 +9001,10 @@ body.wd-image-dragging .wd-image-thumb { cursor: grabbing; }
   flex-shrink: 0;
 }
 
-/* Prompt detail editors stay inside the detail window, beside the relevant preview. */
-.modal-panel--prompt-detail[data-prompt-side-kind="sections"] .prompt-detail-side.prompt-preview-wrap,
+/* Prompt detail's schema editor stays inside the detail window, beside the schema preview. */
 .modal-panel--prompt-detail[data-prompt-side-kind="schema"] .prompt-detail-main {
   display: none;
 }
-.modal-panel--prompt-detail[data-prompt-side-kind="sections"] .prompt-detail-main,
 .modal-panel--prompt-detail[data-prompt-side-kind="schema"] .prompt-detail-side.prompt-preview-wrap {
   flex: 1 1 0;
 }
@@ -9229,14 +9051,12 @@ body.wd-image-dragging .wd-image-thumb { cursor: grabbing; }
   gap: 10px;
   overflow-y: auto;
 }
-.prompt-detail-editor-panel .prompt-sections--edit,
 .prompt-detail-editor-panel .prompt-output-keys-list {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 .prompt-detail-editor-panel .prompt-output-keys-list { flex: 0 0 auto; overflow: visible; }
-.prompt-detail-editor-panel .prompt-add-section-wrap,
 .prompt-detail-editor-panel .prompt-add-field-wrap { flex: 0 0 auto; }
 .prompt-detail-side-child-editor {
   flex: 1 1 0;
@@ -9260,12 +9080,8 @@ body.wd-image-dragging .wd-image-thumb { cursor: grabbing; }
 .prompt-detail-side-child-editor .modal-title { font-size: 14px; }
 .prompt-detail-side-child-editor .modal-panel--section-editor .modal-body { padding: 14px; }
 
-/* Keep the three-step Prompt creator in place while editing a section or field. */
+/* Keep the three-step Prompt creator in place while editing a field. */
 .modal-panel--prompt[data-add-prompt-editor] .prompt-preview-wrap { display: none; }
-.modal-panel--prompt[data-add-prompt-editor="section"] .prompt-main,
-.modal-panel--prompt[data-add-prompt-editor="section"] .prompt-create-editor-panel {
-  flex: 1 1 0;
-}
 .modal-panel--prompt[data-add-prompt-editor="field"] .prompt-create-editor-panel {
   flex: 0 0 min(43%, 500px);
 }

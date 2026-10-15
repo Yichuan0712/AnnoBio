@@ -23,8 +23,8 @@ test('history signatures distinguish Dataset identity and normalize object key o
   assert.equal(first, same);
   assert.notEqual(first, second);
 
-  const run = await runInputSignature({ promptNodeId: 'prompt-1', prompt: { sections: [{ content: 'Hi' }] }, datasetNodeId: 'dataset-1', datasetSignature: first, mapping: { name: 'text' } });
-  const changed = await runInputSignature({ promptNodeId: 'prompt-1', prompt: { sections: [{ content: 'Hello' }] }, datasetNodeId: 'dataset-1', datasetSignature: first, mapping: { name: 'text' } });
+  const run = await runInputSignature({ promptNodeId: 'prompt-1', prompt: { text: 'Hi' }, datasetNodeId: 'dataset-1', datasetSignature: first, mapping: { name: 'text' } });
+  const changed = await runInputSignature({ promptNodeId: 'prompt-1', prompt: { text: 'Hello' }, datasetNodeId: 'dataset-1', datasetSignature: first, mapping: { name: 'text' } });
   assert.notEqual(run, changed);
 
   const bindings = [{ nodeId: 'dataset-1', alias: 'df', signature: first }, { nodeId: 'dataset-2', alias: 'df_other', signature: second }];

@@ -154,8 +154,7 @@ def execute_llm_job(job: dict, table: dict, credential: dict, project_session_id
     else:
         response_model = build_output_model(fields)
 
-    template = "\n\n".join(str(section.get("content") or "").strip()
-                             for section in config.get("sections") or []).strip()
+    template = str(config.get("prompt") or "").strip()
     mapping = dict(config.get("input_mapping") or {})
     placeholders = list(dict.fromkeys(re.findall(r"(?<!\{)\{([^{}]+)\}(?!\})", template)))
     for name in placeholders:

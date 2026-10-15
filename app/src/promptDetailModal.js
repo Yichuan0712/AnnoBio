@@ -1,10 +1,10 @@
 import { attachModalPaneCycle } from './paneToggleButton.js';
-import { openPromptSectionEditor, renderPromptSectionCards } from './promptSectionUi.js';
 import { openPromptFieldEditor, renderPromptFieldCards } from './promptSchemaUi.js';
+import { extractInputFields, promptPlaceholders } from './promptText.js';
 
 /**
- * Prompt detail modal: view/edit name, description, sections, output schema.
- * @param {{ name?: string, note?: string, sections?: Array<{name:string,content:string}>, node?: HTMLElement | null, isPromptNameAlreadyUsed?: (name: string, excludeNodeId?: string | null) => boolean }} options
+ * Prompt detail modal: view/edit the prompt text (in place) and the output schema.
+ * @param {{ name?: string, note?: string, text?: string, node?: HTMLElement | null }} options
  */
 
 function escapeHtml(str) {
@@ -17,30 +17,6 @@ function escapeHtml(str) {
 function sanitizeFilename(name) {
   const s = String(name ?? '').replace(/[\r\n/:*?"<>|\\]/g, '_').trim();
   return s || 'prompt';
-}
-
-/** Extract unique input field names from prompt sections: single-brace placeholders {text} only; {{text}} does not count. */
-export function extractInputFieldsFromSections(sectionsList) {
-  if (!sectionsList || sectionsList.length === 0) return [];
-  const seen = new Set();
-  const names = [];
-  const re = /\{([^{}]+)\}/g;
-  for (const s of sectionsList) {
-    const content = s.content || '';
-    let m;
-    re.lastIndex = 0;
-    while ((m = re.exec(content)) !== null) {
-      const charBefore = m.index > 0 ? content[m.index - 1] : '';
-      const charAfter = m.index + m[0].length < content.length ? content[m.index + m[0].length] : '';
-      if (charBefore === '{' || charAfter === '}') continue;
-      const key = m[1].trim();
-      if (key && !seen.has(key)) {
-        seen.add(key);
-        names.push(key);
-      }
-    }
-  }
-  return names;
 }
 
 const PROMPT_INPUT_SENTENCE_MAX_LEN = 120;
@@ -60,47 +36,27 @@ function getSentenceAround(content, matchStart, matchEnd) {
 }
 
 /**
- * Get one row per input key, with all occurrences: { key, sentences: string }.
- * Sentences are newline-separated so multiple occurrences show in one table row.
+ * One row per input, with the line around each place it is used: { key, sentences }. The sentences
+ * show newline-separated in one table row.
  */
-function getInputsWithSentence(sectionsList) {
-  if (!sectionsList || sectionsList.length === 0) return [];
-  const re = /\{([^{}]+)\}/g;
-  const byKey = {}; // key -> { firstOrder, items: [{ sectionName, sentence }] }
-  let order = 0;
-  for (let i = 0; i < sectionsList.length; i++) {
-    const s = sectionsList[i];
-    const sectionName = (s.name || 'Unnamed').trim() || 'Unnamed';
-    const content = s.content || '';
-    let m;
-    re.lastIndex = 0;
-    while ((m = re.exec(content)) !== null) {
-      const charBefore = m.index > 0 ? content[m.index - 1] : '';
-      const charAfter = m.index + m[0].length < content.length ? content[m.index + m[0].length] : '';
-      if (charBefore === '{' || charAfter === '}') continue;
-      const key = m[1].trim();
-      if (!key) continue;
-      if (!byKey[key]) byKey[key] = { firstOrder: order++, items: [] };
-      const sentence = getSentenceAround(content, m.index, m.index + m[0].length);
-      byKey[key].items.push({ sectionName, sentence });
-    }
+function getInputsWithSentence(text) {
+  const content = String(text || '');
+  const byKey = new Map();
+  for (const { key, start, end } of promptPlaceholders(content)) {
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(getSentenceAround(content, start, end));
   }
-  const keysOrdered = Object.keys(byKey).sort((a, b) => byKey[a].firstOrder - byKey[b].firstOrder);
-  return keysOrdered.map((key) => {
-    const items = byKey[key].items;
-    const sectionNames = items.map((it) => it.sectionName);
-    const sentences = items.map((it) => it.sentence);
-    return { key, sectionNames, sentences };
-  });
+  return [...byKey].map(([key, sentences]) => ({ key, sentences }));
 }
 
-function inputsToViewHtml(sectionsList) {
-  const rows = getInputsWithSentence(sectionsList);
+/** The "Prompt inputs" table: each `{input}` the text uses and where. Shared with the Add prompt window. */
+export function inputsToViewHtml(text) {
+  const rows = getInputsWithSentence(text);
   if (rows.length === 0) return '<p class="prompt-detail-placeholder">No inputs.</p>';
   const tbody = rows
     .map(
       (r) =>
-        `<tr data-input-name="${escapeAttr(r.key)}" data-section-names="${escapeAttr(JSON.stringify(r.sectionNames))}" data-sentences="${escapeAttr(JSON.stringify(r.sentences))}"><td class="prompt-detail-inputs-cell">${escapeHtml(r.key)}</td><td class="prompt-detail-inputs-cell prompt-detail-inputs-cell-multi">${escapeHtml(r.sentences.join('\n'))}</td></tr>`
+        `<tr data-input-name="${escapeAttr(r.key)}" data-sentences="${escapeAttr(JSON.stringify(r.sentences))}"><td class="prompt-detail-inputs-cell">${escapeHtml(r.key)}</td><td class="prompt-detail-inputs-cell prompt-detail-inputs-cell-multi">${escapeHtml(r.sentences.join('\n'))}</td></tr>`
     )
     .join('');
   return `<div class="prompt-detail-inputs-table-wrap">
@@ -111,29 +67,12 @@ function inputsToViewHtml(sectionsList) {
 </div>`;
 }
 
-function sectionsToViewHtml(sectionsList) {
-  if (!sectionsList || sectionsList.length === 0) return '<p class="prompt-detail-placeholder">No sections.</p>';
-  return sectionsList
-    .map((s) => {
-      const sectionName = s.name || 'Unnamed';
-      const content = s.content || '';
-      const lines = content.split('\n');
-      const lineEls =
-        lines.length > 0
-          ? lines.map((line) => `<div class="preview-field-content-line">${escapeHtml(line)}</div>`).join('')
-          : '<div class="preview-field-content-line"></div>';
-      return `
-          <div class="preview-field-block">
-            <div class="preview-field-divider">
-              <span class="preview-field-line" aria-hidden="true"></span>
-              <span class="preview-field-name">${escapeHtml(sectionName)}</span>
-              <span class="preview-field-line" aria-hidden="true"></span>
-            </div>
-            <div class="preview-field-content">${lineEls}</div>
-          </div>
-        `;
-    })
-    .join('');
+/** The prompt text as one line element per line, so an input row can highlight the lines it is used on. */
+function promptTextToViewHtml(text, placeholder) {
+  const content = String(text || '');
+  if (!content.trim()) return `<p class="prompt-detail-placeholder">${escapeHtml(placeholder)}</p>`;
+  const lines = content.split('\n').map((line) => `<div class="preview-field-content-line">${escapeHtml(line)}</div>`).join('');
+  return `<div class="preview-field-content">${lines}</div>`;
 }
 
 const OUTPUT_TYPES = [
@@ -200,13 +139,7 @@ function readSavedPromptSnapshotFromNode(node) {
   }
   if (!name) name = 'Prompt';
   const note = (node.dataset.promptNote || '').trim();
-  let sections = [];
-  try {
-    const raw = JSON.parse(node.dataset.promptSections || node.dataset.promptFields || '[]');
-    sections = Array.isArray(raw) ? raw.map((s) => ({ name: s?.name || '', content: s?.content || '' })) : [];
-  } catch (_) {
-    sections = [];
-  }
+  const text = node.dataset.promptText || '';
   let fields = [];
   let returnShape = 'single';
   try {
@@ -225,22 +158,14 @@ function readSavedPromptSnapshotFromNode(node) {
     fields = [];
     returnShape = node.dataset.promptOutputReturnShape || 'single';
   }
-  return { name, note, sections, returnShape, fields };
-}
-
-/** Run row template: non-empty trimmed section contents, \\n\\n joined (same as runDetailModal). */
-function buildRunTemplateTextForExport(sections) {
-  return (Array.isArray(sections) ? sections : [])
-    .map((s) => String(s?.content ?? '').trim())
-    .filter(Boolean)
-    .join('\n\n');
+  return { name, note, text, returnShape, fields };
 }
 
 /**
- * Export format: run template + suffix matching backend/llm.py::_run_structured_fallback (approx. JSON Schema).
+ * Export format: the prompt text a Run sends + suffix matching backend/llm.py::_run_structured_fallback (approx. JSON Schema).
  */
 function buildPromptExportText(snapshot) {
-  const runTemplate = buildRunTemplateTextForExport(snapshot.sections);
+  const runTemplate = String(snapshot.text || '').trim();
   const shape = String(snapshot.returnShape || 'single').trim().toLowerCase() === 'table' ? 'table' : 'single';
   const typeMap = {
     str: { type: 'string' },
@@ -305,15 +230,18 @@ function buildPromptExportText(snapshot) {
 }
 
 function hasPromptExportBlockingOverlayOpen() {
-  if (document.querySelector('.modal-overlay--edit-sections, .modal-overlay--edit-schema')) return true;
   return !!document.querySelector('.modal-overlay--field-editor, .modal-overlay--section-editor');
 }
 
-/** @param {{ locked?: boolean }} options locked: content produced a result (contentLocks.js); hides both Edit buttons. */
-export function openPromptDetailModal({ name = '', note = '', sections = [], node: sourceNode = null, isPromptNameAlreadyUsed, onRunPrompt, locked = false }) {
+const PROMPT_TEXT_SAVE_DELAY_MS = 300;
+
+/**
+ * @param {{ locked?: boolean }} options locked: content produced a result (contentLocks.js); the
+ * text can't be clicked to edit and Edit schema is hidden.
+ */
+export function openPromptDetailModal({ name = '', text = '', node: sourceNode = null, onRunPrompt, locked = false }) {
   const displayName = (name && name.trim()) ? name.trim() : 'Prompt';
-  const noteTrimmed = (note || '').trim();
-  const sectionsViewHtml = sectionsToViewHtml(sections);
+  const emptyTextPlaceholder = locked ? 'No prompt text.' : 'Click to write the prompt.';
 
   let outputFormat = { returnShape: 'table', fields: [] };
   let inputTypes = {};
@@ -325,7 +253,7 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
     } catch (_) {}
     try { inputTypes = JSON.parse(sourceNode.dataset.promptInputTypes || '{}'); } catch (_) {}
   }
-  const inputsViewHtml = inputsToViewHtml(sections);
+  const inputsViewHtml = inputsToViewHtml(text);
   const schemaViewHtml = schemaToViewHtml(outputFormat.fields, outputFormat.returnShape);
 
   const overlay = document.createElement('div');
@@ -356,18 +284,18 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
           <div class="prompt-detail-main">
             <div class="prompt-detail-step">
               <div class="prompt-detail-sections-heading">
-                <p class="prompt-step-label">Prompt sections</p>
+                <p class="prompt-step-label">Prompt</p>
               </div>
               <div class="prompt-detail-sections-scroll">
-                <div class="prompt-detail-sections-wrap">
-                  <div class="prompt-detail-sections-view">${sectionsViewHtml}</div>
+                <div class="prompt-detail-sections-view prompt-detail-text-view${locked ? '' : ' prompt-detail-text-view--editable'}"${locked ? '' : ' role="button" tabindex="0" title="Click to edit"'}>${promptTextToViewHtml(text, emptyTextPlaceholder)}</div>
+                <div class="prompt-detail-text-editor-wrap" hidden>
+                  <textarea class="dataset-meta-input dataset-meta-textarea prompt-detail-text-editor" aria-label="Prompt text" spellcheck="false"></textarea>
+                  <p class="section-editor-hint">Use <code>{variable}</code> for input placeholders; <code>{{</code> for a literal brace. Changes save as you type.</p>
                 </div>
               </div>
-              <div class="prompt-form-error prompt-modal-error" id="prompt-detail-sections-error" role="alert" aria-live="polite" hidden></div>
               <div class="prompt-actions">
                 <div class="prompt-actions__trailing">
                   <button type="button" class="btn btn-secondary prompt-detail-export-local" title="Save prompt as a text file">Save as file</button>
-                  ${locked ? '' : '<button type="button" class="btn btn-secondary prompt-detail-sections-btn-edit">Edit sections</button>'}
                   <button type="button" class="btn btn-primary prompt-detail-sections-btn-run" id="prompt-detail-sections-btn-run">Create Run</button>
                 </div>
               </div>
@@ -470,103 +398,82 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
     });
   }
 
-  let currentSections = Array.isArray(sections) ? sections.map((s) => ({ name: s.name || '', content: s.content || '' })) : [];
-  const sectionsView = overlay.querySelector('.prompt-detail-sections-view');
-  const sectionsBtnEdit = overlay.querySelector('.prompt-detail-sections-btn-edit');
+  let currentText = String(text || '');
+  const textView = overlay.querySelector('.prompt-detail-text-view');
+  const textEditorWrap = overlay.querySelector('.prompt-detail-text-editor-wrap');
+  const textEditor = overlay.querySelector('.prompt-detail-text-editor');
+  const inputsContentEl = overlay.querySelector('.prompt-detail-inputs-content');
+  let textSaveTimer = null;
 
-  function hasDuplicateSectionNames(sectionsList) {
-    const names = sectionsList.map((s) => (s.name || '').trim().toLowerCase()).filter(Boolean);
-    return names.length !== new Set(names).size;
+  /** Saves the text onto the node; inputs it no longer uses lose their type. */
+  function persistText() {
+    if (textSaveTimer) clearTimeout(textSaveTimer);
+    textSaveTimer = null;
+    const next = textEditor.value;
+    if (next === currentText) return;
+    currentText = next;
+    if (!sourceNode) return;
+    sourceNode.dataset.promptText = currentText;
+    const used = new Set(extractInputFields(currentText));
+    Object.keys(inputTypes).forEach((key) => { if (!used.has(key)) delete inputTypes[key]; });
+    sourceNode.dataset.promptInputTypes = JSON.stringify(inputTypes);
+    inputsContentEl.innerHTML = inputsToViewHtml(currentText);
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
   }
 
-  function openEditSectionsSidePanel() {
-    const editSections = currentSections.map((s) => ({ name: s.name || '', content: s.content || '' }));
-    const side = openSidePanel('sections', 'Edit prompt sections', `
-      <p class="prompt-hint">Click a section to edit it, or use × to remove it.</p>
-      <div class="prompt-detail-editor-panel__scroll">
-        <div class="prompt-sections prompt-sections--edit"></div>
-        <div class="prompt-add-section-wrap"><button type="button" class="btn btn-secondary prompt-add-section">+ Add a section</button></div>
-      </div>
-      <div class="prompt-form-error prompt-modal-error edit-sections-error" role="alert" aria-live="polite" hidden></div>`);
-    if (!side) return;
-    const container = side.querySelector('.prompt-sections--edit');
-    const addBtn = side.querySelector('.prompt-add-section');
-    const errorEl = side.querySelector('.edit-sections-error');
-
-    function onSectionChange() {
-      renderSectionsList();
-      persistSections();
+  /**
+   * The text turns into an editor in place, with the caret at the start of the clicked line. Both lay the
+   * text out the same way (modals.css), so keeping the scroll position keeps every line where it was.
+   */
+  function startTextEdit(clickedLine = null) {
+    if (locked || !textEditorWrap.hidden) return;
+    const lines = [...textView.querySelectorAll('.preview-field-content-line')];
+    const lineIndex = clickedLine ? lines.indexOf(clickedLine) : -1;
+    const { scrollTop } = textView;
+    textEditor.value = currentText;
+    textView.hidden = true;
+    textEditorWrap.hidden = false;
+    if (lineIndex < 0) {
+      textEditor.focus();
+      return;
     }
+    const caret = currentText.split('\n').slice(0, lineIndex).reduce((sum, line) => sum + line.length + 1, 0);
+    textEditor.setSelectionRange(caret, caret);
+    textEditor.focus({ preventScroll: true });
+    textEditor.scrollTop = scrollTop;
+  }
 
-    function renderSectionsList() {
-      renderPromptSectionCards({
-        sections: editSections,
-        container,
-        onChange: onSectionChange,
-        onEdit: (sectionIndex) => showSideChild(side, (host, onClose) => openPromptSectionEditor({
-          sections: editSections, sectionIndex, onDone: onSectionChange, host, onClose,
-        })),
-      });
-    }
+  function endTextEdit() {
+    if (textEditorWrap.hidden) return;
+    persistText();
+    const { scrollTop } = textEditor;
+    textView.innerHTML = promptTextToViewHtml(currentText, emptyTextPlaceholder);
+    textEditorWrap.hidden = true;
+    textView.hidden = false;
+    textView.scrollTop = scrollTop;
+  }
 
-    function showError(msg) {
-      if (errorEl) {
-        errorEl.textContent = msg;
-        errorEl.hidden = false;
+  if (!locked) {
+    textView.addEventListener('click', (e) => startTextEdit(e.target.closest('.preview-field-content-line')));
+    textView.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        startTextEdit();
       }
-    }
-
-    function clearError() {
-      if (errorEl) {
-        errorEl.textContent = '';
-        errorEl.hidden = true;
-      }
-    }
-
-    function persistSections() {
-      const withContent = editSections.filter((s) => (s.name || '').trim() && (s.content ?? '').trim());
-      const hasPartial = editSections.some((s) => {
-        const n = (s.name || '').trim();
-        const c = (s.content ?? '').trim();
-        return (n || c) && (!n || !c);
-      });
-      if (hasPartial) {
-        showError('Section name and content are required for each section.');
-        return false;
-      }
-      if (withContent.length === 0) {
-        showError('At least one section with name and content is required.');
-        return false;
-      }
-      if (hasDuplicateSectionNames(withContent)) {
-        showError('Section names must be unique within this prompt. Please fix duplicate section names.');
-        return false;
-      }
-      currentSections = withContent;
-      if (sourceNode) sourceNode.dataset.promptSections = JSON.stringify(currentSections);
-      sectionsView.innerHTML = sectionsToViewHtml(currentSections.length ? currentSections : []);
-      const inputsContentEl = overlay.querySelector('.prompt-detail-inputs-content');
-      if (inputsContentEl) {
-        const currentNames = new Set(extractInputFieldsFromSections(currentSections));
-        Object.keys(inputTypes).forEach((key) => { if (!currentNames.has(key)) delete inputTypes[key]; });
-        if (sourceNode) sourceNode.dataset.promptInputTypes = JSON.stringify(inputTypes);
-        inputsContentEl.innerHTML = inputsToViewHtml(currentSections);
-      }
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-      return true;
-    }
-
-    addBtn.addEventListener('click', () => {
-      showSideChild(side, (host, onClose) => openPromptSectionEditor({
-        sections: editSections, onDone: onSectionChange, host, onClose,
-      }));
     });
-
-    renderSectionsList();
-  }
-
-  if (sectionsBtnEdit) {
-    sectionsBtnEdit.addEventListener('click', () => openEditSectionsSidePanel());
+    textEditor.addEventListener('input', () => {
+      if (textSaveTimer) clearTimeout(textSaveTimer);
+      textSaveTimer = setTimeout(persistText, PROMPT_TEXT_SAVE_DELAY_MS);
+    });
+    textEditor.addEventListener('blur', endTextEdit);
+    textEditor.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        // Leaves the editor, not the window.
+        e.preventDefault();
+        e.stopPropagation();
+        textEditor.blur();
+      }
+    });
   }
 
   const sectionsBtnRun = overlay.querySelector('.prompt-detail-sections-btn-run');
@@ -640,9 +547,9 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
   });
 
   const inputsContent = overlay.querySelector('.prompt-detail-inputs-content');
-  if (inputsContent && sectionsView) {
+  if (inputsContent && textView) {
     function clearLineHighlight() {
-      sectionsView.querySelectorAll('.preview-field-content-line.prompt-detail-line-highlight').forEach((el) => el.classList.remove('prompt-detail-line-highlight'));
+      textView.querySelectorAll('.preview-field-content-line.prompt-detail-line-highlight').forEach((el) => el.classList.remove('prompt-detail-line-highlight'));
     }
     function sentenceMatchesLine(sentence, lineText) {
       const s = (sentence || '').trim();
@@ -653,28 +560,16 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
       return false;
     }
     function highlightSentencesForRow(row) {
-      let sectionNames = [];
       let sentences = [];
       try {
-        sectionNames = JSON.parse(row.dataset.sectionNames || '[]');
         sentences = JSON.parse(row.dataset.sentences || '[]');
       } catch (_) {
         return;
       }
       clearLineHighlight();
-      sectionsView.querySelectorAll('.preview-field-block').forEach((block) => {
-        const nameEl = block.querySelector('.preview-field-name');
-        const name = (nameEl ? (nameEl.textContent || '').trim() : '') || 'Unnamed';
-        const lineEls = block.querySelectorAll('.preview-field-content-line');
-        sectionNames.forEach((sec, i) => {
-          if (sec !== name) return;
-          const sentence = sentences[i];
-          if (sentence == null) return;
-          lineEls.forEach((lineEl) => {
-            const lineText = (lineEl.textContent || '').trim();
-            if (sentenceMatchesLine(sentence, lineText)) lineEl.classList.add('prompt-detail-line-highlight');
-          });
-        });
+      textView.querySelectorAll('.preview-field-content-line').forEach((lineEl) => {
+        const lineText = (lineEl.textContent || '').trim();
+        if (sentences.some((sentence) => sentenceMatchesLine(sentence, lineText))) lineEl.classList.add('prompt-detail-line-highlight');
       });
     }
     inputsContent.addEventListener('mouseover', (e) => {
@@ -832,7 +727,7 @@ export function openPromptDetailModal({ name = '', note = '', sections = [], nod
     overlay,
     bothLabel: 'Show both panels',
     leftOnlyLabel: 'Show prompt inputs panel only',
-    rightOnlyLabel: 'Show prompt sections panel only',
+    rightOnlyLabel: 'Show prompt panel only',
   });
 
   overlay.querySelector('.modal-close').addEventListener('click', () => {

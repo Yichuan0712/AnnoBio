@@ -133,7 +133,7 @@ assert pd.read_excel('out.xlsx')['text'].tolist() == ['ax']
         import pandas as pd
         engine = Mock()
         engine.complete.side_effect = [RuntimeError("transient"), {"drug_name": "a", "drug_name_1": "b"}]
-        result = ns["run_prompt_step"](pd.DataFrame([{"text": "hello"}]), engine, prompt_name="p", sections=prompt["sections"],
+        result = ns["run_prompt_step"](pd.DataFrame([{"text": "hello"}]), engine, prompt_name="p", prompt=prompt["prompt"],
             input_mapping=prompt["input_mapping"], input_types=prompt["input_types"], output_schema=prompt["output_schema"],
             model_config=prompt["model"], input_root=Path.cwd(), concurrency=1)
         self.assertEqual(engine.complete.call_count, 2)

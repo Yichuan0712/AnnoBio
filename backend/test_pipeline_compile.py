@@ -18,7 +18,7 @@ def dataset(nid, headers=None, **extra):
 
 
 def prompt(nid="p", content="Read {text}"):
-    return {"type": "prompt", "nodeId": nid, "name": nid, "sections": [{"name": "Task", "content": content}],
+    return {"type": "prompt", "nodeId": nid, "name": nid, "text": content,
             "outputFormat": {"returnShape": "single", "fields": [{"key": "answer", "type": "str"}]}}
 
 
@@ -95,8 +95,8 @@ class PipelineCompileTests(unittest.TestCase):
         serialized = json.dumps(spec)
         for private in ["PRIVATE_ROW", "PRIVATE_CREDENTIAL", "PRIVATE_RESULTS"]:
             self.assertNotIn(private, serialized)
-        state["nodes"][1]["sections"][0]["content"] = "changed"
-        self.assertEqual(spec["jobs"][0]["config"]["sections"][0]["content"], "Read {text}")
+        state["nodes"][1]["text"] = "changed"
+        self.assertEqual(spec["jobs"][0]["config"]["prompt"], "Read {text}")
 
     def test_graph_order_does_not_depend_on_canvas_or_route_order(self):
         state = branched()
@@ -165,7 +165,7 @@ class PipelineCompileTests(unittest.TestCase):
 
     def test_legacy_mapping_inference_escaped_braces_and_ambiguity(self):
         state = simple()
-        state["nodes"][1]["sections"][0]["content"] = "Read {Text}; ignore {{literal}}"
+        state["nodes"][1]["text"] = "Read {Text}; ignore {{literal}}"
         state["nodes"][2]["runInputToColumn"] = "{}"
         self.assertEqual(self.valid(state)["jobs"][0]["config"]["input_mapping"], {"Text": "text"})
         state["nodes"][0]["datasetContent"]["headers"] = ["text", "TEXT"]

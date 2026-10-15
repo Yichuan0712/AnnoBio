@@ -13,11 +13,11 @@ test('selecting a downstream record restores its ancestor inputs together', asyn
   const processRecord = migrated.records.find((record) => record.nodeId === 'process');
   const changed = structuredClone(migrated.state);
   changed.nodes.find((node) => node.nodeId === 'input').datasetContent.rows[0][0] = 'new input';
-  changed.nodes.find((node) => node.nodeId === 'prompt').sections[0].content = 'new prompt';
+  changed.nodes.find((node) => node.nodeId === 'prompt').text = 'new prompt';
   changed.nodes.find((node) => node.nodeId === 'process').dfCode = 'return df.head()';
   const selected = await planHistorySelection(changed, processRecord.id, { loadRecord: async (id) => records[id] });
   assert.equal(selected.state.nodes.find((node) => node.nodeId === 'input').datasetContent.rows[0][0], 'hello');
-  assert.equal(selected.state.nodes.find((node) => node.nodeId === 'prompt').sections[0].content, 'Say {{text}}');
+  assert.equal(selected.state.nodes.find((node) => node.nodeId === 'prompt').text, 'Say {{text}}');
   assert.equal(selected.state.nodes.find((node) => node.nodeId === 'process').dfCode, 'return df');
   assert.deepEqual(new Set(Object.keys(selected.selectedRecordIds)), new Set(['run', 'process']));
   assert.ok(['input', 'run', 'process'].every((id) => selected.affectedNodeIds.includes(id)));
@@ -36,7 +36,7 @@ const processRecord = (id, nodeId, bindings) => ({
 const entriesOf = (records) => records.map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature }));
 
 test('selecting any record of a chain switches its upstream and downstream to one lineage', async () => {
-  const promptSnapshot = { nodeId: 'prompt', name: 'Prompt', sections: [], outputFormat: { fields: [] }, inputTypes: {} };
+  const promptSnapshot = { nodeId: 'prompt', name: 'Prompt', text: '', outputFormat: { fields: [] }, inputTypes: {} };
   const runRecord = (id) => ({
     id, nodeId: 'run', kind: 'run', status: 'completed', signature: `${id}-signature`, sourceRecordIds: [],
     inputs: { prompt: promptSnapshot, dataset: { kind: 'dataset', nodeId: 'raw', name: 'Raw', content: table('raw'), signature: 'raw' }, mapping: {} },
@@ -52,7 +52,7 @@ test('selecting any record of a chain switches its upstream and downstream to on
   const state = {
     version: 3,
     nodes: [
-      { type: 'prompt', nodeId: 'prompt', sections: [], outputFormat: { fields: [] }, inputTypes: {} },
+      { type: 'prompt', nodeId: 'prompt', text: '', outputFormat: { fields: [] }, inputTypes: {} },
       { type: 'dataset', nodeId: 'raw', datasetContent: table('raw') },
       { type: 'run', nodeId: 'run', historyRecordId: 'run-current' },
       { type: 'process', nodeId: 'tidy', historyRecordId: 'tidy-current', dfCode: 'return df' },

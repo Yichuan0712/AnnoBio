@@ -6,7 +6,7 @@ Prompt Evolution Can Outperform Reinforcement Learning", Agrawal et al., 2025, a
 This is NOT a reimplementation of GEPA's algorithm — the Pareto-frontier candidate pool, the reflective
 mutation loop, the instruction-proposal prompt and its parsing all come from the `gepa` package itself
 (`gepa.optimize`). What we own is the integration layer required by GEPAAdapter's contract:
-  - `_AppGepaAdapter.evaluate()`  — compile the candidate section into the full prompt, call the task LLM
+  - `_AppGepaAdapter.evaluate()`  — use the candidate prompt text as the template, call the task LLM
     for real against this app's dataset rows, score the output with this app's own matching engine
     (score_match_primitives.py / score_run_gt_pairing.py — the JS-ported one, not a stand-in).
   - `_AppGepaAdapter.make_reflective_dataset()` — turn a batch's outputs/errors/scores into the small
@@ -27,7 +27,6 @@ on one example), not "iterations" — separate from the Thompson-sampling compos
 `optimization_max_trials`, whose trials only touch one suggestion's target rows.
 
 v1 scope, deliberately simplified rather than half-built:
-- Optimizes exactly one prompt section (`body.target_section_index`, default 0) — not the whole prompt.
 - No train/val split: every targeted comparison-row input is used both for reflection and for scoring
   (gepa's own default when `valset` is omitted — it reuses the trainset).
 - Multiple ground-truth rows for one input are common upstream (extraction tasks), but this method only
@@ -55,7 +54,6 @@ from review_pipeline import (
     _row_to_dict,
     _sanitize_prompt_edits,
     _score_row_one_based,
-    _sec_name_content,
 )
 from run_output_schema import build_output_model, build_table_output_model, run_structured_output_is_empty
 from score_mapping_bundle import parse_score_mapping_bundle
@@ -76,7 +74,7 @@ from score_match_primitives import (
 from score_run_gt_pairing import evaluate_score_tree, flatten_score_rules
 from safe_stdio import safe_print as _print
 
-_SECTION_KEY = "section"
+_PROMPT_KEY = "prompt"
 _DEFAULT_MAX_ITERATIONS = 15
 _MAX_FAILING_RECORDS_IN_REFLECTIVE_DATASET = 12
 _CLIP_CHARS = 800
@@ -235,7 +233,7 @@ def _run_task_prompt(
 
 class _AppReflectionLM:
     """Bridges gepa's `LanguageModel` protocol (`__call__(prompt: str | list[dict]) -> str`) to this app's
-    own credential system, so gepa's internal reflection calls (writing the new candidate section text)
+    own credential system, so gepa's internal reflection calls (writing the new candidate prompt text)
     use the same provider/model/api_key as the rest of this review job."""
 
     def __init__(self, *, provider: str, model: str, api_key: str, base_url: str, max_tokens: int):
@@ -258,8 +256,8 @@ class _AppReflectionLM:
 
 
 class _AppGepaAdapter:
-    """GEPAAdapter for this app: one component (`_SECTION_KEY`) mapping to the targeted prompt section's
-    text. `evaluate()` compiles that text into the full prompt, runs the task model for real against each
+    """GEPAAdapter for this app: one component (`_PROMPT_KEY`) holding the prompt text. `evaluate()`
+    uses that text as the template, runs the task model for real against each
     `_GepaExample`, and scores with this app's own matching engine — see the module docstring."""
 
     # GEPAAdapter is a Protocol with `propose_new_texts: ProposalFn | None = None` as a *class-level*
@@ -272,8 +270,6 @@ class _AppGepaAdapter:
     def __init__(
         self,
         *,
-        section_index: int,
-        sections: list[Any],
         output_root: dict,
         provider: str,
         model: str,
@@ -284,8 +280,6 @@ class _AppGepaAdapter:
         max_retries: int,
         is_cancelled: Callable[[], bool],
     ):
-        self.section_index = section_index
-        self.sections = sections
         self.output_root = output_root
         self.provider = provider
         self.model = model
@@ -297,9 +291,7 @@ class _AppGepaAdapter:
         self.is_cancelled = is_cancelled
 
     def _compile_template(self, candidate: dict[str, str]) -> str:
-        section_texts = [(_sec_name_content(s)[1] or "") for s in self.sections]
-        section_texts[self.section_index] = candidate[_SECTION_KEY]
-        return "\n\n".join(t.strip() for t in section_texts if t.strip())
+        return (candidate[_PROMPT_KEY] or "").strip()
 
     def evaluate(self, batch: list[_GepaExample], candidate: dict[str, str], capture_traces: bool = False) -> EvaluationBatch:
         template = self._compile_template(candidate)
@@ -390,7 +382,7 @@ class _AppGepaAdapter:
                 "Generated Outputs": "",
                 "Feedback": "Try an alternate phrasing that stays correct but may generalize better.",
             }]
-        return {_SECTION_KEY: records}
+        return {_PROMPT_KEY: records}
 
 
 class _AppGepaCallback:
@@ -451,17 +443,14 @@ def run_gepa(
 ) -> None:
     """Drive the GEPA method via gepa.optimize(). Emits: plan, stage(seed|evolve|select), suggestions
     (at most one), done."""
-    sections = list(getattr(body, "prompt_sections", None) or [])
+    prompt = str(getattr(body, "prompt", "") or "")
+    seed_text = prompt.strip()
     comparison_rows = list(getattr(body, "comparison_rows", None) or [])
 
-    if not sections:
-        append_event({"type": "plan", "summary": "No prompt sections to optimize.", "diagnosis_total": 0})
+    if not seed_text:
+        append_event({"type": "plan", "summary": "The prompt is empty; nothing to optimize.", "diagnosis_total": 0})
         append_event({"type": "done"})
         return
-
-    target_idx = getattr(body, "target_section_index", None)
-    target_idx = target_idx if isinstance(target_idx, int) and 0 <= target_idx < len(sections) else 0
-    section_name, seed_text = _sec_name_content(sections[target_idx])
 
     output_schema = getattr(body, "output_schema", None) or {}
     if not output_schema.get("fields"):
@@ -503,7 +492,7 @@ def run_gepa(
     append_event({
         "type": "plan",
         "summary": (
-            f"GEPA: evolving section \"{section_name}\" against {len(examples)} example(s) via the official "
+            f"GEPA: evolving the prompt against {len(examples)} example(s) via the official "
             f"gepa package, up to {max_iterations} reflective iteration(s). Runs the task model for real "
             "every iteration — cost scales with iterations x examples."
         ),
@@ -513,7 +502,7 @@ def run_gepa(
         return
 
     adapter = _AppGepaAdapter(
-        section_index=target_idx, sections=sections, output_root=output_root,
+        output_root=output_root,
         provider=provider, model=model, api_key=api_key, base_url=base_url,
         output_schema=output_schema, max_tokens=max_tokens, max_retries=task_max_retries,
         is_cancelled=is_cancelled,
@@ -526,7 +515,7 @@ def run_gepa(
 
     try:
         result = gepa.optimize(
-            seed_candidate={_SECTION_KEY: seed_text},
+            seed_candidate={_PROMPT_KEY: seed_text},
             trainset=examples,
             valset=None,  # gepa reuses trainset when omitted — matches this app's "no train/val split" choice
             adapter=adapter,
@@ -554,7 +543,7 @@ def run_gepa(
     seed_score = result.val_aggregate_scores[0] if result.val_aggregate_scores else 0.0
     best_idx = result.best_idx
     best_score = result.val_aggregate_scores[best_idx] if result.val_aggregate_scores else 0.0
-    best_text = result.candidates[best_idx].get(_SECTION_KEY, seed_text)
+    best_text = result.candidates[best_idx].get(_PROMPT_KEY, seed_text)
     _print(f"\n{'=' * 80}\nGEPA done — seed={seed_score:.3f} best={best_score:.3f} candidates={result.num_candidates}\n{'=' * 80}\n")
 
     append_event({"type": "stage", "stage_id": "evolve", "kind": "done", "payload": {"pool_size": result.num_candidates}})
@@ -567,8 +556,8 @@ def run_gepa(
 
     target_labels = sorted({label for ex in examples for label in ex.score_labels}) or [1]
     edit = PromptEditSuggestion(
-        name=f"GEPA: evolved \"{section_name}\"",
-        phase1_addresses=[f"GEPA evolved this section over {result.num_candidates - 1} candidate(s)"],
+        name="GEPA: evolved prompt",
+        phase1_addresses=[f"GEPA evolved the prompt over {result.num_candidates - 1} candidate(s)"],
         old_sentence=seed_text,
         new_sentence=best_text,
         reason=f"Empirically improved from {seed_score:.0%} to {best_score:.0%} on {len(examples)} example(s).",
@@ -577,7 +566,7 @@ def run_gepa(
     # _sanitize_prompt_edits resolves old_sentence to a verbatim, unique span (needed for Accept/Revert)
     # and converts target_score_row_indices from 1-based Score # labels to 0-based comparison row_index —
     # same as every other method's suggestions, so downstream (verify/accept/revert) sees a consistent shape.
-    batch = _sanitize_prompt_edits(sections, [edit], comparison_rows)
+    batch = _sanitize_prompt_edits(prompt, [edit], comparison_rows)
     if not batch:
         append_event({"type": "stage", "stage_id": "select", "kind": "done", "payload": {"improved": True, "dropped": "old_sentence did not resolve uniquely"}})
         append_event({"type": "done"})

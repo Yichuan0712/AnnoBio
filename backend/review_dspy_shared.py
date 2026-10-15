@@ -1,13 +1,12 @@
 """
 Shared DSPy-bridging helpers for review methods that wrap a real `dspy` teleprompter
 (review_miprov2.py, review_bootstrap_fewshot.py) — building the dynamic `dspy.Signature` for a target
-prompt section optimized IN ISOLATION, wiring this app's example data and matching engine into DSPy's
+prompt, wiring this app's example data and matching engine into DSPy's
 `dspy.Example` / metric conventions, and constructing a `dspy.LM` from this app's own credential system.
 
-See review_miprov2.py's module docstring for the "why in isolation" architecture note — the target
-section becomes the Signature's `instructions`, its own `{placeholder}` keys become `dspy.InputField`s,
-and other prompt sections are not shown to the optimizer at all. Every method built on this module
-inherits that same scope choice; it isn't re-litigated per method.
+See review_miprov2.py's module docstring for the architecture note — the prompt text becomes the
+Signature's `instructions` and its `{placeholder}` keys become `dspy.InputField`s. Every method built on
+this module inherits that same mapping; it isn't re-litigated per method.
 """
 
 from __future__ import annotations
@@ -45,7 +44,7 @@ def extract_placeholder_keys(text: str) -> list[str]:
     return seen
 
 
-def build_signature(*, instructions: str, input_keys: list[str], output_schema: dict, signature_name: str = "AppSection") -> type[dspy.Signature]:
+def build_signature(*, instructions: str, input_keys: list[str], output_schema: dict, signature_name: str = "AppPrompt") -> type[dspy.Signature]:
     fields: dict[str, tuple[type, Any]] = {}
     for k in input_keys:
         fields[k] = (str, dspy.InputField())
@@ -61,7 +60,7 @@ def build_signature(*, instructions: str, input_keys: list[str], output_schema: 
     return dspy.make_signature(fields, instructions=instructions, signature_name=signature_name)
 
 
-class SectionModule(dspy.Module):
+class PromptModule(dspy.Module):
     def __init__(self, signature: type[dspy.Signature]):
         super().__init__()
         self.predict = dspy.Predict(signature)

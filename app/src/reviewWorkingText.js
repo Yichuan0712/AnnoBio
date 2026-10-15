@@ -1,5 +1,5 @@
 /**
- * Locate prompt spans and rebuild section text when suggestions are applied (Review).
+ * Locate prompt spans and rebuild the prompt text when Optimize suggestions are applied.
  */
 
 /**
@@ -76,33 +76,18 @@ export function getLocatableSegment(content, oldSentence) {
 }
 
 /**
- * 0-based section index where `oldSentence` is uniquely locatable, or -1 if none / ambiguous.
- * @param {Array<{ content?: string }>} sections
- * @param {string} oldSentence
- * @returns {number}
+ * The paragraph (text between blank lines) holding `sentence`, as read-only context for an edit to
+ * it; the whole text when the sentence isn't found there.
+ * @returns {string}
  */
-export function findSectionIndexForOldSentence(sections, oldSentence) {
-  if (!Array.isArray(sections) || oldSentence == null) return -1;
-  const raw = String(oldSentence);
-  const trimmed = raw.trim();
-  if (!trimmed) return -1;
-  /** Strict: includes + whitespace-flex regex only (no fuzzy sentence match — avoids false multi-section hits). */
-  const segmentHit = (content) => !!findSegmentInContent(content, raw);
-  const hits = [];
-  for (let i = 0; i < sections.length; i++) {
-    const content = sections[i] && sections[i].content != null ? String(sections[i].content) : '';
-    if (segmentHit(content)) hits.push(i);
-  }
-  if (hits.length === 1) return hits[0];
-  if (hits.length > 1) {
-    const literalHits = [];
-    for (let i = 0; i < sections.length; i++) {
-      const content = sections[i] && sections[i].content != null ? String(sections[i].content) : '';
-      if (content.includes(raw) || content.includes(trimmed)) literalHits.push(i);
-    }
-    if (literalHits.length === 1) return literalHits[0];
-  }
-  return -1;
+export function paragraphAround(text, sentence) {
+  const content = String(text || '');
+  const segment = findSegmentInContent(content, sentence);
+  if (!segment) return content;
+  const at = content.indexOf(segment);
+  const blankBefore = content.lastIndexOf('\n\n', at);
+  const blankAfter = content.indexOf('\n\n', at + segment.length);
+  return content.slice(blankBefore < 0 ? 0 : blankBefore + 2, blankAfter < 0 ? content.length : blankAfter).trim();
 }
 
 /**
@@ -116,44 +101,21 @@ export function effectiveNewSentenceForApply(s) {
 }
 
 /**
- * Rebuild working sections from originals by applying all suggestions that have applied === true.
- * @param {Array<{ name?: string, content?: string }>} originals
+ * The prompt text with every suggestion that has applied === true applied, in order. A suggestion
+ * whose old sentence can't be found exactly (whitespace aside) in the text so far is skipped.
+ * @param {string} originalText
  * @param {Array<Record<string, unknown>>} suggestions
- * @returns {Array<{ name: string, content: string }>|null}
+ * @returns {string|null}
  */
-export function rebuildWorkingFromApplied(originals, suggestions) {
-  if (!Array.isArray(originals) || !Array.isArray(suggestions)) return null;
-  const sections = originals.map((s) => ({ name: s.name || '', content: (s.content || '').slice() }));
-  for (let i = 0; i < suggestions.length; i++) {
-    const s = suggestions[i];
-    if (s.applied !== true) continue;
-    const useSentenceEdit = s.old_sentence != null && s.new_sentence != null;
-    const rawOld = s.old_sentence != null ? String(s.old_sentence) : '';
-    const oldSentence = rawOld.trim();
-    const newSentence = effectiveNewSentenceForApply(s);
-    const legacyNewContent = (s.new_content || '').trim();
-    let secIdx = 0;
-    if (useSentenceEdit) {
-      if (!oldSentence) continue;
-      secIdx = findSectionIndexForOldSentence(sections, rawOld);
-      if (secIdx < 0) continue;
-    }
-    const content = sections[secIdx] ? (sections[secIdx].content || '') : '';
-    if (useSentenceEdit) {
-      const seg = getLocatableSegment(content, rawOld) || getLocatableSegment(content, oldSentence);
-      const toReplace = seg || oldSentence;
-      if (content.includes(toReplace)) {
-        sections[secIdx].content = content.replace(toReplace, newSentence);
-      } else {
-        const segNew = getLocatableSegment(content, newSentence);
-        if (segNew) sections[secIdx].content = content.replace(segNew, oldSentence);
-        else sections[secIdx].content = content.replace(newSentence, oldSentence);
-      }
-    } else {
-      sections[secIdx].content = legacyNewContent;
-    }
+export function rebuildWorkingFromApplied(originalText, suggestions) {
+  if (typeof originalText !== 'string' || !Array.isArray(suggestions)) return null;
+  let text = originalText;
+  for (const s of suggestions) {
+    if (s?.applied !== true || s.old_sentence == null || s.new_sentence == null) continue;
+    const segment = findSegmentInContent(text, String(s.old_sentence));
+    if (segment) text = text.replace(segment, effectiveNewSentenceForApply(s));
   }
-  return sections;
+  return text;
 }
 
 /** Stored 0-based comparison `row_index` for targeted Score rows (API / persistence; prompts use 1-based Score #). */

@@ -41,12 +41,12 @@ class RunSettingsOverridesTest(unittest.TestCase):
 
 class ReviewSettingsOverridesTest(unittest.TestCase):
     def test_accepts_method_knobs(self):
-        req = main.ReviewRequest(credential_id="c", prompt_sections=[], settings_overrides={"gepa_max_iterations": 20, "copro_depth": 2})
+        req = main.ReviewRequest(credential_id="c", prompt="", settings_overrides={"gepa_max_iterations": 20, "copro_depth": 2})
         self.assertEqual(req.settings_overrides, {"gepa_max_iterations": 20, "copro_depth": 2})
 
     def test_rejects_run_keys(self):
         with self.assertRaises(ValidationError):
-            main.ReviewRequest(credential_id="c", prompt_sections=[], settings_overrides={"run_concurrency": 2})
+            main.ReviewRequest(credential_id="c", prompt="", settings_overrides={"run_concurrency": 2})
 
 
 if __name__ == "__main__":

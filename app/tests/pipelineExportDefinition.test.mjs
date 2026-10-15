@@ -7,7 +7,7 @@ const data = (fromId, toId, alias, fromPort = 'result') => ({ type: 'data', from
 test('export carries node settings, row count and explicit input boundary, never row values', () => {
   const state = { nodes: [
     { type: 'dataset', nodeId: 'raw', savedFrom: { kind: 'run', nodeId: 'old-run', port: 'result', recordId: 'rec' }, datasetContent: { headers: ['text'], rows: [['PRIVATE']] } },
-    { type: 'prompt', nodeId: 'p', sections: [{ content: 'Read {text}' }] },
+    { type: 'prompt', nodeId: 'p', text: 'Read {text}' },
     { type: 'run', nodeId: 'r', runSettings: { run_concurrency: 2 }, runResults: 'PRIVATE_RESULTS' },
   ], connections: [{ fromId: 'p', toId: 'r', type: 'prompt-to-run' }, data('raw', 'r')] };
   const route = [{ type: 'dataset', dataset_node_id: 'raw' }, { type: 'prompt', prompt_node_id: 'p', run_node_id: 'r' }];

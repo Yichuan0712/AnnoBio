@@ -3,23 +3,10 @@ import { evaluateScoreOutputGt } from './scoreOutputGtMatcher.js';
 import {
   rebuildWorkingFromApplied,
   suggestionTargetScoreRowIndices,
-} from './reviewWorkingSections.js';
+} from './reviewWorkingText.js';
 import { compileReviewInputs } from './runInputBuilder.js';
 import { postRun } from './runClient.js';
 import { getCurrentProjectId } from './currentProject.js';
-
-function normalizeSections(sections) {
-  return Array.isArray(sections)
-    ? sections.map((section) => ({
-      name: String(section?.name || ''),
-      content: String(section?.content || ''),
-    }))
-    : [];
-}
-
-function sectionsSignature(sections) {
-  return JSON.stringify(normalizeSections(sections));
-}
 
 export function isVerifyFullPass(result) {
   if (!result || result.status !== 'complete') return false;
@@ -94,15 +81,14 @@ function countMatchedVerifyRows(verifyRows) {
     : 0;
 }
 
-function suggestionWouldChangePrompt(originals, suggestion) {
-  const nextSections = rebuildWorkingFromApplied(originals, [{ ...suggestion, applied: true }]);
-  if (!nextSections || nextSections.length !== originals.length) return false;
-  return sectionsSignature(nextSections) !== sectionsSignature(originals);
+function suggestionWouldChangePrompt(originalText, suggestion) {
+  const next = rebuildWorkingFromApplied(String(originalText || ''), [{ ...suggestion, applied: true }]);
+  return next != null && next !== String(originalText || '');
 }
 
 export async function verifyReviewSuggestion({
   suggestion,
-  originals,
+  originalText,
   comparisonRows,
   reviewPayload,
   apiBase = BACKEND_API_BASE,
@@ -119,17 +105,12 @@ export async function verifyReviewSuggestion({
     if (!outputSchema) throw new Error('No output schema configured on the upstream Prompt node.');
     if (!scoreMapping) throw new Error('No Evaluate mapping configured on the upstream Evaluate node.');
 
-    const normalizedOriginals = normalizeSections(originals);
-    if (!suggestionWouldChangePrompt(normalizedOriginals, suggestion)) {
-      throw new Error('Suggestion could not be applied to the original prompt sections.');
+    if (!suggestionWouldChangePrompt(originalText, suggestion)) {
+      throw new Error('Suggestion could not be applied to the original prompt text.');
     }
 
-    const modifiedSections = rebuildWorkingFromApplied(normalizedOriginals, [{ ...suggestion, applied: true }]) || normalizedOriginals;
-    const templateText = modifiedSections
-      .map((section) => String(section?.content || '').trim())
-      .filter(Boolean)
-      .join('\n\n');
-    if (!templateText.trim()) {
+    const templateText = (rebuildWorkingFromApplied(String(originalText || ''), [{ ...suggestion, applied: true }]) || '').trim();
+    if (!templateText) {
       throw new Error('Modified prompt is empty after applying this suggestion.');
     }
 
@@ -180,7 +161,7 @@ export async function verifyReviewSuggestion({
 export function decideSuggestionAcceptance({
   suggestion,
   verifyResult,
-  originals,
+  originalText,
 }) {
   const suggestionId = String(suggestion?.suggestion_id ?? '').trim();
   const targetRowCount = suggestionTargetScoreRowIndices(suggestion).length;
@@ -203,7 +184,7 @@ export function decideSuggestionAcceptance({
     };
   }
 
-  if (!suggestionWouldChangePrompt(normalizeSections(originals), suggestion)) {
+  if (!suggestionWouldChangePrompt(originalText, suggestion)) {
     return {
       suggestionId,
       accept: false,

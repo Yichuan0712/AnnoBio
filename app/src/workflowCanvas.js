@@ -4,7 +4,8 @@
  * Edges use stable node ids and a type field for future extensibility.
  */
 
-import { openPromptDetailModal, extractInputFieldsFromSections } from './promptDetailModal.js';
+import { openPromptDetailModal } from './promptDetailModal.js';
+import { extractInputFields } from './promptText.js';
 import { openRunDetailModal, deriveOutputFields } from './runDetailModal.js';
 import { openProcessDetailModal } from './processDetailModal.js';
 import {
@@ -320,9 +321,9 @@ function evaluateScoreNode(node, runRowIndex, gtRowIndex, resultsByIndex, runWs,
  * Build comparison rows for Review API: same logic as score detail (getRunValue, getGtValue, computeMatchPerRow).
  * `runInput` is the table the Run read (stepInputs.js); `datasetContentByNodeId` supplies the ground truth.
  */
-async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, promptSections = [], runInput = null) {
+async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, promptText = '', runInput = null) {
   if ((scoreNode?.dataset?.scoreActiveMatchMode || 'rules') === 'code') {
-    return buildReviewComparisonRowsFromCodeMatch(scoreNode, runNode, datasetContentByNodeId, promptSections, runInput);
+    return buildReviewComparisonRowsFromCodeMatch(scoreNode, runNode, datasetContentByNodeId, promptText, runInput);
   }
   const toCompareStr = (v) => {
     if (v === null || v === undefined) return '';
@@ -423,10 +424,10 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     const parsedMap = JSON.parse(rawMap);
     if (parsedMap && typeof parsedMap === 'object') runInputToColumn = parsedMap;
   } catch (_) {}
-  const promptPlaceholderNames = extractInputFieldsFromSections(Array.isArray(promptSections) ? promptSections : []);
+  const promptPlaceholderNames = extractInputFields(promptText);
   const hdrsForPrompt = runWsSafe.headers || [];
 
-  /** Keys = `{placeholder}` names in prompt section order; values = substituted cell text (Run node mapping). */
+  /** Keys = `{placeholder}` names in prompt order; values = substituted cell text (Run node mapping). */
   function rowInputAsPromptPlaceholders(inpIdx) {
     const wsRow = runWsSafe.rows && runWsSafe.rows[inpIdx] ? runWsSafe.rows[inpIdx] : [];
     const out = {};
@@ -791,7 +792,7 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
  * instead of re-deriving pairing from rule trees. Row numbering matches the modal's own Results table
  * via buildCodeMatchRunToGt + the same descriptor helpers rule mode uses.
  */
-async function buildReviewComparisonRowsFromCodeMatch(scoreNode, runNode, datasetContentByNodeId, promptSections = [], runInput = null) {
+async function buildReviewComparisonRowsFromCodeMatch(scoreNode, runNode, datasetContentByNodeId, promptText = '', runInput = null) {
   let lastResult = null;
   try {
     lastResult = JSON.parse(scoreNode.dataset.scoreMatchResult || 'null');
@@ -812,7 +813,7 @@ async function buildReviewComparisonRowsFromCodeMatch(scoreNode, runNode, datase
     const parsed = JSON.parse(runNode.dataset.runInputToColumn || '{}');
     if (parsed && typeof parsed === 'object') runInputToColumn = parsed;
   } catch (_) {}
-  const promptPlaceholderNames = extractInputFieldsFromSections(Array.isArray(promptSections) ? promptSections : []);
+  const promptPlaceholderNames = extractInputFields(promptText);
   const hdrsForPrompt = runWsSafe.headers || [];
   function rowInputAsPromptPlaceholders(inpIdx) {
     const wsRow = runWsSafe.rows && runWsSafe.rows[inpIdx] ? runWsSafe.rows[inpIdx] : [];
@@ -997,15 +998,15 @@ function resolveLiveScoreComparisonContext(canvasState, scoreRaw) {
   const datasetMap = buildDatasetContentMapFromCanvasNodes(nodes);
   if (!datasetMap.has(gtId) || !datasetMap.has(wsId)) return null;
 
-  const promptSections = Array.isArray(promptRaw.sections) ? promptRaw.sections : [];
-  if (promptSections.length === 0) return null;
+  const promptText = String(promptRaw.text || '');
+  if (!promptText.trim()) return null;
 
   return {
     scoreEl: scoreRawToFakeScoreNode(scoreRaw),
     runEl: runRawToFakeRunNode(runRaw),
     runInput: datasetMap.get(wsId),
     datasetMap,
-    promptSections,
+    promptText,
   };
 }
 
@@ -1240,7 +1241,7 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   /** A Prompt's input names, for the mapping a Run keeps when it gets another Prompt. */
   function promptInputNames(prompt) {
-    return extractInputFieldsFromSections(getPromptDataFromNode(getNodeById(prompt?.nodeId))?.sections || []);
+    return extractInputFields(getPromptDataFromNode(getNodeById(prompt?.nodeId))?.text || '');
   }
 
   /** Where each node field a connection changes is kept on the node (nodePorts.js applyPortOp). */
@@ -1796,18 +1797,15 @@ export function buildWorkflowCanvas(root, options = {}) {
     try {
       streamSaved = JSON.parse(node.dataset.reviewResult || '{}');
     } catch (_) {}
-    const sectionsCopy = Array.isArray(streamSaved.promptSections) && streamSaved.promptSections.length > 0
-      ? streamSaved.promptSections
-      : [];
+    const promptText = typeof streamSaved.promptText === 'string' ? streamSaved.promptText : '';
     streamSaved = {
       ...streamSaved,
       summary: streamSaved.summary || '',
       suggestions: streamSaved.suggestions || [],
       data_refinement: streamSaved.data_refinement || [],
       row_diagnostics: Array.isArray(streamSaved.row_diagnostics) ? streamSaved.row_diagnostics : [],
-      promptSections: sectionsCopy,
-      promptFullText: sectionsCopy.map((s) => `## ${(s.name || '').trim() || '(unnamed)'}\n\n${(s.content || '').trim()}`).join('\n\n'),
-      workingSections: sectionsCopy.map((s) => ({ name: s.name || '', content: (s.content || '').slice() })),
+      promptText,
+      workingText: promptText,
       reviewProgress: streamSaved.reviewProgress || 0,
       run_results: streamSaved.run_results || [],
       comparison_rows: streamSaved.comparison_rows || [],
@@ -2863,11 +2861,7 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   function getPromptDataFromNode(node) {
     if (!node) return null;
-    let sections = [];
     let outputFormat = { returnShape: 'single', fields: [] };
-    try {
-      sections = JSON.parse(node.dataset.promptSections || node.dataset.promptFields || '[]');
-    } catch (_) {}
     try {
       const raw = JSON.parse(node.dataset.promptOutputFormat || '[]');
       const fields = (Array.isArray(raw) ? raw : []).map((o) => ({ key: o.key || '', type: o.type || 'str', description: o.description ?? '', examples: o.examples || [], allowNone: o.allowNone === true }));
@@ -2876,26 +2870,14 @@ export function buildWorkflowCanvas(root, options = {}) {
     return {
       name: node.dataset.promptName || '',
       note: node.dataset.promptNote || '',
-      sections: Array.isArray(sections) ? sections : [],
+      text: node.dataset.promptText || '',
       outputFormat,
       inputTypes: (() => { try { return JSON.parse(node.dataset.promptInputTypes || '{}'); } catch (_) { return {}; } })(),
     };
   }
 
   function serializePromptToDiffText(data) {
-    const lines = [];
-    const sections = data.sections || [];
-    if (sections.length === 0) {
-      lines.push('## Sections');
-      lines.push('(none)');
-      lines.push('');
-    } else {
-      sections.forEach((s) => {
-        lines.push('## Section: ' + (s.name || '').trim());
-        lines.push((s.content || '').trim());
-        lines.push('');
-      });
-    }
+    const lines = ['## Prompt', String(data.text || '').trim() || '(empty)', ''];
     lines.push('## Output schema');
     const of = data.outputFormat || {};
     lines.push('Return shape: ' + (of.returnShape || 'single'));
@@ -3177,7 +3159,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     runProcessNode: (nodeId, options) => runProcessNode(nodeId, options),
     showAlert,
     escapeHtml,
-    extractInputFieldsFromSections,
+    extractInputFields,
     deriveOutputFields,
     formatResultOutputColumnLabel,
     buildReviewComparisonRows,
@@ -3209,7 +3191,6 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   const {
     addPromptNode,
-    addPromptVersion,
     startRunNode,
     addScoreNode,
     updateScoreNode,
@@ -3226,7 +3207,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     importPreprintDataset,
     importChemblDataset,
   } = createWorkflowCanvasRuntime({
-    extractInputFieldsFromSections,
+    extractInputFields,
     deriveOutputFields,
     getNextRowIndex,
     mergeResumeResults,
@@ -3361,7 +3342,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           if (!panel?.registerAgentRun) throw new Error('Current Pipeline is unavailable.');
           await panel.registerAgentRun(pipelineId, run, needsAssets);
         },
-        extractInputFields: extractInputFieldsFromSections,
+        extractInputFields,
         applyCanvasState: applyAgentCanvasState,
         getContentLocks: getContentLocksForCanvas,
         previewHistorySelection: planHistorySelectionForCanvas,
@@ -3569,11 +3550,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       const top = parseFloat(node.style.top) || 0;
       const width = node.offsetWidth || 280;
       const height = node.offsetHeight || 80;
-      let sections = [];
       let outputFormat = { returnShape: 'single', fields: [] };
-      try {
-        sections = JSON.parse(node.dataset.promptSections || node.dataset.promptFields || '[]');
-      } catch (_) {}
       try {
         const raw = JSON.parse(node.dataset.promptOutputFormat || '[]');
         const fields = (Array.isArray(raw) ? raw : []).map((o) => ({ key: o.key || '', type: o.type || 'str', description: o.description ?? '', examples: o.examples || [], allowNone: o.allowNone === true }));
@@ -3583,7 +3560,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       const newNode = createPromptNode({
         name: uniqueName,
         note: node.dataset.promptNote || '',
-        sections: Array.isArray(sections) ? sections : [],
+        text: node.dataset.promptText || '',
         outputFormat,
         inputTypes: (() => { try { return JSON.parse(node.dataset.promptInputTypes || '{}'); } catch (_) { return {}; } })(),
         colorIndex: normalizeDatasetColorIndex(node.dataset.promptColorIndex),
@@ -3606,7 +3583,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (!choice || choice.disabled) throw new Error(choice?.disabledReason || 'This input is no longer available.');
         let created;
         if (choice.createType === 'dataset') created = getNodeById(addDatasetNode({ name: 'Dataset', headers: [], rows: [] }).nodeId);
-        else if (choice.createType === 'prompt') created = getNodeById(addPromptNode({ name: 'Prompt', sections: [] }).nodeId);
+        else if (choice.createType === 'prompt') created = getNodeById(addPromptNode({ name: 'Prompt', text: '' }).nodeId);
         else if (choice.createType === 'run') created = newRunNode();
         else {
           created = createProcessNode({ title: 'Process', dfCode,
@@ -3697,12 +3674,8 @@ export function buildWorkflowCanvas(root, options = {}) {
         }
         async function getReviewPayload() {
           if (!promptNode || !runNode || !scoreNode) return null;
-          let sections = [];
-          try {
-            sections = JSON.parse(promptNode.dataset.promptSections || promptNode.dataset.promptFields || '[]');
-          } catch (_) {}
-          if (!Array.isArray(sections) || sections.length === 0) return null;
-          const promptFullText = sections.map((s) => `## ${(s.name || '').trim() || '(unnamed)'}\n\n${(s.content || '').trim()}`).join('\n\n');
+          const promptText = promptNode.dataset.promptText || '';
+          if (!promptText.trim()) return null;
           let runResults = [];
           let outputFields = [];
           try {
@@ -3725,10 +3698,9 @@ export function buildWorkflowCanvas(root, options = {}) {
               };
             }
           } catch (_) {}
-          const comparison_rows = await buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, sections, readRunInputTable(runNode));
+          const comparison_rows = await buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, promptText, readRunInputTable(runNode));
           return {
-            prompt_sections: sections,
-            prompt_full_text: promptFullText,
+            prompt: promptText,
             run_results: runResults,
             output_fields: outputFields,
             output_schema,
@@ -3736,9 +3708,6 @@ export function buildWorkflowCanvas(root, options = {}) {
             // Same request as the Score window's Review button.
             review_method: (scoreNode.dataset.reviewMethod || '').trim() || undefined,
             score_mapping: scoreNode.dataset.scoreMapping || undefined,
-            target_section_index: Number.isInteger(parseInt(scoreNode.dataset.gepaTargetSectionIndex, 10))
-              ? parseInt(scoreNode.dataset.gepaTargetSectionIndex, 10)
-              : undefined,
             settings_overrides: reviewSettingsOverrides(scoreNode),
           };
         }
@@ -3754,7 +3723,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           at,
         });
         if (!started) {
-          showAlert('Could not start Optimize. Open Evaluate detail and ensure the prompt has sections, Run has results, and ground truth is selected.', { title: 'Optimize' });
+          showAlert('Could not start Optimize. Open Evaluate detail and ensure the prompt has text, Run has results, and ground truth is selected.', { title: 'Optimize' });
         }
       },
       'add-sampler': () => {
@@ -3908,12 +3877,10 @@ export function buildWorkflowCanvas(root, options = {}) {
           const raw = (node.dataset.reviewResult || '').trim();
           if (!raw) return;
           const data = JSON.parse(raw);
-          const sections = Array.isArray(data.workingSections) && data.workingSections.length > 0
-            ? data.workingSections.map((s) => ({ name: s.name || '', content: s.content || '' }))
-            : (Array.isArray(data.promptSections) ? data.promptSections : []).map((s) => ({ name: s.name || '', content: s.content || '' }));
-          if (sections.length === 0) return;
+          const text = typeof data.workingText === 'string' ? data.workingText : (data.promptText || '');
+          if (!text.trim()) return;
           document.dispatchEvent(new CustomEvent('workflow:add-prompt-from-review', {
-            detail: { sections, afterReviewNodeId: node.dataset.nodeId, at },
+            detail: { text, afterReviewNodeId: node.dataset.nodeId, at },
           }));
         } catch (_) {}
       },
@@ -4391,8 +4358,8 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
 
   document.addEventListener('workflow:add-prompt-node', (e) => {
-    const { name = '', note = '', sections = [], outputFormat, left, top } = e.detail || {};
-    addPromptNode({ name, note, sections, outputFormat, left, top, ensureUniqueName: false });
+    const { name = '', note = '', text = '', outputFormat, left, top } = e.detail || {};
+    addPromptNode({ name, note, text, outputFormat, left, top, ensureUniqueName: false });
   });
 
   document.addEventListener('workflow:score-export-to-workspace', (e) => {
@@ -4764,9 +4731,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       }
       if (existingRaw && Array.isArray(toWrite.suggestions) && existing && typeof existing === 'object' && Array.isArray(existing.suggestions)) {
         const merged = { ...toWrite };
-        if (Array.isArray(existing.workingSections) && existing.workingSections.length > 0) {
-          merged.workingSections = existing.workingSections.map((s) => ({ name: s.name || '', content: (s.content || '').slice() }));
-        }
+        if (typeof existing.workingText === 'string') merged.workingText = existing.workingText;
         const existSug = existing.suggestions;
         merged.suggestions = (toWrite.suggestions || []).map((s, i) => {
           const next = { ...s };
@@ -4812,12 +4777,12 @@ export function buildWorkflowCanvas(root, options = {}) {
   });
 
   document.addEventListener('workflow:add-prompt-from-review', (e) => {
-    const { sections = [], afterReviewNodeId, afterScoreNodeId, at } = e.detail || {};
-    if (!Array.isArray(sections) || sections.length === 0) return;
+    const { text = '', afterReviewNodeId, afterScoreNodeId, at } = e.detail || {};
+    if (!String(text).trim()) return;
     applyReviewSuggestions({
       reviewNodeId: afterReviewNodeId,
       scoreNodeId: afterScoreNodeId,
-      sections,
+      text,
       ensureUniqueName: true,
     }).then(created => {
       if (at) {
@@ -4972,8 +4937,6 @@ export function buildWorkflowCanvas(root, options = {}) {
         const reviewResult = (node.dataset.reviewResult || '').trim();
         const reviewCredentialId = (node.dataset.reviewCredentialId || '').trim() || undefined;
         const reviewMethod = (node.dataset.reviewMethod || '').trim() || undefined;
-        const gepaTargetSectionIndexRaw = parseInt(node.dataset.gepaTargetSectionIndex, 10);
-        const gepaTargetSectionIndex = Number.isInteger(gepaTargetSectionIndexRaw) ? gepaTargetSectionIndexRaw : undefined;
         const scoreRowExcludedFromScoring = (node.dataset.scoreRowExcludedFromScoring || '').trim();
         let scoreRowExcludedFromScoringObj;
         try {
@@ -4991,7 +4954,6 @@ export function buildWorkflowCanvas(root, options = {}) {
           reviewResult: reviewResult || undefined,
           reviewCredentialId,
           reviewMethod,
-          gepaTargetSectionIndex,
           reviewSettings: reviewSettingsOverrides(node),
         };
         if ((node.dataset.nodeOrigin || '').trim()) out.nodeOrigin = node.dataset.nodeOrigin.trim();
@@ -5026,11 +4988,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (node.dataset.reviewInterrupted === '1') out.reviewInterrupted = true;
         return out;
       }
-      let sections = [];
       let outputFormat = [];
-      try {
-        sections = JSON.parse(node.dataset.promptSections || node.dataset.promptFields || '[]');
-      } catch (_) {}
       try {
         const raw = JSON.parse(node.dataset.promptOutputFormat || '[]');
         const fields = (Array.isArray(raw) ? raw : []).map((o) => ({ key: o.key || '', type: o.type || 'str', description: o.description ?? '', examples: o.examples || [], allowNone: o.allowNone === true }));
@@ -5047,7 +5005,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         name: node.dataset.promptName || '',
         note: node.dataset.promptNote || '',
         colorIndex: normalizeDatasetColorIndex(node.dataset.promptColorIndex) ?? undefined,
-        sections: Array.isArray(sections) ? sections : [],
+        text: node.dataset.promptText || '',
         outputFormat,
         optimizationMethodId: node.dataset.optimizationMethodId || undefined,
         inputTypes: (() => { try { return JSON.parse(node.dataset.promptInputTypes || '{}'); } catch (_) { return {}; } })(),
@@ -5211,9 +5169,6 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (n.reviewMethod && typeof n.reviewMethod === 'string') {
           scoreNode.dataset.reviewMethod = n.reviewMethod;
         }
-        if (Number.isInteger(n.gepaTargetSectionIndex)) {
-          scoreNode.dataset.gepaTargetSectionIndex = String(n.gepaTargetSectionIndex);
-        }
         if (n.reviewSettings && typeof n.reviewSettings === 'object') scoreNode.dataset.reviewSettings = JSON.stringify(n.reviewSettings);
         if (n.scoreOutputBracketCollapsed === true) scoreNode.dataset.scoreOutputBracketCollapsed = '1';
         if (n.scoreGtBracketCollapsed === true) scoreNode.dataset.scoreGtBracketCollapsed = '1';
@@ -5252,7 +5207,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           name: n.name || '',
           note: n.note || '',
           colorIndex: n.colorIndex,
-          sections: n.sections || n.fields || [],
+          text: typeof n.text === 'string' ? n.text : '',
           optimizationMethodId: n.optimizationMethodId || '',
           outputFormat: n.outputFormat,
           inputTypes: n.inputTypes,
@@ -5676,7 +5631,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         syncScoreNodeProgressFromUpstreamRun(live);
       } else if (item.type === 'promptReview') {
         // The poller rebuilds a running Review from the live node; replacing it here would drop the
-        // prompt sections and comparison rows saved at start, leaving an empty Review window.
+        // prompt text and comparison rows saved at start, leaving an empty Review window.
         if (streamingReviewIds.has(item.nodeId)) continue;
         if (item.reviewResult == null) delete live.dataset.reviewResult;
         else live.dataset.reviewResult = item.reviewResult;
@@ -5911,7 +5866,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const ctx = resolveLiveScoreComparisonContext(canvasState, raw);
     if (!ctx) return [];
     try {
-      const rows = await buildReviewComparisonRows(ctx.scoreEl, ctx.runEl, ctx.datasetMap, ctx.promptSections, ctx.runInput);
+      const rows = await buildReviewComparisonRows(ctx.scoreEl, ctx.runEl, ctx.datasetMap, ctx.promptText, ctx.runInput);
       return Array.isArray(rows) ? rows : [];
     } catch (_) {
       return [];
@@ -5924,7 +5879,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       ? await reconcileHistory() : null;
     const result = inspectWorkflowNode(getCanvasState(), nodeId, {
       ...options,
-      extractInputFields: extractInputFieldsFromSections,
+      extractInputFields,
       contentLocks: await getContentLocksForCanvas(),
     });
     if (result?.found && (result.type === 'run' || result.type === 'process') && history && !history.stale) {
@@ -6074,7 +6029,6 @@ export function buildWorkflowCanvas(root, options = {}) {
   return {
     getCanvasState,
     inspectNode,
-    addPromptVersion,
     addScoreNode,
     updateScoreNode,
     updateScoreRowSelection,

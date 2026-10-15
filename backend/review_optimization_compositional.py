@@ -136,7 +136,7 @@ def compositional_optimization_segment_candidates(
     segment_text: str,
     prefix: str,
     suffix: str,
-    section_context: str = "",
+    prompt_context: str = "",
     num_candidates: int = 4,
     segment_index: int = 0,
     total_segments: int = 1,
@@ -150,17 +150,17 @@ def compositional_optimization_segment_candidates(
 
     n = max(2, min(8, int(num_candidates or 4)))
 
-    section_block = (
-        "Full prompt section/paragraph that contains the sentence being changed (read-only context — do NOT output this):\n---\n"
-        f"{_clip(section_context, 6000)}\n---\n\n"
-    ) if (section_context or "").strip() else ""
+    context_block = (
+        "The prompt paragraph that contains the sentence being changed (read-only context — do NOT output this):\n---\n"
+        f"{_clip(prompt_context, 6000)}\n---\n\n"
+    ) if (prompt_context or "").strip() else ""
 
     prompt = (
         "You write alternative phrasings for ONE part of an improved prompt instruction.\n\n"
         "Rationale for the overall change:\n---\n"
         f"{_clip(improvement_rationale, 4000)}\n---\n\n"
-        f"{section_block}"
-        "Original sentence being replaced (the sentence inside the section above that is being improved):\n---\n"
+        f"{context_block}"
+        "Original sentence being replaced (the sentence inside the paragraph above that is being improved):\n---\n"
         f"{_clip(old_sentence, 2000)}\n---\n\n"
         "Full improved replacement sentence:\n---\n"
         f"{_clip(new_sentence, 8000)}\n---\n\n"
