@@ -178,7 +178,7 @@ def make_mean_score_fn(
         with dspy.context(lm=lm):
             for dex in dspy_examples:
                 if is_cancelled():
-                    raise RuntimeError("Review cancelled")
+                    raise RuntimeError("Optimization cancelled")
                 try:
                     pred = program(**{k: dex[k] for k in input_keys})
                     total += metric(dex, pred)

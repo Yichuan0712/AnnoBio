@@ -6,6 +6,14 @@
 import { BACKEND_API_BASE } from '../../backendConfig.js';
 import { planChangeSet } from './changeSet.js';
 
+/** Keep the full canvas API: History operations need more than table-editing methods. */
+export function createProposalRuntime(workspace) {
+  return {
+    previewProposal: (proposal) => previewProposal(proposal, workspace),
+    applyProposal: (proposal, options) => applyProposal(proposal, workspace, options),
+  };
+}
+
 const IMPORT_POLL_MS = 1200;
 const IMPORT_MAX_WAIT_MS = 5 * 60 * 1000;
 

@@ -1,8 +1,8 @@
 /**
  * Run Pipeline: a card for each step that reads a Dataset from outside the Pipeline, showing what it
- * reads. Clicking a card opens that node's window, where its input is set; the cards follow the
- * canvas while the dialog is open. Run starts only once the Pipeline checks out, and a problem is
- * shown on the card of the node it concerns.
+ * reads. Inputs are connected on the canvas, so clicking a card closes the dialog and shows that node
+ * there. Run starts only once the Pipeline checks out, and a problem is shown on the card of the node
+ * it concerns.
  */
 import { datasetColorAt } from './workflowNodeColors.js';
 
@@ -13,10 +13,10 @@ export function pipelineRunIntro(steps) {
   const datasetCount = steps.reduce((count, step) => count + step.inputs.length, 0);
   if (steps.length === 1) {
     return datasetCount === 1
-      ? 'This step reads a Dataset from outside the Pipeline. Open it to change that Dataset.'
-      : 'This step reads Datasets from outside the Pipeline. Open it to change them.';
+      ? 'This step reads a Dataset from outside the Pipeline. To read another, click it to find it on the canvas and drag another Dataset onto its input.'
+      : 'This step reads Datasets from outside the Pipeline. To change them, click it to find it on the canvas and drag other Datasets onto its inputs.';
   }
-  return 'These steps read Datasets from outside the Pipeline. Open a step to change what it reads.';
+  return 'These steps read Datasets from outside the Pipeline. To change what one reads, click it to find it on the canvas and drag another Dataset onto its input.';
 }
 
 function escapeHtml(value) {
@@ -31,7 +31,7 @@ function stepHtml(step, problems) {
       <span>${escapeHtml(input.name)}</span>
     </span>`).join('');
   const kind = step.kind === 'run' ? 'prompt' : 'process';
-  return `<button type="button" class="pipeline-run-dialog__step${problems.length ? ' has-problem' : ''}" data-node-id="${escapeHtml(step.nodeId)}" title="Open to change this input">
+  return `<button type="button" class="pipeline-run-dialog__step${problems.length ? ' has-problem' : ''}" data-node-id="${escapeHtml(step.nodeId)}" title="Show on the canvas">
     <span class="pipeline-run-dialog__step-head">
       <span class="pipeline-step-kind pipeline-step-kind--${kind}">${STEP_LABELS[step.kind]}</span>
       <span class="pipeline-run-dialog__step-name">${escapeHtml(step.name)}</span>
@@ -44,12 +44,12 @@ function stepHtml(step, problems) {
 
 /**
  * @param {{ getSteps: () => ReturnType<import('./pipelineRunInputs.js').pipelineInputSteps>,
- *   openNode: (nodeId: string) => void,
+ *   showNode: (nodeId: string) => void,
  *   check: () => Promise<Array<{ nodeId?: string, nodeName?: string, message: string }>> }} options
  *   check: compiles the Pipeline as the canvas now is and returns what keeps it from running
  * @returns {Promise<boolean>} whether to start the run
  */
-export function openPipelineRunDialog({ getSteps, openNode, check }) {
+export function openPipelineRunDialog({ getSteps, showNode, check }) {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay modal-overlay--alert';
   overlay.setAttribute('aria-modal', 'true');
@@ -89,7 +89,7 @@ export function openPipelineRunDialog({ getSteps, openNode, check }) {
     intro.textContent = pipelineRunIntro(steps);
     intro.hidden = !steps.length;
   }
-  // A node window opened from a card changes the canvas; its problems are checked again on Run.
+  // The canvas can change while the dialog is open (a Run finishing); problems are checked again on Run.
   function onCanvasChanged() {
     errors = [];
     render();
@@ -105,7 +105,7 @@ export function openPipelineRunDialog({ getSteps, openNode, check }) {
       resolve(value);
     }
     function onKeyDown(event) {
-      // A node window opened from a card sits above this dialog and takes its own Escape.
+      // A window opened above this dialog takes its own Escape.
       const overlays = document.querySelectorAll('.modal-overlay');
       if (event.key === 'Escape' && !checking && overlays[overlays.length - 1] === overlay) done(false);
     }
@@ -130,7 +130,9 @@ export function openPipelineRunDialog({ getSteps, openNode, check }) {
     }
     stepsEl.addEventListener('click', (event) => {
       const card = event.target.closest('.pipeline-run-dialog__step');
-      if (card && !checking) openNode(card.dataset.nodeId);
+      if (!card || checking) return;
+      done(false);
+      showNode(card.dataset.nodeId);
     });
     overlay.querySelector('.modal-close').addEventListener('click', () => { if (!checking) done(false); });
     overlay.querySelector('.pipeline-run-dialog__cancel').addEventListener('click', () => { if (!checking) done(false); });

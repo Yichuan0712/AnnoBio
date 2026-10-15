@@ -34,37 +34,37 @@ def prompt(node_id, text, field, return_shape="single"):
                              "fields": [{"key": field, "type": "str"}]}}
 
 
-def run(node_id, input_id, mapping):
+def run(node_id, mapping):
     return {"type": "run", "nodeId": node_id, "runName": node_id,
-            "runWorkingSetId": input_id, "runInputToColumn": mapping,
-            "runCredentialId": "cred"}
+            "runInputToColumn": mapping, "runCredentialId": "cred"}
 
 
 def edge(source, target, kind):
     return {"fromId": source, "toId": target, "type": kind}
 
 
+def data(source, target, alias=None):
+    return {"type": "data", "fromId": source, "fromPort": "result", "toId": target, **({"alias": alias} if alias else {})}
+
+
 def serial_state(rows=None):
+    """raw -> r1 -> clean -> r2, each step reading the one before it directly."""
     rows = [["alpha"], ["beta"]] if rows is None else rows
     nodes = [
         dataset("raw", ["text"], rows),
-        prompt("p1", "First {text}", "answer"), run("r1", "raw", {"text": "text"}),
-        dataset("mid", ["old"], [], sourceRunNodeId="r1"),
-        {"type": "process", "nodeId": "clean", "name": "clean", "primaryDatasetId": "mid",
+        prompt("p1", "First {text}", "answer"), run("r1", {"text": "text"}),
+        {"type": "process", "nodeId": "clean", "name": "clean",
          "dfCode": "def process(df):\n    return pd.DataFrame({'answer': [str(x).upper() for x in df['Output: answer']]})\n"},
-        dataset("cleaned", ["old"], [], processOutputName="result"),
-        prompt("p2", "Second {answer}", "final"), run("r2", "cleaned", {"answer": "answer"}),
+        prompt("p2", "Second {answer}", "final"), run("r2", {"answer": "answer"}),
     ]
     connections = [
-        edge("p1", "r1", "prompt-to-run"), edge("mid", "clean", "dataset-to-process"),
-        edge("clean", "cleaned", "process-to-dataset"), edge("p2", "r2", "prompt-to-run"),
+        edge("p1", "r1", "prompt-to-run"), data("raw", "r1"), data("r1", "clean", "df"),
+        edge("p2", "r2", "prompt-to-run"), data("clean", "r2"),
     ]
     route = [
         {"type": "dataset", "dataset_node_id": "raw"},
         {"type": "prompt", "prompt_node_id": "p1", "run_node_id": "r1"},
-        {"type": "dataset", "dataset_node_id": "mid"},
         {"type": "process", "process_node_id": "clean"},
-        {"type": "dataset", "dataset_node_id": "cleaned"},
         {"type": "prompt", "prompt_node_id": "p2", "run_node_id": "r2"},
     ]
     return {"nodes": nodes, "connections": connections}, route
@@ -131,7 +131,7 @@ class PipelineRunnerTests(unittest.TestCase):
         self.assertEqual(finished["status"], "succeeded", finished)
         listed = self.runner.list_runs("web-project")
         self.assertEqual([item["run_id"] for item in listed], [started["run_id"]])
-        self.assertIn("dataset:mid", listed[0]["produced_artifact_ids"])
+        self.assertIn("output:llm:r1:result", listed[0]["produced_artifact_ids"])
         self.assertEqual(self.runner.list_runs("other-project"), [])
         definition = self.runner.definition("web-project", started["run_id"])
         self.assertEqual(definition["spec"]["format"], "annobio.pipeline-spec")
@@ -183,20 +183,18 @@ class PipelineRunnerTests(unittest.TestCase):
                          ["process:split", "process:merge", "llm:r"])
         self.assertEqual([job["attempts"] for job in finished["jobs"]], [1, 1, 1])
         branch_ids = {item["logical_id"] for item in finished["artifacts"]}
-        self.assertTrue({"dataset:left", "dataset:right", "dataset:merged"}.issubset(branch_ids))
+        self.assertTrue({"output:process:split:left", "output:process:split:right", "output:process:merge:result"}.issubset(branch_ids))
         result = self.runner.results("branches", started["run_id"])["outputs"][0]["table"]
         self.assertEqual([row[-1] for row in result["rows"]], ["Read a:a", "Read b:b"])
 
     def test_empty_llm_input_skips_model_and_process_still_runs_with_schema(self):
         state = {"nodes": [
             dataset("raw", ["text"], []),
-            {"type": "process", "nodeId": "make", "name": "make", "primaryDatasetId": "raw",
+            {"type": "process", "nodeId": "make", "name": "make",
              "dfCode": "def process(df):\n    return df.assign(done=pd.Series(dtype='str'))\n"},
-            dataset("out", [], [], processOutputName="result"),
-        ], "connections": [edge("raw", "make", "dataset-to-process"), edge("make", "out", "process-to-dataset")]}
+        ], "connections": [data("raw", "make", "df")]}
         route = [{"type": "dataset", "dataset_node_id": "raw"},
-                 {"type": "process", "process_node_id": "make"},
-                 {"type": "dataset", "dataset_node_id": "out"}]
+                 {"type": "process", "process_node_id": "make"}]
         started = self.runner.start(project_id="empty", canvas_state=state, route=route,
                                     input_dataset_ids=["raw"])
         finished = self.wait("empty", started["run_id"])
@@ -297,7 +295,7 @@ class PipelineRunnerTests(unittest.TestCase):
         original = self.runner.start(project_id="revision", canvas_state=state, route=route,
                                      input_dataset_ids=["raw"])
         self.wait("revision", original["run_id"])
-        state["nodes"][4]["dfCode"] = (
+        next(node for node in state["nodes"] if node["nodeId"] == "clean")["dfCode"] = (
             "def process(df):\n"
             "    return pd.DataFrame({'answer': [str(x).lower() for x in df['Output: answer']]})\n"
         )
@@ -395,9 +393,9 @@ class PipelineRunnerTests(unittest.TestCase):
 
     def test_cancel_stops_new_jobs_and_marks_the_run(self):
         state, route = serial_state([["one"]])
-        state["nodes"] = state["nodes"][:4]
-        state["connections"] = [edge("p1", "r1", "prompt-to-run")]
-        route = route[:3]
+        state["nodes"] = state["nodes"][:3]
+        state["connections"] = [edge("p1", "r1", "prompt-to-run"), data("raw", "r1")]
+        route = route[:2]
         self.block_jobs = True
         started = self.runner.start(project_id="cancel", canvas_state=state, route=route,
                                     input_dataset_ids=["raw"])
@@ -430,9 +428,9 @@ class PipelineRunnerTests(unittest.TestCase):
             }, settings_loader=lambda: dict(DEFAULTS), llm_adapter=adapter,
         )
         state, route = serial_state([["one"]])
-        state["nodes"] = state["nodes"][:4]
-        state["connections"] = [edge("p1", "r1", "prompt-to-run")]
-        route = route[:3]
+        state["nodes"] = state["nodes"][:3]
+        state["connections"] = [edge("p1", "r1", "prompt-to-run"), data("raw", "r1")]
+        route = route[:2]
         started = self.runner.start(project_id="late", canvas_state=state, route=route,
                                     input_dataset_ids=["raw"])
         self.assertTrue(entered.wait(3), "LLM request did not start")
@@ -450,8 +448,8 @@ class PipelineRunnerTests(unittest.TestCase):
     def test_run_json_writes_do_not_grow_with_row_count(self):
         def saves_for(rows, project_id):
             state, route = serial_state([[f"row {index}"] for index in range(rows)])
-            state["nodes"] = state["nodes"][:4]
-            state["connections"] = [edge("p1", "r1", "prompt-to-run")]
+            state["nodes"] = state["nodes"][:3]
+            state["connections"] = [edge("p1", "r1", "prompt-to-run"), data("raw", "r1")]
             original_save = self.runner._save_run
             count = 0
 
@@ -461,7 +459,7 @@ class PipelineRunnerTests(unittest.TestCase):
                 original_save(run)
 
             with mock.patch.object(self.runner, "_save_run", counting_save):
-                started = self.runner.start(project_id=project_id, canvas_state=state, route=route[:3],
+                started = self.runner.start(project_id=project_id, canvas_state=state, route=route[:2],
                                             input_dataset_ids=["raw"])
                 finished = self.wait(project_id, started["run_id"])
             self.assertEqual(finished["status"], "succeeded", finished)
@@ -488,11 +486,11 @@ class PipelineRunnerTests(unittest.TestCase):
 
         self.runner.llm_adapter = adapter
         state, route = serial_state([["alpha"], ["beta"]])
-        state["nodes"] = state["nodes"][:4]
-        state["connections"] = [edge("p1", "r1", "prompt-to-run")]
+        state["nodes"] = state["nodes"][:3]
+        state["connections"] = [edge("p1", "r1", "prompt-to-run"), data("raw", "r1")]
         settings = dict(DEFAULTS, run_concurrency=1)
         self.runner.settings_loader = lambda: dict(settings)
-        started = self.runner.start(project_id="live", canvas_state=state, route=route[:3],
+        started = self.runner.start(project_id="live", canvas_state=state, route=route[:2],
                                     input_dataset_ids=["raw"])
         try:
             self.assertTrue(second_row.wait(3), "second row did not start")

@@ -15,6 +15,15 @@
   -webkit-app-region: drag;
 }
 
+/* Room for the macOS traffic lights, which sit on top of this bar.
+   Fullscreen hides those buttons, so File sits at the normal inset. */
+.top-bar--mac {
+  padding-left: 78px;
+}
+.top-bar--mac.top-bar--mac-fullscreen {
+  padding-left: 12px;
+}
+
 /* Desktop app icon left of File, like VS Code's title bar. Still part of the drag region. */
 .top-bar-app-icon {
   width: 18px;

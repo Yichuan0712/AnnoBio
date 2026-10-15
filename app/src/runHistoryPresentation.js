@@ -1,4 +1,5 @@
-import { publishedPipelineCopy } from './datasetHistorySource.js';
+import { readSavedFrom } from './savedDatasets.js';
+import { stepSourceLabel } from './stepInputs.js';
 
 const rows = (content) => Array.isArray(content?.rows) ? content.rows.length : null;
 const count = (value, noun) => `${value} ${noun}${value === 1 ? '' : 's'}`;
@@ -12,63 +13,25 @@ function datasetLabel(dataset) {
   return String(dataset?.name || '').trim() || 'Unnamed dataset';
 }
 
-/** An input is named as the Dataset that restoring this record would read (runHistorySelection.js). */
-function inputLabel(dataset, canvasState, recordById) {
-  const upstreamRecordId = String(dataset?.sourceRecordId || dataset?.upstreamPipelineRecordId || '');
-  const sourceRecord = upstreamRecordId ? recordById?.get(upstreamRecordId) : null;
-  return datasetLabel(publishedPipelineCopy(canvasState, dataset, sourceRecord) || dataset);
+/** An input is named as the Dataset it read, or as the step whose output it read: its Prompt, or the Process and its branch. */
+function inputLabel(dataset, canvasState) {
+  return dataset?.kind === 'step' ? stepSourceLabel(canvasState, dataset) : datasetLabel(dataset);
 }
 
-function datasetProducer(dataset, connections) {
-  if (dataset.sourceRunNodeId) return { sourceId: String(dataset.sourceRunNodeId), kind: 'run', branch: 'result' };
-  const id = String(dataset.nodeId || dataset.id || '');
-  const edge = connections.find((item) => item.toId === id && [
-    'run-to-dataset-snapshot', 'process-to-dataset', 'process-to-dataset-snapshot',
-  ].includes(item.type));
-  if (!edge) return null;
-  return {
-    sourceId: String(edge.fromId),
-    kind: edge.type === 'run-to-dataset-snapshot' ? 'run' : 'process',
-    branch: String(dataset.processOutputName || 'result'),
-  };
-}
-
-function exportedDatasetNames(record, canvasState, branch = 'result', singleBranch = false, currentRecordIds = null) {
-  const nodes = Array.isArray(canvasState?.nodes) ? canvasState.nodes : [];
-  const connections = Array.isArray(canvasState?.connections) ? canvasState.connections : [];
-  const candidates = nodes.filter((node) => {
-    if (node.type !== 'dataset') return false;
-    const snapshotRecordId = String(node.snapshotSourceRecordId || '');
-    const isExactSnapshot = snapshotRecordId === record.id;
-    const isCurrentOutput = !node.savedCopy
-      && (currentRecordIds == null || currentRecordIds[record.nodeId] === record.id);
-    if (!isExactSnapshot && !isCurrentOutput) return false;
-    const source = datasetProducer(node, connections);
-    if (!source || source.sourceId !== record.nodeId || source.kind !== record.kind) return false;
-    return record.kind === 'run'
-      || String(source.branch || 'result') === branch
-      || (singleBranch && !String(node.processOutputName || '').trim());
-  });
-  if (!candidates.length) return [];
-  const live = candidates.filter((node) => {
-    if (record.kind === 'run') return String(node.sourceRunNodeId || '') === record.nodeId;
-    return connections.some((edge) => (
-      edge.type === 'process-to-dataset' && edge.fromId === record.nodeId
-      && edge.toId === String(node.nodeId || node.id || '')
-    ));
-  });
-  const selected = live.find((node) => !node.savedCopy) || live[0]
-    || candidates.find((node) => !node.savedCopy) || candidates[0];
-  return [datasetLabel(selected)];
+/** The Datasets saved from this record's output (`savedFrom`, savedDatasets.js); for a Process, from `branch`. */
+function savedDatasetNames(record, canvasState, branch = 'result') {
+  return (Array.isArray(canvasState?.nodes) ? canvasState.nodes : []).filter((node) => {
+    const savedFrom = node?.type === 'dataset' ? readSavedFrom(node.savedFrom) : null;
+    return savedFrom?.recordId === record.id && (record.kind === 'run' || savedFrom.port === branch);
+  }).map(datasetLabel);
 }
 
 function outputLabel(rowCount) {
   return `${rowCount == null ? 'Unknown row count' : count(rowCount, 'row')} (not exported as a Dataset node)`;
 }
 
-/** Human-readable facts for a Run/Process History entry, including old saved records.
- * `recordById` (record id -> record) lets an input from a Pipeline run be named as its published copy. */
-export function describeHistoryRecord(record, canvasState = null, { currentRecordIds = null, recordById = null } = {}) {
+/** Human-readable facts for a Run/Process History entry, including old saved records. */
+export function describeHistoryRecord(record, canvasState = null) {
   if (!record) return { title: 'Saved result', input: 'Input details unavailable', output: 'Result details unavailable', meta: '' };
   if (record.kind === 'run') {
     const prompt = String(record.inputs?.prompt?.name || record.summary?.promptName || '').trim();
@@ -79,10 +42,10 @@ export function describeHistoryRecord(record, canvasState = null, { currentRecor
       ?? (Array.isArray(record.results?.runResults)
         ? record.results.runResults.filter((item) => item?.error).length : 0);
     const model = record.model || record.summary?.model || '';
-    const exported = exportedDatasetNames(record, canvasState, 'result', false, currentRecordIds);
+    const exported = savedDatasetNames(record, canvasState);
     return {
       title: prompt ? `Prompt: ${prompt}` : 'Run result',
-      input: `Input: ${input ? inputLabel(input, canvasState, recordById) : (record.summary?.datasetNames || []).join(', ') || 'Unknown dataset'}`,
+      input: `Input: ${input ? inputLabel(input, canvasState) : (record.summary?.datasetNames || []).join(', ') || 'Unknown dataset'}`,
       output: `Output: ${exported.length ? exported.join(', ') : outputLabel(resultRows)}`,
       meta: [errorRows ? count(errorRows, 'error') : '', model ? `Model: ${model}` : ''].filter(Boolean).join(' · '),
     };
@@ -92,7 +55,7 @@ export function describeHistoryRecord(record, canvasState = null, { currentRecor
   const outputs = result?.outputs && typeof result.outputs === 'object'
     ? result.outputs : (Array.isArray(result?.rows) ? { result } : {});
   const branches = Object.entries(outputs).map(([name, table]) => {
-    const exported = exportedDatasetNames(record, canvasState, name, Object.keys(outputs).length === 1, currentRecordIds);
+    const exported = savedDatasetNames(record, canvasState, name);
     if (exported.length) return exported.join(', ');
     const branchLabel = Object.keys(outputs).length > 1 ? `${name.replaceAll('_', ' ')}: ` : '';
     return `${branchLabel}${outputLabel(rows(table))}`;
@@ -100,7 +63,7 @@ export function describeHistoryRecord(record, canvasState = null, { currentRecor
   return {
     title: '',
     input: `Input: ${bindings.length
-      ? bindings.map((binding) => inputLabel(binding, canvasState, recordById)).join(', ')
+      ? bindings.map((binding) => inputLabel(binding, canvasState)).join(', ')
       : (record.summary?.datasetNames || []).join(', ') || 'Unknown dataset'}`,
     output: branches.length ? `Output: ${branches.join(' · ')}` : 'Output: no result saved',
     meta: '',

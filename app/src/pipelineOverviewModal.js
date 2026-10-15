@@ -5,14 +5,13 @@
  * for a Process's named outputs and for the Datasets one Process merges.
  *
  * What runs is chosen here. A card shows its latest run through its Run Pipeline / Stop / Resume
- * buttons; its Run History window lists that pipeline's runs. Output tables are
- * read on the canvas, where a finished run adds them.
+ * buttons; its Run History window lists that pipeline's runs. A finished run's results are added
+ * to the History of the steps it ran, and each step shows them.
  */
 import { showAlert } from './alertModal.js';
 import { exportPythonPipeline } from './pipelineExportClient.js';
 import { buildSelectedRoute, exportRoutePayload, getVisibleRoute } from './pipelineRouteSelection.js';
 import { buildPipelineCompileRequest, pipelineInputHasAssets } from './pipelineRunDefinition.js';
-import { datasetProducerConflicts } from './pipelineProducerConflicts.js';
 import { openPipelineRunDialog } from './pipelineRunDialog.js';
 import { pipelineInputSteps } from './pipelineRunInputs.js';
 import {
@@ -123,14 +122,6 @@ const ACTIVE_RUN_STATES = new Set(['pending', 'running', 'cancelling']);
 const RESUMABLE_RUN_STATES = new Set(['failed', 'cancelled', 'interrupted']);
 const PUBLISHABLE_RUN_STATES = new Set(['succeeded', 'failed', 'cancelled', 'interrupted']);
 
-/** Note shown on a Dataset saved from a Pipeline run: when it ran (as Run History lists it)
- * and, when known, the step that made the table. */
-export function pipelineResultNote(run, sourceLabel = '') {
-  const at = run?.finished_at || run?.created_at;
-  const when = at ? ` on ${new Date(at).toLocaleString()}` : '';
-  return `Saved from Pipeline run${when}.${sourceLabel ? `\nOutput of ${sourceLabel}.` : ''}`;
-}
-
 /** Run and Process node ids in a detected pipeline, to file runs under it. */
 function pipelineStepNodeIds(pipeline) {
   const ids = new Set();
@@ -187,8 +178,10 @@ function renderPipeline(pipeline, index, selectedByChoiceId, entry) {
 /**
  * @param {Function|Array} pipelineSource a getter for live data, or a static array for callers
  * @param {{getCanvasState?: Function, getPipelineProjectId?: Function, getAssetProjectId?: Function,
- * highlightCanvasNodes?: Function, openCanvasNode?: Function}} options live canvas hooks;
- * `openCanvasNode` opens a node's window
+ * highlightCanvasNodes?: Function, revealCanvasNode?: Function, publishPipelineRun?: Function,
+ * isPipelineRunImported?: Function}} options live canvas hooks;
+ * `revealCanvasNode` selects a node and scrolls the canvas to it; `publishPipelineRun` adds a finished run to node History
+ * and `isPipelineRunImported` says whether it is there already
  */
 export function showPipelineOverviewModal(pipelineSource, options = {}) {
   const host = options.host || null;
@@ -212,11 +205,11 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     ? options.getAssetProjectId : () => null;
   let publishPipelineRun = typeof options.publishPipelineRun === 'function'
     ? options.publishPipelineRun : null;
-  let openCanvasNode = typeof options.openCanvasNode === 'function' ? options.openCanvasNode : () => {};
+  let isPipelineRunImported = typeof options.isPipelineRunImported === 'function'
+    ? options.isPipelineRunImported : async () => false;
+  let revealCanvasNode = typeof options.revealCanvasNode === 'function' ? options.revealCanvasNode : () => {};
   let pipelines = [];
   let pipelineSignature = '';
-  let canvasWarnings = '';
-  let canvasNodes = [];
   let refreshFrame = 0;
   let pollTimer = 0;
   let attachedProjectId = '';
@@ -295,22 +288,15 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   function producedIds(run) {
     return (run?.artifacts || []).filter((item) => item.valid && item.producer).map((item) => item.logical_id);
   }
-  function wasPublished(runId, producedArtifactIds = [], knownCanvasNodes = null) {
-    // A run that produced nothing has nothing on the canvas.
-    if (!producedArtifactIds?.length) return false;
-    try {
-      if (localStorage.getItem(publishedKey(attachedProjectId, runId)) !== '1') return false;
-      const nodes = knownCanvasNodes || canvasNodes;
-      return producedArtifactIds.every((logicalId) => nodes.some((node) => (
-        node.pipelineRunId === runId && node.pipelineLogicalId === logicalId
-      )));
-    }
-    catch (_) { return false; }
+  function succeededJobCount(run) {
+    return Array.isArray(run?.jobs) ? run.jobs.filter((job) => job.status === 'succeeded').length
+      : Number(run?.succeeded_job_count) || 0;
   }
-  /** Runs live outside the project file, so results missing from the canvas after they were added
-   * once were removed by the user (deleted, or an older save restored), and are not added again. */
-  function everPublished(runId) {
-    try { return localStorage.getItem(publishedKey(attachedProjectId, runId)) === '1'; }
+  /** Runs live outside the project file, so records missing from node History after they were added
+   * here were removed by the user (deleted, or an older save restored), and are not added again.
+   * Kept as how many jobs had succeeded then: a run resumed since is added again for its new jobs. */
+  function addedHere(run) {
+    try { return Number(localStorage.getItem(publishedKey(attachedProjectId, run?.run_id))) >= Math.max(1, succeededJobCount(run)); }
     catch (_) { return false; }
   }
   function storedRuns(projectId) {
@@ -365,35 +351,37 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   async function publishCompletedRun(run) {
     const produced = producedIds(run);
     if (!publishPipelineRun || !PUBLISHABLE_RUN_STATES.has(run?.status) || !run?.run_id || !produced.length
-      || wasPublished(run.run_id, produced)
-      || everPublished(run.run_id)
+      || addedHere(run)
       || publishingRunIds.has(run.run_id)) return;
     const projectId = attachedProjectId;
     publishingRunIds.add(run.run_id);
     try {
-      const definition = await getPipelineRunDefinition(projectId, run.run_id);
-      if (destroyed || attachedProjectId !== projectId) return;
-      const result = await publishPipelineRun({
-        run, definition,
-        getArtifact: async (logicalId) => {
-          const response = await getPipelineResults(projectId, run.run_id, logicalId);
-          return response.outputs?.[0] || null;
-        },
-      });
-      if (result?.historyError) throw new Error(result.historyError);
-      canvasNodes = getCanvasState?.()?.nodes || canvasNodes;
-      try { localStorage.setItem(publishedKey(projectId, run.run_id), '1'); } catch (_) {}
+      // Already in node History where this browser has no note of it (the project opened elsewhere):
+      // switching the steps to it again would undo the records chosen since.
+      if (!await isPipelineRunImported(run)) {
+        const definition = await getPipelineRunDefinition(projectId, run.run_id);
+        if (destroyed || attachedProjectId !== projectId) return;
+        const result = await publishPipelineRun({
+          run, definition,
+          getArtifact: async (logicalId) => {
+            const response = await getPipelineResults(projectId, run.run_id, logicalId);
+            return response.outputs?.[0] || null;
+          },
+        });
+        if (result?.historyError) throw new Error(result.historyError);
+      }
+      try { localStorage.setItem(publishedKey(projectId, run.run_id), String(succeededJobCount(run))); } catch (_) {}
       publicationErrors.delete(run.run_id);
       renderBody();
     } catch (error) {
-      const message = `Canvas sync failed: ${error?.message || error}`;
+      const message = `Could not add the results to node History: ${error?.message || error}`;
       publicationErrors.set(run.run_id, message);
       if (!destroyed) renderBody();
     } finally {
       publishingRunIds.delete(run.run_id);
     }
   }
-  /** Fetches a run's status. With `publish`, a finished run is added to the canvas (once, see everPublished);
+  /** Fetches a run's status. With `publish`, a finished run is added to node History (once, see addedHere);
    * merely looking at an older run in Run History never adds it. */
   async function refreshRun(runId, { publish = false } = {}) {
     const projectId = attachedProjectId;
@@ -456,7 +444,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     persistRuns();
     const latestUnpublished = runHistory.find((item) => PUBLISHABLE_RUN_STATES.has(item.status)
       && item.produced_artifact_ids?.length
-      && !everPublished(item.run_id));
+      && !addedHere(item));
     if (latestUnpublished) await refreshRun(latestUnpublished.run_id, { publish: true }).catch(() => null);
     ensurePolling();
     if (!destroyed) renderBody();
@@ -535,25 +523,15 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
         return renderPipeline(pipeline, index, selectedByChoiceId, runEntriesByPipelineId.get(pipelineId));
       }).join('')
       : `<p class="pipeline-overview-empty">${escapeHtml(emptyText)}</p>`;
-    bodyEl.innerHTML = canvasWarnings + content;
+    bodyEl.innerHTML = content;
     renderRunsWindow();
   }
   function refresh(nextSource) {
     if (typeof nextSource === 'function') readPipelines = nextSource;
     const nextPipelines = readPipelines?.() || [];
-    const state = getCanvasState?.();
-    canvasNodes = state?.nodes || [];
-    const names = new Map((state?.nodes || []).map((node) => [node.nodeId, node.name || node.nodeId]));
-    const conflicts = datasetProducerConflicts(state);
-    const conflictNotice = conflicts.length
-      ? `<div class="pipeline-run-validation pipeline-run-validation--error">Dataset source conflict: ${escapeHtml(conflicts.map((item) => names.get(item.datasetId) || item.datasetId).join(', '))}. Remove the extra producer link before running or exporting.</div>`
-      : '';
-    // Saved copies whose source has moved on are shown on the canvas as dashed edges, not listed here.
-    const nextWarnings = conflictNotice;
-    const nextSignature = JSON.stringify({ pipelines: nextPipelines, warnings: nextWarnings });
+    const nextSignature = JSON.stringify(nextPipelines);
     if (nextSignature !== pipelineSignature) {
       pipelines = nextPipelines;
-      canvasWarnings = nextWarnings;
       pipelineSignature = nextSignature;
       renderBody();
     }
@@ -576,7 +554,8 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     if (typeof nextOptions.getPipelineProjectId === 'function') getPipelineProjectId = nextOptions.getPipelineProjectId;
     if (typeof nextOptions.getAssetProjectId === 'function') getAssetProjectId = nextOptions.getAssetProjectId;
     if (typeof nextOptions.publishPipelineRun === 'function') publishPipelineRun = nextOptions.publishPipelineRun;
-    if (typeof nextOptions.openCanvasNode === 'function') openCanvasNode = nextOptions.openCanvasNode;
+    if (typeof nextOptions.isPipelineRunImported === 'function') isPipelineRunImported = nextOptions.isPipelineRunImported;
+    if (typeof nextOptions.revealCanvasNode === 'function') revealCanvasNode = nextOptions.revealCanvasNode;
     syncProjectContext().catch(() => {});
   };
   refresh();
@@ -651,7 +630,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
           // the step to change it, and says only what keeps the run from starting.
           const confirmed = await openPipelineRunDialog({
             getSteps: () => pipelineInputSteps(getCanvasState(), currentRoute()),
-            openNode: (nodeId) => openCanvasNode(nodeId),
+            showNode: (nodeId) => revealCanvasNode(nodeId),
             check: async () => {
               const compiled = await compileCurrentPipeline({ canvasState: getCanvasState(), route: currentRoute() });
               if (compiled.spec) return [];
@@ -770,6 +749,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     document.removeEventListener('keydown', onKeyDown);
     document.removeEventListener('workflow:canvas-changed', scheduleRefresh);
     document.removeEventListener('workflow:history-resolved', scheduleRefresh);
+    document.removeEventListener('workflow:process-outputs-changed', scheduleRefresh);
     document.removeEventListener('workflow:project-changed', onProjectChanged);
   }
   overlay.destroyPipelineOverview = destroy;
@@ -780,6 +760,8 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   if (!host) document.addEventListener('keydown', onKeyDown);
   document.addEventListener('workflow:canvas-changed', scheduleRefresh);
   document.addEventListener('workflow:history-resolved', scheduleRefresh);
+  // A Process's branches are detected from its code after it changes (processOutputPorts.js).
+  document.addEventListener('workflow:process-outputs-changed', scheduleRefresh);
   function onProjectChanged() {
     syncProjectContext().catch(() => {});
   }

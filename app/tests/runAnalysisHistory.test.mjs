@@ -47,12 +47,15 @@ test('Score and Review have no current analysis key without a Run result', async
   assert.equal(keys.review.size, 0);
 });
 
-test('Score analysis records the source record of a derived ground truth', async () => {
+test('a ground truth saved from a step is a plain Dataset, keyed by its content', async () => {
   const base = state();
-  base.nodes.find((node) => node.nodeId === 'gt').sourceRunNodeId = 'gt-run';
-  const keys = await analysisInputKeys(base, { run: 'answer-run', 'gt-run': 'truth-run' });
-  assert.equal(keys.score.get('score').inputs.groundTruthSourceRecordId, 'truth-run');
-  assert.equal(keys.review.get('review').inputs.scoreNodeId, 'score');
+  const plain = await analysisInputKeys(base, { run: 'answer-run' });
+  base.nodes.find((node) => node.nodeId === 'gt').savedFrom = { kind: 'run', nodeId: 'gt-run', port: 'result', recordId: 'truth-run' };
+  const saved = await analysisInputKeys(base, { run: 'answer-run', 'gt-run': 'other-run' });
+  assert.equal(saved.score.get('score').signature, plain.score.get('score').signature);
+  assert.deepEqual(Object.keys(saved.score.get('score').inputs).sort(),
+    ['activeMatchMode', 'groundTruthId', 'groundTruthSignature', 'mapping', 'matchCode', 'runRecordId']);
+  assert.equal(saved.review.get('review').inputs.scoreNodeId, 'score');
 });
 
 test('new Review result is saved under its current signature on the first History sync', () => {

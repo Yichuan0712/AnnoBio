@@ -472,7 +472,7 @@ class ReviewRequest(BaseModel):
             for value in (row.row_input or {}).values()
         )
         if has_assets and not self.project_session_id:
-            raise ValueError("Review image/PDF inputs require a project session.")
+            raise ValueError("Optimize image/PDF inputs require a project session.")
         return self
 
 
@@ -1849,7 +1849,7 @@ def get_review_result(review_id: str):
     with _review_jobs_lock:
         job = _review_jobs.get(review_id)
         if not job:
-            raise HTTPException(status_code=404, detail="Review not found")
+            raise HTTPException(status_code=404, detail="Optimize job not found")
         status = job.get("status")
         events = (job.get("events") or [])[:]
         error = job.get("error")
@@ -1872,7 +1872,7 @@ def get_review_result_by_node(review_node_id: str):
             raise HTTPException(status_code=404, detail="No review found for this node")
         job = _review_jobs.get(review_id)
         if not job:
-            raise HTTPException(status_code=404, detail="Review not found")
+            raise HTTPException(status_code=404, detail="Optimize job not found")
         status = job.get("status")
         events = (job.get("events") or [])[:]
         error = job.get("error")
@@ -1891,7 +1891,7 @@ def cancel_review(review_id: str):
     """Mark review as cancelled; worker stops after current step."""
     with _review_jobs_lock:
         if review_id not in _review_jobs:
-            raise HTTPException(status_code=404, detail="Review not found")
+            raise HTTPException(status_code=404, detail="Optimize job not found")
         job = _review_jobs[review_id]
         if job.get("status") != "running":
             return {"ok": True, "status": job.get("status")}
@@ -3025,7 +3025,10 @@ def _do_process_df_work(job_id: str, req: ProcessDfRunRequest) -> None:
             if was_cancelled:
                 _process_df_jobs[job_id] = {"status": "cancelled"}
             elif outcome.get("ok"):
-                _process_df_jobs[job_id] = {"status": "done", "outputs": outcome.get("outputs") or {}}
+                # Each branch's columns, kept apart from its rows: a branch without rows still has them.
+                columns = {name: list(table.get("headers") or []) for name, table in (outcome.get("output_tables") or {}).items()
+                           if isinstance(table, dict)}
+                _process_df_jobs[job_id] = {"status": "done", "outputs": outcome.get("outputs") or {}, "output_columns": columns}
             else:
                 _process_df_jobs[job_id] = {"status": "done", "error": outcome.get("error") or "Unknown error"}
         _persist_process_df_jobs()
@@ -3050,6 +3053,17 @@ def start_process_df_run(body: ProcessDfRunRequest):
     return JSONResponse(status_code=202, content={"job_id": job_id})
 
 
+class ProcessOutputsRequest(BaseModel):
+    code: str = Field(default="", description="User code defining process(df)")
+
+
+@app.post("/api/process/outputs")
+def detect_process_outputs_endpoint(body: ProcessOutputsRequest):
+    """The output branches Process code returns, found by parsing it; the code is not run."""
+    from process_outputs import detect_process_outputs
+    return detect_process_outputs(body.code)
+
+
 @app.get("/api/process/df/run/result/{job_id}")
 def get_process_df_run_result(job_id: str):
     """Return 202 while running, 200 when done/cancelled. Polling refreshes the abandonment timer."""
@@ -3061,6 +3075,7 @@ def get_process_df_run_result(job_id: str):
             _touch_process_df_activity(job_id)
         status = job.get("status")
         outputs = job.get("outputs")
+        columns = job.get("output_columns") or {}
         # Jobs saved by older backend versions used one unlabelled rows list. Keep it readable
         # while the browser migrates the Process result into the named-output form.
         rows = job.get("rows") or []
@@ -3071,7 +3086,7 @@ def get_process_df_run_result(job_id: str):
     if error:
         return {"status": "done", "error": error, "outputs": {}}
     if isinstance(outputs, dict):
-        return {"status": status, "outputs": outputs}
+        return {"status": status, "outputs": outputs, "output_columns": columns}
     return {"status": status, "outputs": {"result": rows}}
 
 

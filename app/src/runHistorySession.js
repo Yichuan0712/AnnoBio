@@ -1,4 +1,3 @@
-import { planLegacyHistoryMigration } from './runHistoryMigration.js';
 import { resolveHistoryCanvasState } from './runHistoryResolver.js';
 import { planHistorySelection } from './runHistorySelection.js';
 import { captureHistoryInput, runningHistoryRecord } from './runHistoryCapture.js';
@@ -16,7 +15,7 @@ function relationSummary(record, canvasState, currentIds) {
   const node = (canvasState?.nodes || []).find((item) => String(item?.nodeId || item?.id || '') === String(record.nodeId));
   const nodeName = node?.runName || node?.name || node?.scoreName || node?.promptReviewName || '';
   const promptName = record.kind === 'run' ? String(record.inputs?.prompt?.name || record.summary?.promptName || '') : '';
-  const fallback = record.kind ? `${record.kind[0].toUpperCase()}${record.kind.slice(1)}` : 'Record';
+  const fallback = record.kind === 'score' ? 'Evaluate' : record.kind === 'review' ? 'Optimize' : record.kind ? `${record.kind[0].toUpperCase()}${record.kind.slice(1)}` : 'Record';
   return {
     id: record.id,
     nodeId: record.nodeId,
@@ -25,22 +24,6 @@ function relationSummary(record, canvasState, currentIds) {
     createdAt: record.createdAt || '',
     current: currentIds.has(record.id),
   };
-}
-
-function hasLegacyOutput(node) {
-  try {
-    if (node.type === 'run') {
-      const results = typeof node.runResults === 'string' ? JSON.parse(node.runResults) : node.runResults;
-      return Array.isArray(results) && (results.length > 0 || node.runCompleted === '1' || node.runCompleted === true);
-    }
-    if (node.type === 'process') {
-      const raw = node.dfResults || node.results;
-      const result = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      return !!result && (Object.keys(result.outputs || {}).length > 0
-        || (Array.isArray(result.headers) && Array.isArray(result.rows)));
-    }
-  } catch (_) {}
-  return false;
 }
 
 /** Project-scoped history orchestration. Storage and canvas saving are injected for web/desktop. */
@@ -53,64 +36,21 @@ export class RunHistorySession {
     this.index = { version: 1, records: [] };
   }
 
+  /**
+   * A canvas without `historyVersion: 1` (a new project, or one saved before History existed) is
+   * marked as using History; results cached on its nodes are not turned into records, so a node with
+   * no matching record shows no result.
+   */
   async open(projectId, state) {
     if (!projectId) throw new Error('Open a project before using history.');
     this.projectId = projectId;
     this.index = await this.storage.loadIndex(projectId);
     let canvas = state;
-    let migration = null;
-    const initialMigration = state?.historyVersion !== 1;
-    const recordedNodeIds = new Set(this.index.records.map((entry) => entry.nodeId));
-    const unrecordedResultIds = initialMigration ? null : (state?.nodes || []).filter((node) =>
-      !recordedNodeIds.has(node.nodeId) && hasLegacyOutput(node)).map((node) => node.nodeId);
-    if (initialMigration || unrecordedResultIds.length) {
-      const sourceRecordIds = initialMigration ? {} : (await this.resolve(state)).currentRecordIds;
-      migration = await planLegacyHistoryMigration(state, {
-        createId: this.createId,
-        now: this.now,
-        existingEntries: initialMigration ? this.index.records : [],
-        onlyNodeIds: unrecordedResultIds,
-        sourceRecordIds,
-      });
-      if (migration.unmigratedNodeIds.length) {
-        throw new Error(`Cannot migrate saved results for nodes: ${migration.unmigratedNodeIds.join(', ')}`);
-      }
-      const existing = new Map(this.index.records.map((entry) => [entry.id, entry]));
-      for (const record of migration.records) {
-        if (existing.has(record.id)) {
-          const stored = await this.storage.loadRecord(projectId, record.id);
-          if (stored?.nodeId !== record.nodeId || stored?.kind !== record.kind || stored?.signature !== record.signature) {
-            throw new Error(`Legacy history migration conflicts with record ${record.id}.`);
-          }
-        } else {
-          await this.storage.saveRecord(projectId, record);
-        }
-      }
-      this.index = await this.storage.loadIndex(projectId);
-      if (initialMigration) {
-        const resolved = await this.resolve(migration.state);
-        const keys = await analysisInputKeys(resolved.state, resolved.currentRecordIds);
-        for (const node of migration.state.nodes || []) {
-          const scoreKey = keys.score.get(node.nodeId);
-          if (node.type === 'score' && scoreKey && (node.scoreMatchResult || node.scoreMatchError || node.scoreRowExcludedFromScoring)) {
-            await this.saveAnalysis(node.nodeId, 'score', scoreKey, {
-              scoreMatchResult: node.scoreMatchResult || null,
-              scoreMatchError: node.scoreMatchError || null,
-              scoreRowExcludedFromScoring: node.scoreRowExcludedFromScoring || {},
-            });
-          }
-          const reviewKey = keys.review.get(node.nodeId);
-          if (reviewKey && (node.reviewResult || node.reviewProgress)) {
-            await this.saveAnalysis(node.nodeId, 'review', reviewKey, {
-              reviewResult: node.reviewResult || null, reviewProgress: node.reviewProgress || 0,
-            });
-          }
-        }
-      }
-      await this.storage.saveCanvas(projectId, migration.state);
-      canvas = migration.state;
+    if (state?.historyVersion !== 1) {
+      canvas = { ...state, historyVersion: 1 };
+      await this.storage.saveCanvas(projectId, canvas);
     }
-    return { ...(await this.resolve(canvas)), migration };
+    return this.resolve(canvas);
   }
 
   async resolve(state) {
@@ -236,7 +176,7 @@ export class RunHistorySession {
         ...entry,
         error: record.error || '',
         relationships: { upstream, downstream },
-        display: describeHistoryRecord(record, canvasState, { currentRecordIds, recordById: byId }),
+        display: describeHistoryRecord(record, canvasState),
       };
     });
   }
@@ -257,9 +197,7 @@ export class RunHistorySession {
         && entry.nodeId === inputs.scoreNodeId && entry.signature === inputs.scoreSignature);
       if (score) inputs = { ...inputs, scoreRecordId: score.id };
     }
-    const sourceRecordIds = kind === 'score'
-      ? [...new Set([inputs.runRecordId, inputs.groundTruthSourceRecordId].filter(Boolean))]
-      : [inputs.scoreRecordId].filter(Boolean);
+    const sourceRecordIds = kind === 'score' ? [inputs.runRecordId].filter(Boolean) : [inputs.scoreRecordId].filter(Boolean);
     const at = this.now?.() || new Date().toISOString();
     const record = previous
       ? { ...previous, inputs, sourceRecordIds, results, updatedAt: at }

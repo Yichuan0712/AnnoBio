@@ -14,11 +14,11 @@ function fixture() {
       rows: [['PRIVATE_INPUT', { kind: 'images', assetIds: ['sha256:a'], names: ['a.png'] }]],
     } },
     { type: 'prompt', nodeId: 'p', sections: [{ name: 'Task', content: 'Read {text}' }] },
-    { type: 'run', nodeId: 'r', runWorkingSetId: 'raw', runInputToColumn: { text: 'text' }, runResults: 'PRIVATE_CACHE' },
-    { type: 'dataset', nodeId: 'out', sourceRunNodeId: 'r', datasetContent: {
+    { type: 'run', nodeId: 'r', runInputToColumn: { text: 'text' }, runResults: 'PRIVATE_CACHE' },
+    { type: 'dataset', nodeId: 'out', savedFrom: { kind: 'run', nodeId: 'r', port: 'result', recordId: 'rec' }, datasetContent: {
       headers: ['Output: answer'], rows: [['STALE_OUTPUT']],
     } },
-  ], connections: [{ fromId: 'p', toId: 'r', type: 'prompt-to-run' }] };
+  ], connections: [{ fromId: 'p', toId: 'r', type: 'prompt-to-run' }, { type: 'data', fromId: 'raw', fromPort: 'result', toId: 'r' }] };
   const route = [
     { type: 'dataset', dataset_node_id: 'raw' },
     { type: 'prompt', prompt_node_id: 'p', run_node_id: 'r' },
@@ -44,20 +44,11 @@ test('start freezes rows only for explicit inputs and never sends stale intermed
   assert.deepEqual(state, before);
 });
 
-test('compile rejects a derived Dataset with no current result when used as an input boundary', () => {
-  const { state, route } = fixture();
-  const out = state.nodes.find((node) => node.nodeId === 'out');
-  out.resultMissing = true;
-  out.datasetContent = { headers: [], rows: [] };
-  assert.doesNotThrow(() => buildPipelineCompileRequest({ canvasState: state, route }));
-  const boundaryRoute = [{ type: 'dataset', dataset_node_id: 'out' }];
-  assert.throws(() => buildPipelineCompileRequest({ canvasState: state, route: boundaryRoute }), /no current result/);
-});
-
 test('an ordinary empty Dataset remains a valid input', () => {
   const state = { nodes: [{ type: 'dataset', nodeId: 'empty', name: 'Empty',
-    datasetContent: { headers: ['text'], rows: [] } }], connections: [] };
-  const route = [{ type: 'dataset', dataset_node_id: 'empty' }];
+    datasetContent: { headers: ['text'], rows: [] } }, { type: 'process', nodeId: 'clean' }],
+  connections: [{ type: 'data', fromId: 'empty', fromPort: 'result', toId: 'clean', alias: 'df' }] };
+  const route = [{ type: 'dataset', dataset_node_id: 'empty' }, { type: 'process', process_node_id: 'clean' }];
   const request = buildPipelineCompileRequest({ canvasState: state, route });
   assert.deepEqual(request.input_dataset_ids, ['empty']);
   assert.deepEqual(request.canvas_state.nodes[0].datasetContent.rows, []);
@@ -78,12 +69,11 @@ test('all selected source datasets are frozen for a multi-input Process', () => 
   const state = { nodes: [
     { type: 'dataset', nodeId: 'left', datasetContent: { headers: ['id'], rows: [['1']] } },
     { type: 'dataset', nodeId: 'right', datasetContent: { headers: ['id'], rows: [['2']] } },
-    { type: 'process', nodeId: 'join', primaryDatasetId: 'left' },
-    { type: 'dataset', nodeId: 'out', processOutputName: 'result', datasetContent: { headers: ['old'], rows: [['stale']] } },
+    { type: 'process', nodeId: 'join' },
+    { type: 'dataset', nodeId: 'out', savedFrom: { kind: 'process', nodeId: 'join', port: 'result', recordId: 'rec' }, datasetContent: { headers: ['old'], rows: [['stale']] } },
   ], connections: [
-    { fromId: 'left', toId: 'join', type: 'dataset-to-process' },
-    { fromId: 'right', toId: 'join', type: 'dataset-to-process' },
-    { fromId: 'join', toId: 'out', type: 'process-to-dataset' },
+    { type: 'data', fromId: 'left', fromPort: 'result', toId: 'join', alias: 'df' },
+    { type: 'data', fromId: 'right', fromPort: 'result', toId: 'join', alias: 'df_right' },
   ] };
   const route = [
     { type: 'dataset', dataset_node_id: 'left' }, { type: 'dataset', dataset_node_id: 'right' },

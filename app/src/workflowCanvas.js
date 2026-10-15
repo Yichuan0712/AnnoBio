@@ -58,7 +58,11 @@ import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
 import { enrichInspectScoreResultWithComparisonRows, inspectWorkflowNode } from './agent/canvas/workflowNodeInspector.js';
 import { createWorkflowCanvasNames } from './workflowCanvasNames.js';
-import { createWorkflowNodeFactories, formatSamplerDescription } from './workflowNodeFactories.js';
+import { createWorkflowNodeFactories, formatSamplerDescription, formatSamplerSettings } from './workflowNodeFactories.js';
+import { ADD_INPUT_PORT, applyPortOp, checkConnect, checkDisconnect, edgeEndpoints, LINEAGE_PORT, nodePorts, portTitles, unconnectedProcessInputs } from './nodePorts.js';
+import { applyPortTitles, centerWithin, findPortDot, renderNodePorts } from './workflowNodePorts.js';
+import { attachPortDrag } from './workflowPortDrag.js';
+import { attachContextMenuDismissal } from './workflowContextMenu.js';
 import { createWorkflowCanvasRuntime } from './workflowCanvasRuntime.js';
 import { DATASET_BORDER_COLORS, datasetColorAt } from './workflowNodeColors.js';
 import { dependencyColorSources, dependentNodeVisualColors } from './workflowDependencyColors.js';
@@ -66,8 +70,8 @@ import { showAlert, showConfirm, showSelect } from './alertModal.js';
 import { openAgentWindowModal } from './agentWindowModal.js';
 import { detectPipelines } from './pipelineDetection.js';
 import { buildSelectedRoute } from './pipelineRouteSelection.js';
-import { pipelineResultNote, showPipelineOverviewModal } from './pipelineOverviewModal.js';
-import { importPipelineRunHistory, pipelineCopyInputs, withCompatibleLegacyCanvas } from './pipelineHistoryImport.js';
+import { showPipelineOverviewModal } from './pipelineOverviewModal.js';
+import { importPipelineRunHistory, pipelineRunImported } from './pipelineHistoryImport.js';
 import { createWorkspacePanels } from './workspacePanels.js';
 import { mountErrorsPanel, setErrorsPanelAvailable, subscribeAppErrors } from './appErrors.js';
 import { mountBackendLogPanel } from './backendLogPanel.js';
@@ -76,13 +80,25 @@ import { iconGitCompareArrows, iconLayoutPanel, iconLayoutSidebarRight } from '.
 import { runSettingsOverrides, reviewSettingsOverrides } from './nodeSettings.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isAssetCell } from './datasetContent.js';
+import { sampleSourceIndices, samplerQuota } from './samplerQuota.js';
 import { openDatasetDiffModal } from './datasetDiffModal.js';
-import { datasetHistorySource } from './datasetHistorySource.js';
 import { resolveDataframeProcessCode } from './processCode.js';
-import { buildProcessDatasetBindings, referencedDatasetAliases } from './processDatasetBindings.js';
-import { runProcessCode, waitForProcessJob } from './processRunClient.js';
+import { buildDefaultProcessCode } from './processSampleCode.js';
+import { detectProcessOutputs, runProcessCode, waitForProcessJob } from './processRunClient.js';
+import { runScoreCode } from './scoreCodeRunClient.js';
+import { codeHashOf, effectiveProcessOutputs, parseProcessOutputPorts } from './processOutputPorts.js';
+import { CANVAS_VERSION } from './canvasFormat.js';
+import {
+  DATA_EDGE, RESULT_PORT, processInputAliases, processInputBindings, processPrimarySource, processRequiredInputs,
+  runInputSource, setProcessInputs, setProcessPrimarySource, setRunInputSource,
+  sourceKey, stepInputEdges, stepInputErrorNotice, stepInputWaitingMessage, stepSourceLabel,
+} from './stepInputs.js';
+import { stepOutputTable } from './stepOutputs.js';
+import { readSavedFrom, savedFromLabel, savedProcessOutputs, savedRunOutput, scoreSavedFrom } from './savedDatasets.js';
+import { inputMenuItems, outputMenuItems } from './outputMenu.js';
 import { getCurrentProjectId, getPipelineProjectId } from './currentProject.js';
 import { analysisInputKeys, analysisKeyForSave } from './runAnalysisHistory.js';
+import { contentLocks } from './contentLocks.js';
 
 /** Same backend as Run/Review (embeddings API). */
 const SCORE_BACKEND_BASE = BACKEND_API_BASE;
@@ -131,10 +147,6 @@ const EDGE_TYPE_SAMPLER_TO_DATASET = 'sampler-to-dataset';
 const EDGE_TYPE_DATASET_TO_DATASET = 'dataset-to-dataset';
 /** Edge type for prompt → run (run/test this prompt). */
 const EDGE_TYPE_PROMPT_TO_RUN = 'prompt-to-run';
-/** Read-only visual edge for the Dataset selected as a Run's input. */
-const EDGE_TYPE_DATASET_TO_RUN = 'dataset-to-run';
-/** Read-only visual edge for a Dataset materialized from Run results. */
-const EDGE_TYPE_RUN_TO_DATASET = 'run-to-dataset';
 /** Read-only visual edge for the Dataset selected as a Score's ground truth. */
 const EDGE_TYPE_GROUND_TRUTH_TO_SCORE = 'ground-truth-to-score';
 /** Edge type for run → score (compare result with ground truth). */
@@ -142,12 +154,8 @@ const EDGE_TYPE_RUN_TO_SCORE = 'run-to-score';
 /** Edge type for score → prompt review (LLM analyzes results and suggests prompt changes). */
 const EDGE_TYPE_SCORE_TO_PROMPT_REVIEW = 'score-to-prompt-review';
 const EDGE_TYPE_PROMPT_REVIEW_TO_PROMPT = 'prompt-review-to-prompt';
-/** Edge type for dataset → process (run a user-written function over each row, no LLM). */
-const EDGE_TYPE_DATASET_TO_PROCESS = 'dataset-to-process';
-/** Edge type for process → dataset (exporting Process results creates a connected dataset). */
-const EDGE_TYPE_PROCESS_TO_DATASET = 'process-to-dataset';
-const EDGE_TYPE_RUN_TO_DATASET_SNAPSHOT = 'run-to-dataset-snapshot';
-const EDGE_TYPE_PROCESS_TO_DATASET_SNAPSHOT = 'process-to-dataset-snapshot';
+/** Drawn from a saved Dataset's `savedFrom` (savedDatasets.js), never stored. */
+const EDGE_TYPE_SAVED_FROM = 'saved-from';
 
 const DEFAULT_SCORE_MATCH_FLAGS = {
   semanticAlign: false,
@@ -308,10 +316,13 @@ function evaluateScoreNode(node, runRowIndex, gtRowIndex, resultsByIndex, runWs,
   return false;
 }
 
-/** Build comparison rows for Review API: same logic as score detail (getRunValue, getGtValue, computeMatchPerRow). */
-async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, promptSections = []) {
+/**
+ * Build comparison rows for Review API: same logic as score detail (getRunValue, getGtValue, computeMatchPerRow).
+ * `runInput` is the table the Run read (stepInputs.js); `datasetContentByNodeId` supplies the ground truth.
+ */
+async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, promptSections = [], runInput = null) {
   if ((scoreNode?.dataset?.scoreActiveMatchMode || 'rules') === 'code') {
-    return buildReviewComparisonRowsFromCodeMatch(scoreNode, runNode, datasetContentByNodeId, promptSections);
+    return buildReviewComparisonRowsFromCodeMatch(scoreNode, runNode, datasetContentByNodeId, promptSections, runInput);
   }
   const toCompareStr = (v) => {
     if (v === null || v === undefined) return '';
@@ -402,8 +413,7 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
     outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
   } catch (_) {}
   const gtId = (scoreNode.dataset.scoreGroundTruthId || '').trim();
-  const runWsId = (runNode.dataset.runWorkingSetId || '').trim();
-  const runWs = runWsId ? datasetContentByNodeId.get(runWsId) : null;
+  const runWs = runInput;
   const gtContent = gtId ? datasetContentByNodeId.get(gtId) : null;
   const runWsSafe = runWs ? { headers: runWs.headers || [], rows: runWs.rows || [] } : { headers: [], rows: [] };
   const gtSafe = gtContent ? { headers: gtContent.headers || [], rows: gtContent.rows || [] } : { headers: [], rows: [] };
@@ -781,7 +791,7 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
  * instead of re-deriving pairing from rule trees. Row numbering matches the modal's own Results table
  * via buildCodeMatchRunToGt + the same descriptor helpers rule mode uses.
  */
-async function buildReviewComparisonRowsFromCodeMatch(scoreNode, runNode, datasetContentByNodeId, promptSections = []) {
+async function buildReviewComparisonRowsFromCodeMatch(scoreNode, runNode, datasetContentByNodeId, promptSections = [], runInput = null) {
   let lastResult = null;
   try {
     lastResult = JSON.parse(scoreNode.dataset.scoreMatchResult || 'null');
@@ -794,8 +804,7 @@ async function buildReviewComparisonRowsFromCodeMatch(scoreNode, runNode, datase
   const resultsByIndex = new Map();
   (results || []).forEach((r) => { if (r) resultsByIndex.set(r.row_index, r); });
 
-  const runWsId = (runNode.dataset.runWorkingSetId || '').trim();
-  const runWs = runWsId ? datasetContentByNodeId.get(runWsId) : null;
+  const runWs = runInput;
   const runWsSafe = runWs ? { headers: runWs.headers || [], rows: runWs.rows || [] } : { headers: [], rows: [] };
 
   let runInputToColumn = {};
@@ -952,7 +961,6 @@ function runRawToFakeRunNode(runRaw) {
     dataset: {
       runResults: runRaw?.runResults || '[]',
       runOutputFields: runRaw?.runOutputFields || '[]',
-      runWorkingSetId: canvasNormalizeNodeId(runRaw?.runWorkingSetId),
       runInputToColumn: ricStr,
     },
   };
@@ -983,7 +991,7 @@ function resolveLiveScoreComparisonContext(canvasState, scoreRaw) {
   if (!promptRaw || promptRaw.type !== 'prompt') return null;
 
   const gtId = canvasNormalizeNodeId(scoreRaw.scoreGroundTruthId);
-  const wsId = canvasNormalizeNodeId(runRaw.runWorkingSetId);
+  const wsId = runInputSource(canvasState, runId)?.nodeId || '';
   if (!gtId || !wsId) return null;
 
   const datasetMap = buildDatasetContentMapFromCanvasNodes(nodes);
@@ -995,6 +1003,7 @@ function resolveLiveScoreComparisonContext(canvasState, scoreRaw) {
   return {
     scoreEl: scoreRawToFakeScoreNode(scoreRaw),
     runEl: runRawToFakeRunNode(runRaw),
+    runInput: datasetMap.get(wsId),
     datasetMap,
     promptSections,
   };
@@ -1005,7 +1014,7 @@ const EDGE_HIT_STROKE_WIDTH = 16;
 
 /** Horizontal gap when placing a new node to the right of its parent (source → sampler, sampler → dataset, duplicate prompt). */
 const NEW_NODE_OFFSET = 40;
-/** Step between nodes stacked on one spot (a Pipeline copy over its Dataset, a second save of one output). */
+/** Step between nodes placed on one spot (a second save of one output). */
 const STACK_OFFSET = 24;
 
 function generateNodeId() {
@@ -1038,36 +1047,6 @@ export function buildWorkflowCanvas(root, options = {}) {
   edgesLayer.setAttribute('width', '100%');
   edgesLayer.setAttribute('height', '100%');
   edgesLayer.setAttribute('preserveAspectRatio', 'none');
-  const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-  const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
-  marker.setAttribute('id', 'workflow-arrow');
-  marker.setAttribute('markerUnits', 'userSpaceOnUse');
-  marker.setAttribute('markerWidth', '12');
-  marker.setAttribute('markerHeight', '10');
-  marker.setAttribute('refX', '11');
-  marker.setAttribute('refY', '5');
-  marker.setAttribute('orient', 'auto');
-  const arrowPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  arrowPath.setAttribute('d', 'M0,0 L12,5 L0,10 Z');
-  arrowPath.setAttribute('fill', 'currentColor');
-  marker.appendChild(arrowPath);
-  defs.appendChild(marker);
-
-  const markerHover = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
-  markerHover.setAttribute('id', 'workflow-arrow-hover');
-  markerHover.setAttribute('markerUnits', 'userSpaceOnUse');
-  markerHover.setAttribute('markerWidth', '14');
-  markerHover.setAttribute('markerHeight', '11');
-  markerHover.setAttribute('refX', '13');
-  markerHover.setAttribute('refY', '5.5');
-  markerHover.setAttribute('orient', 'auto');
-  const arrowPathHover = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  arrowPathHover.setAttribute('d', 'M0,0 L14,5.5 L0,11 Z');
-  arrowPathHover.setAttribute('fill', 'currentColor');
-  markerHover.appendChild(arrowPathHover);
-  defs.appendChild(markerHover);
-
-  edgesLayer.appendChild(defs);
 
   const nodesLayer = document.createElement('div');
   nodesLayer.className = 'workflow-canvas__nodes';
@@ -1201,10 +1180,161 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   /** @type {Set<string>} Multi-selected node ids — Ctrl/Shift+click or marquee-select (see startMarqueeSelect). */
   let selectedNodeIds = new Set();
+  /** The ports each node was last drawn with (refreshNodePorts), so unchanged nodes are left alone. */
+  const drawnPorts = new WeakMap();
+  /** The node under the pointer; its lines are highlighted like those of selected nodes. */
+  let hoveredNodeId = '';
 
   function applySelectionVisuals() {
     nodesLayer.querySelectorAll('.workflow-node').forEach((node) => {
       node.classList.toggle('workflow-node--selected', selectedNodeIds.has(node.dataset.nodeId));
+    });
+    syncActiveEdges();
+  }
+
+  /** Highlights the lines of the selected nodes and of the node under the pointer. */
+  function syncActiveEdges() {
+    const active = new Set(selectedNodeIds);
+    if (hoveredNodeId) active.add(hoveredNodeId);
+    edgesLayer.querySelectorAll('.workflow-edge').forEach((group) => {
+      const touches = active.has(group.getAttribute('data-from-id')) || active.has(group.getAttribute('data-to-id'));
+      group.classList.toggle('workflow-edge--active', touches);
+    });
+  }
+
+  nodesLayer.addEventListener('pointerover', (e) => {
+    const node = e.target.closest?.('.workflow-node');
+    const id = node?.dataset.nodeId || '';
+    if (id !== hoveredNodeId) {
+      hoveredNodeId = id;
+      syncActiveEdges();
+    }
+    // A port's hover text says what it reads or gives now, so it is written when the pointer arrives.
+    if (node && e.target.closest('.workflow-node__port, .workflow-node__port-row')) {
+      const state = liveInputState();
+      const ports = nodePorts(state, id);
+      if (ports) applyPortTitles(node, portTitles(state, id, ports));
+    }
+  });
+  nodesLayer.addEventListener('pointerout', (e) => {
+    const id = e.relatedTarget?.closest?.('.workflow-node')?.dataset.nodeId || '';
+    if (id !== hoveredNodeId) {
+      hoveredNodeId = id;
+      syncActiveEdges();
+    }
+  });
+
+  /** A point in the viewport as unscaled canvas coordinates. */
+  function clientToCanvasPoint(clientX, clientY) {
+    const rect = scrollWrapper.getBoundingClientRect();
+    return {
+      x: (clientX - rect.left + scrollWrapper.scrollLeft) / zoomLevel,
+      y: (clientY - rect.top + scrollWrapper.scrollTop) / zoomLevel,
+    };
+  }
+
+  /** The live canvas as the port rules read it (nodePorts.js): with History on, a Run's inputs stay open. */
+  function portState() {
+    return { ...liveInputState(), historyVersion: historySession?.projectId && canvasHistoryVersion === 1 ? 1 : undefined };
+  }
+
+  /** A Prompt's input names, for the mapping a Run keeps when it gets another Prompt. */
+  function promptInputNames(prompt) {
+    return extractInputFieldsFromSections(getPromptDataFromNode(getNodeById(prompt?.nodeId))?.sections || []);
+  }
+
+  /** Where each node field a connection changes is kept on the node (nodePorts.js applyPortOp). */
+  const PORT_FIELD_ATTRIBUTES = {
+    runInputToColumn: 'runInputToColumn', scoreGroundTruthId: 'scoreGroundTruthId', scoreMapping: 'scoreMapping', dfCode: 'processDfCode',
+  };
+
+  /**
+   * Carries out ops from nodePorts.js on the live canvas, as one change: one undo step, one History
+   * sync. A new ground truth also tells the Score's listeners, as the Score window does.
+   */
+  function applyPortOps(ops) {
+    const state = portState();
+    let groundTruthChanged = false;
+    for (const op of ops.filter(Boolean)) {
+      for (const { nodeId, field, value } of applyPortOp(state, op, { promptInputs: promptInputNames })) {
+        const node = getNodeById(nodeId);
+        if (node && PORT_FIELD_ATTRIBUTES[field]) node.dataset[PORT_FIELD_ATTRIBUTES[field]] = value;
+      }
+      if (op.type === 'score-ground-truth') groundTruthChanged = true;
+    }
+    if (groundTruthChanged) document.dispatchEvent(new CustomEvent('workflow:score-ground-truth-changed'));
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+  }
+
+  let closeNodeContextMenu = null;
+  const portDrag = attachPortDrag({
+    canvas, nodesLayer, edgesLayer, scrollWrapper,
+    getState: portState,
+    clientToCanvas: clientToCanvasPoint,
+    applyOps: applyPortOps,
+    showBranchMenu: (x, y, node, port) => showNodeContextMenu(x, y, node, { port }),
+    // A line from an output let go over empty canvas offers new nodes on it, made where it was let go.
+    showOutputMenu: (x, y, nodeId, port, onClose) => {
+      const node = getNodeById(nodeId);
+      return node ? showNodeContextMenu(x, y, node, { port, at: clientToCanvasPoint(x, y), onClose }) : null;
+    },
+    showInputMenu: (x, y, nodeId, inputPort, onClose) => {
+      const node = getNodeById(nodeId);
+      return node ? showNodeContextMenu(x, y, node, { inputPort, at: clientToCanvasPoint(x, y), onClose }) : null;
+    },
+    promptInputs: promptInputNames,
+    onLayoutChange: () => { updateContentSize(); updateEdges(); },
+  });
+
+  /** A line that can be disconnected offers that on right-click; one that cannot says why. */
+  edgesLayer.addEventListener('contextmenu', (e) => {
+    const group = e.target.closest?.('.workflow-edge--disconnectable');
+    if (!group) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const index = Number(group.getAttribute('data-edge-index'));
+    const edge = index >= 0
+      ? connections[index]
+      : { type: group.getAttribute('data-edge-type'), fromId: group.getAttribute('data-from-id'), toId: group.getAttribute('data-to-id') };
+    const state = portState();
+    const ends = edgeEndpoints(state, edge);
+    const result = ends && !ends.to.lineage ? checkDisconnect(state, ends.to) : null;
+    if (!result?.ok) {
+      if (result) portDrag.showTip(result.reason, e.clientX, e.clientY);
+      return;
+    }
+    showEdgeContextMenu(e.clientX, e.clientY, () => applyPortOps([result.op]));
+  });
+
+  function showEdgeContextMenu(clientX, clientY, onDisconnect) {
+    closeNodeContextMenu?.();
+    document.querySelector('.workflow-node-context-menu')?.remove();
+    const menu = document.createElement('div');
+    menu.className = 'workflow-node-context-menu';
+    menu.setAttribute('role', 'menu');
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'workflow-node-context-item';
+    item.setAttribute('role', 'menuitem');
+    item.textContent = 'Disconnect';
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      menu.remove();
+      onDisconnect();
+    });
+    menu.appendChild(item);
+    document.body.appendChild(menu);
+    const rect = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(clientX, window.innerWidth - rect.width - 8))}px`;
+    menu.style.top = `${Math.max(8, Math.min(clientY, window.innerHeight - rect.height - 8))}px`;
+    const close = () => {
+      menu.remove();
+      document.removeEventListener('click', close);
+      document.removeEventListener('contextmenu', close);
+    };
+    requestAnimationFrame(() => {
+      document.addEventListener('click', close, { once: true });
+      document.addEventListener('contextmenu', close, { once: true });
     });
   }
 
@@ -1264,29 +1394,6 @@ export function buildWorkflowCanvas(root, options = {}) {
   /** @type {Map<string, { headers: string[], rows: string[][] }>} nodeId -> dataset content (imported or sampled) */
   const datasetContentByNodeId = new DatasetContentMap();
 
-  function getProcessDatasets(processNode) {
-    const datasets = Array.from(nodesLayer.querySelectorAll('.workflow-node--dataset'))
-      .map((datasetNode) => {
-        const colorIndex = normalizeDatasetColorIndex(datasetNode.dataset.datasetColorIndex) ?? 0;
-        return {
-          nodeId: datasetNode.dataset.nodeId,
-          name: datasetNode.dataset.datasetName || 'Dataset',
-          color: datasetColorAt(colorIndex),
-          content: datasetContentByNodeId.get(datasetNode.dataset.nodeId),
-          missingResult: datasetNode.dataset.resultMissing === '1',
-        };
-      })
-      .filter((dataset) => dataset.content);
-    const incoming = connections.find((connection) => (
-      connection.toId === processNode?.dataset?.nodeId && connection.type === EDGE_TYPE_DATASET_TO_PROCESS
-    ));
-    const primaryDatasetId = datasets.some((dataset) => dataset.nodeId === processNode?.dataset?.processPrimaryDatasetId)
-      ? processNode.dataset.processPrimaryDatasetId
-      : (incoming?.fromId || '');
-    if (primaryDatasetId && processNode?.dataset) processNode.dataset.processPrimaryDatasetId = primaryDatasetId;
-    return { datasets, primaryDatasetId };
-  }
-
   /** Every image/PDF asset id any dataset node's asset cells currently reference — the "keep" set
    * for pruneUnusedImageAssets (see renderer.js): anything in the project's asset registry that
    * ISN'T in this set is safe to delete. */
@@ -1320,6 +1427,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   /** Pending Run jobs: nodeId -> runId. Poll backend and update Run node when done. */
   const pendingRuns = new Map();
   const pendingProcesses = new Set();
+  const pendingScoreMatches = new Set();
   const pendingRunHistoryRecords = new Map();
   async function persistRunHistoryProgress(nodeId, status, results, outputFields) {
     const record = pendingRunHistoryRecords.get(nodeId);
@@ -1379,26 +1487,17 @@ export function buildWorkflowCanvas(root, options = {}) {
     nodeCount += 1;
     return { left: x, top: y };
   }
-  /** Where a node made from `anchor` goes: just right of it, or over it for a copy of it. A spot
-   * another node already holds steps down-right, so stacked nodes stay visible. */
-  function positionFrom(anchor, { over = false } = {}) {
-    let left = (parseFloat(anchor.style.left) || 0) + (over ? STACK_OFFSET : (anchor.offsetWidth || 280) + NEW_NODE_OFFSET);
-    let top = (parseFloat(anchor.style.top) || 0) + (over ? STACK_OFFSET : 0);
+  /** Where a node made from `anchor` goes: just right of it. A spot another node already holds
+   * steps down-right, so stacked nodes stay visible. */
+  function positionFrom(anchor) {
+    let left = (parseFloat(anchor.style.left) || 0) + (anchor.offsetWidth || 280) + NEW_NODE_OFFSET;
+    let top = parseFloat(anchor.style.top) || 0;
     const taken = Array.from(nodesLayer.querySelectorAll('.workflow-node'), (node) => [parseFloat(node.style.left) || 0, parseFloat(node.style.top) || 0]);
     while (taken.some(([x, y]) => Math.abs(x - left) < STACK_OFFSET && Math.abs(y - top) < STACK_OFFSET)) {
       left += STACK_OFFSET;
       top += STACK_OFFSET;
     }
     return { left, top };
-  }
-  /** A Pipeline result goes over the Dataset it copies, else right of the step that made it
-   * (`output:<llm|process>:<node id>:<port>` names that step when the result has no Dataset). */
-  function pipelineResultPosition(logicalId, producerNodeId = '') {
-    const id = String(logicalId || '');
-    const dataset = id.startsWith('dataset:') ? getNodeById(id.slice('dataset:'.length)) : null;
-    if (dataset) return positionFrom(dataset, { over: true });
-    const producer = getNodeById(producerNodeId || id.match(/^output:(?:llm|process):([^:]+):/)?.[1] || '');
-    return producer ? positionFrom(producer) : {};
   }
   function registerPendingReview(nodeId, reviewId) {
     if (nodeId && reviewId) pendingReviews.set(nodeId, reviewId);
@@ -1455,8 +1554,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
   function scoreNodeIsReadyForScoring(scoreNode) {
     const gtId = (scoreNode?.dataset?.scoreGroundTruthId || '').trim();
-    return !!gtId && getNodeById(gtId)?.dataset?.resultMissing !== '1'
-      && (scoreNodeHasCompleteRules(scoreNode) || scoreNodeHasCodeMatchResult(scoreNode));
+    return !!gtId && (scoreNodeHasCompleteRules(scoreNode) || scoreNodeHasCodeMatchResult(scoreNode));
   }
   function syncScoreNodeProgressFromUpstreamRun(scoreNode) {
     if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) return;
@@ -1676,7 +1774,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (res.status !== 200) continue;
         processReviewEvents(reviewNodeId, events);
         if (data.error) {
-          alert(data.error || 'Review failed.');
+          alert(data.error || 'Optimize failed.');
         }
         if (data.status === 'done' || data.status === 'cancelled') {
           pendingReviews.delete(reviewNodeId);
@@ -1723,7 +1821,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         pendingReviews.delete(reviewNodeId);
         pendingReviewNodeIds.delete(reviewNodeId);
         document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
-        alert(ev.detail || 'Review failed.');
+        alert(ev.detail || 'Optimize failed.');
         return;
       }
       if (ev.type === 'plan') {
@@ -1889,13 +1987,267 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   function getOutgoingEdgesFromNode(nodeId) {
     if (!nodeId) return [];
-    return connections.filter((c) => c.fromId === nodeId);
+    // A Dataset read by a Run is reported as a Dataset selection (isDatasetPickedByRunOrScore), not as
+    // downstream; a Run or Process read by another step is downstream.
+    const fromDataset = getNodeById(nodeId)?.classList.contains('workflow-node--dataset');
+    return connections.filter((c) => c.fromId === nodeId
+      && !(fromDataset && c.type === DATA_EDGE && getNodeById(c.toId)?.classList.contains('workflow-node--run')));
+  }
+
+  /**
+   * The live canvas as the input layer reads it (stepInputs.js, stepOutputs.js; docs/design/
+   * DATA_FLOW_DESIGN.md §3.3, §3.7): each node's id, type and name, with the live `connections`
+   * array, which stepInputs.js edits in place. Contents and results are read from a node only when
+   * a function asks for them.
+   */
+  function liveInputState() {
+    const parsedAttr = (value, fallback) => { try { return JSON.parse(value || ''); } catch (_) { return fallback; } };
+    const nodes = Array.from(nodesLayer.querySelectorAll('.workflow-node'), (el) => {
+      const nodeId = el.dataset.nodeId || '';
+      if (el.classList.contains('workflow-node--dataset')) {
+        return {
+          nodeId, type: 'dataset', name: el.dataset.datasetName || el.dataset.subsetName || '',
+          get datasetContent() { return datasetContentByNodeId.get(nodeId); },
+          get savedFrom() { return el.dataset.savedFrom; },
+        };
+      }
+      if (el.classList.contains('workflow-node--process')) {
+        return {
+          nodeId, type: 'process', name: el.dataset.processName || 'Process',
+          processPending: pendingProcesses.has(nodeId), processResumable: el.dataset.processResumable === '1' || undefined,
+          dfCode: el.dataset.processDfCode || '', code: el.dataset.processCode || '',
+          historyRecordId: el.dataset.historyRecordId || undefined,
+          get processOutputPorts() { return el.dataset.processOutputPorts; },
+          get dfResults() { return el.dataset.processDfResults || el.dataset.processResults; },
+        };
+      }
+      if (el.classList.contains('workflow-node--run')) {
+        return {
+          nodeId, type: 'run', runName: el.dataset.runName || '',
+          runCompleted: el.dataset.runCompleted || undefined, runPending: pendingRuns.has(nodeId),
+          runInputToColumn: el.dataset.runInputToColumn || '',
+          runResumable: el.dataset.runResumable === '1' || undefined, historyRecordId: el.dataset.historyRecordId || undefined,
+          get runResults() { return el.dataset.runResults; },
+          get runInputContent() { return el.dataset.runInputContent; },
+        };
+      }
+      if (el.classList.contains('workflow-node--prompt')) {
+        return { nodeId, type: 'prompt', name: el.dataset.promptName || '', get outputFormat() { return parsedAttr(el.dataset.promptOutputFormat, []); } };
+      }
+      if (el.classList.contains('workflow-node--score')) {
+        return {
+          nodeId, type: 'score', scoreName: (el.querySelector('.workflow-node__title')?.textContent || '').trim(),
+          scoreGroundTruthId: el.dataset.scoreGroundTruthId || '', scoreMapping: el.dataset.scoreMapping || '',
+        };
+      }
+      if (el.classList.contains('workflow-node--sampler')) {
+        return { nodeId, type: 'sampler', name: el.dataset.samplerName || '', sourceNodeId: el.dataset.sourceNodeId || '' };
+      }
+      return { nodeId, type: el.dataset.nodeType || '', name: (el.querySelector('.workflow-node__title')?.textContent || '').trim() };
+    });
+    return { nodes, connections };
+  }
+  function readRunInputSource(runNode) {
+    return runNode ? runInputSource(liveInputState(), runNode.dataset.nodeId) : null;
+  }
+  function writeRunInputSource(runNode, source) {
+    if (runNode) setRunInputSource(liveInputState(), runNode.dataset.nodeId, source);
+  }
+  function readProcessPrimarySource(processNode) {
+    return processNode ? processPrimarySource(liveInputState(), processNode.dataset.nodeId) : null;
+  }
+  function writeProcessPrimarySource(processNode, source) {
+    setProcessPrimarySource(liveInputState(), processNode.dataset.nodeId, source);
+  }
+  function readProcessInputAliases(processNode) {
+    return processInputAliases(liveInputState(), processNode.dataset.nodeId);
+  }
+  function readProcessInputBindings(processNode, code, primaryId) {
+    return processInputBindings(liveInputState(), processNode.dataset.nodeId, { code, primaryId });
+  }
+  function writeProcessInputs(processNode, value) {
+    setProcessInputs(liveInputState(), processNode.dataset.nodeId, value);
+  }
+
+  /**
+   * What a Run reads (stepOutputs.js): `{ source, table, errorRowCount }`, or `{ source, waiting,
+   * message }` while its input has no complete result yet.
+   */
+  function readRunInput(runNode) {
+    const state = liveInputState();
+    const source = runNode ? runInputSource(state, runNode.dataset.nodeId) : null;
+    const output = stepOutputTable(state, source);
+    return output.waiting
+      ? { source, waiting: output.waiting, message: source ? stepInputWaitingMessage(state, source, output.waiting) : '' }
+      : { source, ...output };
+  }
+
+  /** The table a Run reads, or null when it has no input or its input has no result yet. */
+  function readRunInputTable(runNode) {
+    return readRunInput(runNode).table || null;
+  }
+
+  async function runScoreNode(nodeId, { signal, onProgress } = {}) {
+    const node = getNodeById(nodeId);
+    if (!node?.classList.contains('workflow-node--score')) throw new Error('Evaluate node was not found.');
+    if (pendingScoreMatches.has(nodeId) || node.dataset.scoreMatchUiRunning === '1') throw new Error('Evaluate matching is already running.');
+    if (node.dataset.scoreActiveMatchMode !== 'code') throw new Error('Rule-based Evaluate nodes compute automatically; this job runs custom match code.');
+    const runId = connections.find((edge) => edge.type === 'run-to-score' && edge.toId === nodeId)?.fromId;
+    const run = getNodeById(runId);
+    const runResultsRaw = run?.dataset.runResults || '[]';
+    const groundTruthId = node.dataset.scoreGroundTruthId;
+    const groundTruth = datasetContentByNodeId.get(node.dataset.scoreGroundTruthId);
+    let results = [];
+    let fields = [];
+    try { results = JSON.parse(runResultsRaw); } catch (_) {}
+    try { fields = JSON.parse(run?.dataset.runOutputFields || '[]'); } catch (_) {}
+    const code = String(node.dataset.scoreMatchCode || '');
+    if (!code.trim()) throw new Error('Evaluate has no custom match code.');
+    pendingScoreMatches.add(nodeId);
+    node.dataset.scoreMatchAgentRunning = '1';
+    node.dataset.scoreMatchInterrupted = '1';
+    delete node.dataset.scoreMatchError;
+    try {
+      const result = await runScoreCode({ code, results, outputFields: fields, input: readRunInputTable(run), groundTruth, signal,
+        onProgress: (completed, total) => {
+          const bar = getNodeById(nodeId)?.querySelector('.workflow-node__score-progress');
+          if (bar) bar.style.width = `${total ? Math.min(100, Math.round(completed * 100 / total)) : 0}%`;
+          onProgress?.(completed, total);
+        },
+      });
+      const live = getNodeById(nodeId);
+      if (!live) throw new Error('Evaluate was removed before matching finished.');
+      if (live.dataset.scoreActiveMatchMode !== 'code' || live.dataset.scoreMatchCode !== code || live.dataset.scoreGroundTruthId !== groundTruthId
+        || getNodeById(runId)?.dataset.runResults !== runResultsRaw) throw new Error('Evaluate inputs changed while matching; run matching again.');
+      live.dataset.scoreMatchResult = JSON.stringify(result);
+      delete live.dataset.scoreMatchError;
+      if (!result.wasCancelled) delete live.dataset.scoreMatchInterrupted;
+      return result;
+    } catch (error) {
+      if (error.name !== 'AbortError') node.dataset.scoreMatchError = error.message || String(error);
+      throw error;
+    } finally {
+      delete node.dataset.scoreMatchAgentRunning;
+      const live = getNodeById(nodeId);
+      if (live) delete live.dataset.scoreMatchAgentRunning;
+      pendingScoreMatches.delete(nodeId);
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      document.dispatchEvent(new CustomEvent('workflow:score-results-updated', { detail: { nodeId } }));
+    }
+  }
+
+  /**
+   * The table each input of a Process gives it to run with (processRequiredInputs plus
+   * stepOutputs.js). Throws the reason when an input has no complete result yet.
+   */
+  function readProcessExecutionInputs(processNode, code) {
+    const state = liveInputState();
+    // A parameter of the code with no input connected (an empty port, nodePorts.js) would fail in Python.
+    const unconnected = unconnectedProcessInputs(state, processNode.dataset.nodeId, code);
+    if (unconnected.length) throw new Error(unconnectedInputsMessage(unconnected));
+    return processRequiredInputs(state, processNode.dataset.nodeId, { code }).bindings.map((binding) => {
+      const output = stepOutputTable(state, binding);
+      if (output.waiting) throw new Error(stepInputWaitingMessage(state, binding, output.waiting));
+      return { ...binding, content: output.table };
+    });
+  }
+
+  /** Why a Process with empty input ports cannot run (nodePorts.js unconnectedProcessInputs). */
+  function unconnectedInputsMessage(aliases) {
+    const one = aliases.length === 1;
+    return `${aliases.join(', ')} ${one ? 'is' : 'are'} not connected. Drag an output onto ${one ? 'that port' : 'those ports'} on the canvas, or remove ${one ? 'the parameter' : 'the parameters'} from the code.`;
+  }
+
+  /** The sources a Run or Process reads now, on `state`. */
+  function stepNodeInputs(state, stepNode) {
+    const id = stepNode?.dataset?.nodeId || '';
+    if (stepNode?.classList.contains('workflow-node--run')) return [runInputSource(state, id)].filter(Boolean);
+    const code = resolveDataframeProcessCode({ dfCode: stepNode?.dataset?.processDfCode, code: stepNode?.dataset?.processCode });
+    return processRequiredInputs(state, id, { code }).bindings;
+  }
+
+  /**
+   * What a Run or Process window says about its inputs (docs/design/DATA_FLOW_DESIGN.md §3.7):
+   * `waiting`, why it cannot run yet (empty when it can), and a note for each upstream Run whose
+   * failed rows it reads.
+   */
+  function readStepInputStatus(stepNode) {
+    const state = liveInputState();
+    let waiting = '';
+    const notices = [];
+    for (const source of stepNodeInputs(state, stepNode)) {
+      const output = stepOutputTable(state, source);
+      if (output.waiting && !waiting) {
+        waiting = output.waiting === 'missing-port' || source.kind === 'dataset'
+          ? stepInputWaitingMessage(state, source, output.waiting)
+          : `Waiting for upstream results from "${stepSourceLabel(state, { ...source, port: RESULT_PORT })}".`;
+      }
+      const notice = source.kind === 'run' ? stepInputErrorNotice(state, source, output.errorRowCount) : '';
+      if (notice) notices.push(notice);
+    }
+    return { waiting, notices };
+  }
+
+  /** The color a source is shown with: a Dataset's own, or the border its step has now. */
+  function sourceColor(source) {
+    const node = getNodeById(source?.nodeId);
+    if (!node) return '';
+    if (source.kind === 'dataset') return datasetColorAt(normalizeDatasetColorIndex(node.dataset.datasetColorIndex) ?? 0);
+    return node.style.borderColor || '';
+  }
+
+  /** How a node's window names a source it reads: Run by its own title, other sources by stepSourceLabel. */
+  function describeSource(source) {
+    const runNode = source?.kind === 'run' ? getNodeById(source.nodeId) : null;
+    const label = runNode
+      ? (runNode.dataset.runName || runNode.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Run'
+      : stepSourceLabel(liveInputState(), source);
+    return { label, color: sourceColor(source) };
+  }
+
+  /**
+   * A Process's inputs as its window lists them: df and each parameter of `code` (the window's code,
+   * which may not be saved yet), with the source connected to each (nodePorts.js).
+   */
+  function readProcessInputRows(processNode, code) {
+    const state = liveInputState();
+    const nodeId = processNode.dataset.nodeId;
+    const live = state.nodes.find((item) => item.nodeId === nodeId);
+    if (live) live.dfCode = code;
+    return (nodePorts(state, nodeId)?.inputs || []).filter((input) => input.id !== ADD_INPUT_PORT).map((input) => ({
+      alias: input.id,
+      nodeId: input.source?.nodeId || '',
+      ...(input.source ? describeSource(input.source) : { label: '', color: '' }),
+    }));
+  }
+
+  /** Shows a node on the canvas: selects it and scrolls it into the middle (a window's link to a source). */
+  function revealNode(nodeId) {
+    const node = getNodeById(nodeId);
+    if (!node) return;
+    selectedNodeIds = new Set([nodeId]);
+    applySelectionVisuals();
+    const left = parseFloat(node.style.left) || 0;
+    const top = parseFloat(node.style.top) || 0;
+    scrollWrapper.scrollTo({
+      left: Math.max(0, (left + node.offsetWidth / 2) * zoomLevel - scrollWrapper.clientWidth / 2),
+      top: Math.max(0, (top + node.offsetHeight / 2) * zoomLevel - scrollWrapper.clientHeight / 2),
+      behavior: 'smooth',
+    });
+  }
+
+  /** The table `source` gives now (stepOutputs.js), or why it has none: `{ table }` or `{ waiting, message }`. */
+  function readSourceOutput(source) {
+    if (!source?.nodeId) return { waiting: 'no-result', message: '' };
+    const state = liveInputState();
+    const output = stepOutputTable(state, source);
+    return output.waiting ? { ...output, message: stepInputWaitingMessage(state, source, output.waiting) } : output;
   }
 
   function isDatasetPickedByRunOrScore(datasetNodeId) {
     if (!datasetNodeId) return false;
     const usedByRun = Array.from(nodesLayer.querySelectorAll('.workflow-node--run')).some(
-      (n) => (n.dataset.runWorkingSetId || '').trim() === datasetNodeId,
+      (n) => readRunInputSource(n)?.nodeId === datasetNodeId,
     );
     const usedByScore = Array.from(nodesLayer.querySelectorAll('.workflow-node--score')).some(
       (n) => (n.dataset.scoreGroundTruthId || '').trim() === datasetNodeId,
@@ -1933,7 +2285,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         );
       } else {
         showAlert(
-          'This dataset is selected by one or more Run or Score nodes. Clear the selection in those nodes before deleting.',
+          'This dataset is selected by one or more Run or Evaluate nodes. Clear the selection in those nodes before deleting.',
           { title: 'Cannot delete dataset' },
         );
       }
@@ -1977,7 +2329,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (outsideOutgoing.length > 0) return { blocked: true, reason: 'downstream' };
     if (kind === 'dataset') {
       const usedByRun = Array.from(nodesLayer.querySelectorAll('.workflow-node--run')).some(
-        (n) => (n.dataset.runWorkingSetId || '').trim() === nodeId && !batchIds.has(n.dataset.nodeId),
+        (n) => readRunInputSource(n)?.nodeId === nodeId && !batchIds.has(n.dataset.nodeId),
       );
       const usedByScore = Array.from(nodesLayer.querySelectorAll('.workflow-node--score')).some(
         (n) => (n.dataset.scoreGroundTruthId || '').trim() === nodeId && !batchIds.has(n.dataset.nodeId),
@@ -2088,11 +2440,7 @@ export function buildWorkflowCanvas(root, options = {}) {
    */
   function hasSampledDatasets(samplerNodeId) {
     if (!samplerNodeId) return false;
-    const datasetNodes = nodesLayer.querySelectorAll('.workflow-node--dataset');
-    for (const n of datasetNodes) {
-      if ((n.dataset.samplerNodeId || '') === samplerNodeId) return true;
-    }
-    return false;
+    return sampledOutputsForSampler(samplerNodeId).length > 0;
   }
 
   function getNodeIndex(node) {
@@ -2105,73 +2453,42 @@ export function buildWorkflowCanvas(root, options = {}) {
     return isRunNameAlreadyUsedForPromptNodeId(nameToCheck, promptEdge.fromId, excludeRunNodeId);
   }
 
-  /**
-   * Parse row spec in order; duplicates and order are preserved (e.g. "1-2 1 2" → [0,1,0,1] → row1, row2, row1, row2).
-   * @param {string} text - e.g. "1 3 5-10 15"
-   * @param {number} totalRows - max row count (1-based), indices > totalRows are skipped
-   * @returns {number[]} 0-based indices in spec order
-   */
-  function parseRowSpec(text, totalRows) {
-    const indices = [];
-    const parts = (text || '').split(/[\s,]+/).filter(Boolean);
-    for (const part of parts) {
-      const dash = part.indexOf('-');
-      if (dash === -1) {
-        const num = parseInt(part, 10);
-        if (Number.isFinite(num) && num >= 1 && num <= totalRows) indices.push(num - 1);
-      } else {
-        const a = parseInt(part.slice(0, dash), 10);
-        const b = parseInt(part.slice(dash + 1), 10);
-        if (Number.isFinite(a) && Number.isFinite(b) && a >= 1 && b >= 1) {
-          const low = Math.min(a, b);
-          const high = Math.min(Math.max(a, b), totalRows);
-          for (let r = Math.max(1, low); r <= high; r++) indices.push(r - 1);
-        }
-      }
-    }
-    return indices;
-  }
-
-  /**
-   * Sample rows from source data per sampler settings.
-   * @param {string[][]} sourceRows
-   * @param {number} sampleSize - row count or percentage (1-100)
-   * @param {string} sampleSizeType - 'rows' | 'ratio'
-   * @param {string} samplingType - 'with-replacement' | 'without-replacement'
-   * @returns {string[][]}
-   */
-  function sampleRows(sourceRows, sampleSize, sampleSizeType, samplingType) {
-    const n = sourceRows.length;
-    if (n === 0) return [];
-    let count = sampleSizeType === 'rows' ? Math.max(0, Math.floor(sampleSize)) : Math.max(0, Math.floor((n * sampleSize) / 100));
-    count = Math.min(count, n);
-    if (count === 0) return [];
-
-    if (samplingType === 'without-replacement') {
-      if (count >= n) return sourceRows.map((r) => r.slice());
-      const indices = Array.from({ length: n }, (_, i) => i);
-      for (let i = n - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [indices[i], indices[j]] = [indices[j], indices[i]];
-      }
-      const selected = indices.slice(0, count).sort((a, b) => a - b);
-      return selected.map((i) => sourceRows[i].slice());
-    }
-
-    const picked = [];
-    for (let k = 0; k < count; k++) {
-      picked.push(Math.floor(Math.random() * n));
-    }
-    picked.sort((a, b) => a - b);
-    return picked.map((i) => sourceRows[i].slice());
-  }
-
-  function countSampledDatasetsForSampler(samplerNodeId) {
-    let count = 0;
+  function sampledOutputsForSampler(samplerNodeId) {
+    const outputs = [];
     nodesLayer.querySelectorAll('.workflow-node--dataset').forEach((dsNode) => {
-      if ((dsNode.dataset.samplerNodeId || '') === samplerNodeId) count += 1;
+      if ((dsNode.dataset.samplerNodeId || '') !== samplerNodeId) return;
+      // Dataset versions keep their Sampler origin for provenance, but are not new pulls.
+      if (!connections.some((edge) => edge.type === EDGE_TYPE_SAMPLER_TO_DATASET
+        && edge.fromId === samplerNodeId && edge.toId === dsNode.dataset.nodeId)) return;
+      const content = datasetContentByNodeId.get(dsNode.dataset.nodeId);
+      let sourceRowIds;
+      try {
+        if (dsNode.dataset.sampledSourceRowIds) sourceRowIds = JSON.parse(dsNode.dataset.sampledSourceRowIds);
+      } catch (_) {}
+      outputs.push({ rows: content?.rows || [], sourceRowIds });
     });
-    return count;
+    return outputs;
+  }
+
+  function updateSamplerProgress(samplerNode) {
+    const progress = samplerNode.querySelector('.workflow-node__sample-progress');
+    if (!progress) return;
+    if (samplerNode.dataset.samplerSamplingType !== 'without-replacement') {
+      progress.hidden = true;
+      return;
+    }
+    const source = datasetContentByNodeId.get(samplerNode.dataset.sourceNodeId);
+    const quota = samplerQuota(source, sampledOutputsForSampler(samplerNode.dataset.nodeId),
+      samplerNode.dataset.samplerSampleSizeType || 'ratio', Number(samplerNode.dataset.samplerSampleSize || 100));
+    const visible = !!source?.rows?.length && quota.total > 0;
+    progress.hidden = !visible;
+    if (!visible) return;
+    const completed = Math.min(quota.completed, quota.total);
+    const value = Math.round(completed * 100 / quota.total);
+    progress.style.width = `${value}%`;
+    progress.setAttribute('aria-valuenow', String(completed));
+    progress.setAttribute('aria-valuemax', String(quota.total));
+    progress.setAttribute('aria-valuetext', `${completed} of ${quota.total} samples created`);
   }
 
   function prepareSampledDatasetFromSampler({
@@ -2190,8 +2507,6 @@ export function buildWorkflowCanvas(root, options = {}) {
       throw new Error('Sampler node was not found.');
     }
 
-    const existingCount = countSampledDatasetsForSampler(normalizedSamplerNodeId);
-
     const sourceNodeId = samplerNode.dataset.sourceNodeId;
     const sourceContent = sourceNodeId ? datasetContentByNodeId.get(sourceNodeId) : null;
     if (!sourceContent?.headers?.length || !Array.isArray(sourceContent.rows)) {
@@ -2200,48 +2515,28 @@ export function buildWorkflowCanvas(root, options = {}) {
 
     const samplingType = samplerNode.dataset.samplerSamplingType || 'without-replacement';
     const datasetHeaders = sourceContent.headers.slice();
-    let datasetRows = [];
-    if (samplingType === 'specify-rows') {
-      const rowSpec = (samplerNode.dataset.samplerRowSpec || '').trim();
-      const totalRows = sourceContent.rows.length;
-      const indices = parseRowSpec(rowSpec, totalRows);
-      datasetRows = indices.map((i) => sourceContent.rows[i].slice());
-    } else {
-      const sampleSize = parseInt(samplerNode.dataset.samplerSampleSize, 10) || 100;
-      const sampleSizeType = samplerNode.dataset.samplerSampleSizeType || 'ratio';
-      const totalRows = sourceContent.rows.length;
-      const requestedCount = sampleSizeType === 'rows'
-        ? Math.max(0, Math.floor(sampleSize))
-        : Math.max(0, Math.floor((totalRows * sampleSize) / 100));
-      if (samplingType === 'without-replacement' && requestedCount > 0) {
-        let alreadyUsed = 0;
-        nodesLayer.querySelectorAll('.workflow-node--dataset').forEach((dsNode) => {
-          if ((dsNode.dataset.samplerNodeId || '') === normalizedSamplerNodeId) {
-            const content = datasetContentByNodeId.get(dsNode.dataset.nodeId);
-            if (content?.rows?.length) alreadyUsed += content.rows.length;
-          }
-        });
-        const remaining = totalRows - alreadyUsed;
-        if (remaining < requestedCount) {
-          throw new Error('Not enough remaining data to create a new dataset when sampling without replacement.');
-        }
-      }
-      datasetRows = sampleRows(sourceContent.rows, sampleSize, sampleSizeType, samplingType);
-    }
+    const indices = sampleSourceIndices(sourceContent, sampledOutputsForSampler(normalizedSamplerNodeId), {
+      samplingType,
+      rowSpec: samplerNode.dataset.samplerRowSpec || '',
+      sampleSizeType: samplerNode.dataset.samplerSampleSizeType || 'ratio',
+      sampleSize: Number(samplerNode.dataset.samplerSampleSize || 100),
+    });
+    const datasetRows = indices.map((index) => sourceContent.rows[index].map(cloneCell));
+    const sampledSourceRowIds = samplingType === 'without-replacement'
+      ? indices.map((index) => sourceContent.rowIds[index]) : undefined;
 
+    const position = positionFrom(samplerNode);
     return {
       sourceNodeId: String(sourceNodeId || '').trim(),
-      existingCount,
       datasetHeaders,
       datasetRows,
       datasetColumnTypes: sourceContent.columnTypes?.slice(),
       datasetRowIds: datasetRows.map(() => crypto.randomUUID()),
+      sampledSourceRowIds,
       datasetName: (name && name.trim()) ? name.trim() : findNextWorkingDatasetName(normalizedSamplerNodeId),
       datasetNotes: notes || formatSamplerDescription(samplerNode),
-      startLeft: typeof left === 'number'
-        ? left
-        : (parseFloat(samplerNode.style.left) || 0) + (samplerNode.offsetWidth || 280) + NEW_NODE_OFFSET,
-      startTop: typeof top === 'number' ? top : (parseFloat(samplerNode.style.top) || 0),
+      startLeft: typeof left === 'number' ? left : position.left,
+      startTop: typeof top === 'number' ? top : position.top,
     };
   }
 
@@ -2356,84 +2651,16 @@ export function buildWorkflowCanvas(root, options = {}) {
     return shape;
   }
 
-  /** Datasets that are the live output of the producer's current History record: solid line.
-   * Other outputs of that Run/Process are older (or extra) snapshots: dashed. */
-  function liveHistoryOutputIds() {
-    const groups = new Map();
-    nodesLayer.querySelectorAll('.workflow-node--dataset').forEach((node) => {
-      const id = node.dataset.nodeId;
-      const runId = String(node.dataset.sourceRunNodeId || '').trim();
-      let producerId = runId;
-      let branch = 'result';
-      if (!producerId) {
-        const edge = connections.find((item) => item.toId === id && [
-          EDGE_TYPE_RUN_TO_DATASET_SNAPSHOT, EDGE_TYPE_PROCESS_TO_DATASET, EDGE_TYPE_PROCESS_TO_DATASET_SNAPSHOT,
-        ].includes(item.type));
-        if (!edge) return;
-        producerId = edge.fromId;
-        if (edge.type !== EDGE_TYPE_RUN_TO_DATASET_SNAPSHOT) {
-          branch = String(node.dataset.processOutputName || 'result');
-        }
-      }
-      const key = `${producerId}\0${branch}`;
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(node);
-    });
-    const live = new Set();
-    const usedAsInput = (id) => (
-      [...nodesLayer.querySelectorAll('.workflow-node--run')].some((run) => run.dataset.runWorkingSetId === id)
-      || connections.some((edge) => edge.type === EDGE_TYPE_DATASET_TO_PROCESS && edge.fromId === id)
-    );
-    for (const [key, group] of groups) {
-      const producerId = key.slice(0, key.indexOf('\0'));
-      const currentId = String(getNodeById(producerId)?.dataset.historyRecordId || '');
-      const matching = group.filter((node) => {
-        const snap = String(node.dataset.snapshotSourceRecordId || '');
-        if (snap) return snap === currentId;
-        return node.dataset.savedCopy !== '1';
-      });
-      const active = matching.find((node) => usedAsInput(node.dataset.nodeId))
-        || matching.find((node) => node.dataset.savedCopy !== '1')
-        || matching.at(-1);
-      if (active) live.add(active.dataset.nodeId);
-    }
-    return live;
-  }
-
-  function isHistorySnapshotEdge(edge, toNode, liveIds) {
-    const producerTypes = new Set([
-      EDGE_TYPE_RUN_TO_DATASET, EDGE_TYPE_RUN_TO_DATASET_SNAPSHOT,
-      EDGE_TYPE_PROCESS_TO_DATASET, EDGE_TYPE_PROCESS_TO_DATASET_SNAPSHOT,
-    ]);
-    if (!producerTypes.has(edge.type) || !toNode?.classList.contains('workflow-node--dataset')) return false;
-    return !liveIds.has(toNode.dataset.nodeId);
-  }
-
-  function renderEdge(g, edge, edgeIndex, nodeBoxes, liveIds) {
+  function renderEdge(g, edge, edgeIndex, nodeBoxes, state) {
     const fromNode = getNodeById(edge.fromId);
     const toNode = getNodeById(edge.toId);
     if (!fromNode || !toNode) return;
 
-    const x1 = parseFloat(fromNode.style.left) || 0;
-    const y1 = parseFloat(fromNode.style.top) || 0;
-    const w1 = fromNode.offsetWidth || 0;
-    const h1 = fromNode.offsetHeight || 0;
-    const x2 = parseFloat(toNode.style.left) || 0;
-    const y2 = parseFloat(toNode.style.top) || 0;
-    const isRunNode = toNode.classList.contains('workflow-node--run');
-    const isScoreNode = toNode.classList.contains('workflow-node--score');
-    const isPromptReviewNode = toNode.classList.contains('workflow-node--prompt-review');
-    const isRunOrScore = isRunNode || isScoreNode || isPromptReviewNode;
-    const h2 = isRunOrScore ? (toNode.offsetHeight || RUN_NODE_FALLBACK_HEIGHT) : (toNode.offsetHeight || 0);
-
-    const startX = x1 + w1;
-    const startY = y1 + h1 / 2;
-    const endX = x2;
-    const toHeight = edge.type === EDGE_TYPE_PROMPT_TO_PROMPT
-      ? h2
-      : (isRunOrScore ? RUN_NODE_FALLBACK_HEIGHT : h2);
-    const endY = y2 + (toHeight > 0 ? toHeight / 2 : RUN_NODE_FALLBACK_HEIGHT / 2);
-    const geometry = getEdgeGeometry(startX, startY, endX, endY, fromNode, toNode, nodeBoxes);
+    // A line joins the dots of the ports it connects (nodePorts.js, workflowNodePorts.js).
+    const ends = edgeEndpoints(state, edge);
+    const start = portPoint(fromNode, ends?.from, 'right');
+    const end = portPoint(toNode, ends?.to, 'left');
+    const geometry = getEdgeGeometry(start.x, start.y, end.x, end.y, fromNode, toNode, nodeBoxes);
     const isDatasetVersionEdge = edge.type === EDGE_TYPE_DATASET_TO_DATASET;
     const canCompare = !edge.derived && (
       edge.type === EDGE_TYPE_PROMPT_TO_PROMPT || edge.type === EDGE_TYPE_PROMPT_REVIEW_TO_PROMPT || isDatasetVersionEdge
@@ -2443,7 +2670,20 @@ export function buildWorkflowCanvas(root, options = {}) {
     edgeGroup.setAttribute('class', canCompare ? 'workflow-edge workflow-edge--compare' : 'workflow-edge');
     edgeGroup.setAttribute('data-edge-type', edge.type || '');
     edgeGroup.setAttribute('data-edge-index', String(edgeIndex));
+    edgeGroup.setAttribute('data-from-id', String(edge.fromId));
+    edgeGroup.setAttribute('data-to-id', String(edge.toId));
+    if (ends && !ends.to.lineage) edgeGroup.setAttribute('data-to-port', ends.to.portId);
+    // An input that can be changed by dragging can also be disconnected from its line (step 3).
+    const disconnectable = !!ends && !ends.to.lineage && DISCONNECTABLE_EDGE_TYPES.has(edge.type);
+    if (disconnectable) edgeGroup.classList.add('workflow-edge--disconnectable');
     g.appendChild(edgeGroup);
+
+    // Every line has the same generous hover target, including fixed inputs and lineage lines.
+    const hitLine = createEdgeShape(geometry);
+    hitLine.setAttribute('stroke', 'transparent');
+    hitLine.setAttribute('stroke-width', String(EDGE_HIT_STROKE_WIDTH));
+    hitLine.setAttribute('class', 'workflow-edge-hit');
+    edgeGroup.appendChild(hitLine);
 
     if (canCompare) {
       edgeGroup.setAttribute('role', 'button');
@@ -2452,33 +2692,38 @@ export function buildWorkflowCanvas(root, options = {}) {
       const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
       title.textContent = compareLabel;
       edgeGroup.appendChild(title);
-      const hitLine = createEdgeShape(geometry);
-      hitLine.setAttribute('stroke', 'transparent');
-      hitLine.setAttribute('stroke-width', String(EDGE_HIT_STROKE_WIDTH));
-      hitLine.setAttribute('class', 'workflow-edge-hit');
-      edgeGroup.appendChild(hitLine);
     }
 
     const line = createEdgeShape(geometry);
     line.setAttribute('class', 'workflow-edge-line');
     line.setAttribute('stroke', 'var(--text-muted)');
     line.setAttribute('stroke-width', '2');
-    if (isHistorySnapshotEdge(edge, toNode, liveIds)) {
-      line.setAttribute('stroke-dasharray', '5 4');
-      const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-      title.textContent = 'Saved Dataset snapshot; its content does not follow upstream History.';
-      edgeGroup.appendChild(title);
-    }
-    line.setAttribute('marker-end', 'url(#workflow-arrow)');
     line.setAttribute('pointer-events', 'none');
+    if (edge.type === EDGE_TYPE_SAVED_FROM) {
+      // Where the Dataset came from (DATA_FLOW_DESIGN.md §5.1), using its provenance ports.
+      line.classList.add('workflow-edge--saved-from');
+      line.setAttribute('aria-label', edge.label);
+      const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+      title.textContent = edge.label;
+      edgeGroup.appendChild(title);
+      edgeGroup.appendChild(line);
+      return;
+    }
     if (edge.derived) {
       line.classList.add('workflow-edge--derived');
       line.setAttribute('data-derived', 'true');
-      line.setAttribute('aria-label', edge.type === EDGE_TYPE_DATASET_TO_RUN
-        ? 'Selected input dataset'
-        : edge.type === EDGE_TYPE_GROUND_TRUTH_TO_SCORE
-          ? 'Selected ground truth dataset'
-          : 'Dataset saved from Run results');
+      line.setAttribute('aria-label', 'Selected ground truth dataset');
+    } else if (edge.type === DATA_EDGE) {
+      const missing = missingBranch(edge, fromNode);
+      line.setAttribute('aria-label', missing ? `Branch "${edge.fromPort}" is not returned by this Process` : 'Selected input');
+      if (missing) {
+        // The branch is gone (design §3.4): the line stays, red, and its reader cannot run.
+        line.setAttribute('stroke', 'var(--status-danger)');
+        line.classList.add('workflow-edge--missing-branch');
+        const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+        title.textContent = `Branch "${edge.fromPort}" is not returned by this Process`;
+        edgeGroup.appendChild(title);
+      }
     }
     edgeGroup.appendChild(line);
 
@@ -2497,32 +2742,53 @@ export function buildWorkflowCanvas(root, options = {}) {
     }
   }
 
-  /** Build read-only data-flow edges from fields that already drive execution and provenance. */
+  /** Lines into inputs that dragging can change; right-clicking one offers Disconnect when its rules allow it. */
+  const DISCONNECTABLE_EDGE_TYPES = new Set([DATA_EDGE, 'prompt-to-run', EDGE_TYPE_GROUND_TRUTH_TO_SCORE]);
+
+  /**
+   * Where a line meets `node`: the centre of the dot for `end` (nodePorts.js edgeEndpoints), or the
+   * middle of the header's edge when the node has no such dot (a branch the Process no longer returns).
+   */
+  function portPoint(node, end, side) {
+    const left = parseFloat(node.style.left) || 0;
+    const top = parseFloat(node.style.top) || 0;
+    const dot = findPortDot(node, end, side);
+    if (dot) {
+      const center = centerWithin(dot, node);
+      return { x: left + center.x, y: top + center.y };
+    }
+    const headerHeight = node.querySelector('.workflow-node__header')?.offsetHeight || RUN_NODE_FALLBACK_HEIGHT;
+    return { x: left + (side === 'right' ? node.offsetWidth : 0), y: top + headerHeight / 2 };
+  }
+
+  /** Whether a data connection reads a branch its Process is known not to return. */
+  function missingBranch(edge, fromNode) {
+    if (!fromNode?.classList.contains('workflow-node--process')) return false;
+    const outputs = effectiveProcessOutputs({
+      detected: fromNode.dataset.processOutputPorts,
+      dfResults: fromNode.dataset.processDfResults || fromNode.dataset.processResults,
+    });
+    return outputs.source !== 'none' && !outputs.dynamic && !outputs.ports.includes(edge.fromPort || RESULT_PORT);
+  }
+
+  /** Build read-only edges from node fields: a selected ground truth, and where a saved Dataset came from. */
   function getDerivedDataFlowEdges() {
     const derived = [];
     const seen = new Set(connections.map((edge) => `${edge.type}:${edge.fromId}:${edge.toId}`));
-    const add = (fromId, toId, type) => {
+    const add = (fromId, toId, type, extra = {}) => {
       if (!fromId || !toId || !getNodeById(fromId) || !getNodeById(toId)) return;
       const key = `${type}:${fromId}:${toId}`;
       if (seen.has(key)) return;
       seen.add(key);
-      derived.push({ fromId, toId, type, derived: true });
+      derived.push({ fromId, toId, type, derived: true, ...extra });
     };
 
-    nodesLayer.querySelectorAll('.workflow-node--run').forEach((runNode) => {
-      add(
-        String(runNode.dataset.runWorkingSetId || '').trim(),
-        String(runNode.dataset.nodeId || '').trim(),
-        EDGE_TYPE_DATASET_TO_RUN,
-      );
-    });
+    let state = null;
     nodesLayer.querySelectorAll('.workflow-node--dataset').forEach((datasetNode) => {
-      const fromId = String(datasetNode.dataset.sourceRunNodeId || '').trim();
-      const toId = String(datasetNode.dataset.nodeId || '').trim();
-      if (connections.some((edge) => edge.fromId === fromId && edge.toId === toId && edge.type === EDGE_TYPE_RUN_TO_DATASET_SNAPSHOT)) {
-        return;
-      }
-      add(fromId, toId, EDGE_TYPE_RUN_TO_DATASET);
+      const savedFrom = readSavedFrom(datasetNode.dataset.savedFrom);
+      if (!savedFrom?.nodeId || !getNodeById(savedFrom.nodeId)) return;
+      state ??= liveInputState();
+      add(savedFrom.nodeId, datasetNode.dataset.nodeId, EDGE_TYPE_SAVED_FROM, { label: savedFromLabel(state, savedFrom) });
     });
     nodesLayer.querySelectorAll('.workflow-node--score').forEach((scoreNode) => {
       add(
@@ -2532,15 +2798,6 @@ export function buildWorkflowCanvas(root, options = {}) {
       );
     });
     return derived;
-  }
-
-  /** Whether a Run / Process reads this Dataset now. */
-  function stepReadsDataset(step, datasetId) {
-    return step?.classList.contains('workflow-node--run')
-      ? step.dataset.runWorkingSetId === datasetId
-      : connections.some((edge) => (
-        edge.type === EDGE_TYPE_DATASET_TO_PROCESS && edge.fromId === datasetId && edge.toId === step?.dataset.nodeId
-      ));
   }
 
   function syncNodeDependencyColors() {
@@ -2564,22 +2821,44 @@ export function buildWorkflowCanvas(root, options = {}) {
         : '';
       const { borderColor, dataColor } = dependentNodeVisualColors(dataColors, promptColor);
       node.style.borderColor = borderColor;
-      const progressBar = node.querySelector('.workflow-node__run-progress, .workflow-node__score-progress, .workflow-node__review-progress, .workflow-node__process-progress');
+      const progressBar = node.querySelector('.workflow-node__run-progress, .workflow-node__sample-progress, .workflow-node__score-progress, .workflow-node__review-progress, .workflow-node__process-progress');
       if (progressBar) progressBar.style.background = dataColor || '';
     });
   }
 
+  /**
+   * Draws the ports (nodePorts.js) of every node whose ports changed: what it reads, its outputs and
+   * branches, its lineage dots. Returns whether any node was redrawn, which can change its height.
+   */
+  function refreshNodePorts() {
+    const state = liveInputState();
+    let changed = false;
+    nodesLayer.querySelectorAll('.workflow-node').forEach((node) => {
+      const ports = nodePorts(state, node.dataset.nodeId);
+      if (!ports) return;
+      const key = JSON.stringify(ports);
+      if (drawnPorts.get(node) === key) return;
+      drawnPorts.set(node, key);
+      renderNodePorts(node, ports);
+      changed = true;
+    });
+    return changed;
+  }
+
   function updateEdges() {
+    // A node added without a canvas change yet gets its ports before lines are drawn to them.
+    if (Array.from(nodesLayer.children).some((el) => el.classList.contains('workflow-node') && !drawnPorts.has(el))) refreshNodePorts();
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     g.setAttribute('pointer-events', 'none');
     const nodeBoxes = collectNodeBoxes();
-    const liveIds = liveHistoryOutputIds();
+    const state = liveInputState();
     // Automatic dependency lines sit behind explicit, user-managed workflow edges.
-    getDerivedDataFlowEdges().forEach((edge) => renderEdge(g, edge, -1, nodeBoxes, liveIds));
-    connections.forEach((edge, i) => renderEdge(g, edge, i, nodeBoxes, liveIds));
-    const existing = edgesLayer.querySelector('g');
-    if (existing) existing.remove();
-    edgesLayer.appendChild(g);
+    getDerivedDataFlowEdges().forEach((edge) => renderEdge(g, edge, -1, nodeBoxes, state));
+    connections.forEach((edge, i) => renderEdge(g, edge, i, nodeBoxes, state));
+    // The line being dragged (workflowPortDrag.js) has its own group and stays.
+    edgesLayer.querySelector(':scope > g:not(.workflow-port-drag)')?.remove();
+    edgesLayer.insertBefore(g, edgesLayer.querySelector(':scope > g.workflow-port-drag'));
+    syncActiveEdges();
   }
 
   function getPromptDataFromNode(node) {
@@ -2744,9 +3023,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
 
   function openDatasetEdgeDetailModal(edge) {
-    const contentOf = (node) => (node && node.dataset.resultMissing !== '1'
-      ? datasetContentByNodeId.get(node.dataset.nodeId) || null
-      : null);
+    const contentOf = (node) => (node ? datasetContentByNodeId.get(node.dataset.nodeId) || null : null);
     const nameOf = (node) => (node?.dataset.datasetName || node?.dataset.subsetName || '').trim() || 'Dataset';
     const fromNode = getNodeById(edge.fromId);
     const toNode = getNodeById(edge.toId);
@@ -2835,7 +3112,6 @@ export function buildWorkflowCanvas(root, options = {}) {
     getNextDefaultSamplerName,
     findUniqueSamplerName,
     isRunNameAlreadyUsedForPromptNodeId,
-    findUniqueRunName,
     isReviewNameAlreadyUsedForScoreNodeId,
     findUniqueReviewName,
     findUniquePromptName,
@@ -2865,6 +3141,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     scrollWrapper,
     nodesLayer,
     getZoomLevel: () => zoomLevel,
+    clientToCanvasPoint,
     updateContentSize,
     updateEdges,
     emitCanvasChanged: () => document.dispatchEvent(new CustomEvent('workflow:canvas-changed')),
@@ -2874,6 +3151,21 @@ export function buildWorkflowCanvas(root, options = {}) {
     getNodeById,
     getConnections: () => connections,
     datasetContentByNodeId,
+    readRunInputSource,
+    writeRunInputSource,
+    readRunInput,
+    readRunInputTable,
+    describeSource,
+    readProcessInputRows,
+    revealNode,
+    readSourceOutput,
+    readStepInputStatus,
+    sourceColor,
+    readProcessPrimarySource,
+    writeProcessPrimarySource,
+    readProcessInputBindings,
+    readProcessInputAliases,
+    writeProcessInputs,
     openPromptDetailModal,
     openRunDetailModal,
     startRunNode: (options) => startRunNode(options),
@@ -2907,7 +3199,6 @@ export function buildWorkflowCanvas(root, options = {}) {
     unregisterPendingReview,
     RUN_API_BASE,
     NEW_NODE_OFFSET,
-    findUniqueDatasetExportName,
     isPromptNameAlreadyUsed,
     isRunNameAlreadyUsedForPrompt: isRunNameAlreadyUsedForPromptNodeId,
     toggleNodeSelection,
@@ -2919,10 +3210,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   const {
     addPromptNode,
     addPromptVersion,
-    addRunNode,
     startRunNode,
-    saveRunResultsToWorkspace,
-    saveScoreResultsToWorkspace,
     addScoreNode,
     updateScoreNode,
     updateScoreRowSelection,
@@ -2933,8 +3221,6 @@ export function buildWorkflowCanvas(root, options = {}) {
     applyReviewSuggestions,
     addDatasetNode,
     addSamplerNode,
-    addSampledDatasetNode,
-    addProcessNode,
     importPubmedDataset,
     importClinicaltrialsDataset,
     importPreprintDataset,
@@ -2948,25 +3234,30 @@ export function buildWorkflowCanvas(root, options = {}) {
     processApiResults,
     countCompletedInputRows,
     markEmptyOutputAsError,
-    formatResultOutputColumnLabel,
     parseScoreMappingBundle,
     serializeScoreMappingBundle,
     flattenScoreRules,
     runReviewStart,
-    getScoreExportData,
     DATASET_BORDER_COLORS,
     RUN_API_BASE,
     NEW_NODE_OFFSET,
-    positionFrom,
     getNodeById,
     getConnections: () => connections,
     datasetContentByNodeId,
+    readRunInputSource,
+    readRunInput,
+    readRunInputTable,
+    readSourceOutput,
+    readStepInputStatus,
+    sourceColor,
+    readProcessPrimarySource,
+    writeProcessPrimarySource,
+    readProcessInputBindings,
+    readProcessInputAliases,
     createPromptNode,
-    createRunNode,
     createScoreNode,
     createDatasetNode,
     createSamplerNode,
-    createProcessNode,
     createPromptReviewNode,
     updateContentSize,
     updateEdges,
@@ -2988,16 +3279,12 @@ export function buildWorkflowCanvas(root, options = {}) {
     findUniquePromptName,
     isPromptNameAlreadyUsed,
     getPromptDataFromNode,
-    isRunNameAlreadyUsedForPromptNodeId,
-    findUniqueRunName,
-    findUniqueDatasetExportName,
     findUniqueWorkingDatasetName,
     isDatasetNameAlreadyUsed,
     isSamplerNameAlreadyUsedForSource,
     getNextDefaultSamplerName,
     findUniqueSamplerName,
     findUniqueReviewName,
-    prepareSampledDatasetFromSampler,
     buildReviewComparisonRows,
     escapeRegex,
     markNodeAsAgentCreated,
@@ -3076,8 +3363,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         },
         extractInputFields: extractInputFieldsFromSections,
         applyCanvasState: applyAgentCanvasState,
-        getContentLocks: () => (historySession?.projectId && canvasHistoryVersion === 1
-          ? historySession.contentLocks(getCanvasState()) : new Map()),
+        getContentLocks: getContentLocksForCanvas,
         previewHistorySelection: planHistorySelectionForCanvas,
         applyHistorySelection: async (recordId) => {
           const plan = await planHistorySelectionForCanvas(recordId);
@@ -3087,7 +3373,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         previewHistoryDeletion: async (recordId) => {
           const session = historySession;
           if (!session?.projectId || canvasHistoryVersion !== 1) throw new Error('History is not available for this project.');
-          const plan = await session.planDelete(recordId, getCanvasState(), { runningNodeIds: [...pendingRuns.keys(), ...pendingProcesses] });
+          const plan = await session.planDelete(recordId, getCanvasState(), { runningNodeIds: [...pendingRuns.keys(), ...pendingProcesses, ...pendingScoreMatches] });
           agentHistoryDeletionPreviews.set(recordId, { projectId: session.projectId, ids: plan.ids });
           return plan;
         },
@@ -3095,7 +3381,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           const session = historySession;
           const preview = agentHistoryDeletionPreviews.get(recordId);
           if (!session?.projectId || !preview || preview.projectId !== session.projectId) throw new Error('Preview this history deletion again.');
-          const plan = await session.delete(recordId, getCanvasState(), { runningNodeIds: [...pendingRuns.keys(), ...pendingProcesses] }, preview.ids);
+          const plan = await session.delete(recordId, getCanvasState(), { runningNodeIds: [...pendingRuns.keys(), ...pendingProcesses, ...pendingScoreMatches] }, preview.ids);
           agentHistoryDeletionPreviews.delete(recordId);
           document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
           return plan;
@@ -3104,11 +3390,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         startRunNode,
         stopRunNode,
         runProcessNode,
-        // df / df_<name> bindings over every canvas Dataset for try_process, as a Process would see them.
-        getDatasetBindings: (primaryDatasetId) => {
-          const { datasets } = getProcessDatasets(null);
-          return buildProcessDatasetBindings(datasets, primaryDatasetId);
-        },
+        runScoreNode,
         createAndRunReviewNode,
         stopReviewNode,
         verifyReviewSuggestions,
@@ -3210,7 +3492,17 @@ export function buildWorkflowCanvas(root, options = {}) {
     }
   }
 
-  function showNodeContextMenu(clientX, clientY, node) {
+  /**
+   * The node's right-click menu. `port` (a Process branch, from clicking its label) shows only the
+   * items that start a step on that branch.
+   */
+  /**
+   * A node's right-click menu. With `port`, only what can be started on that output: a Process
+   * branch's menu, or the menu shown when a line from the output is let go over empty canvas; `at`
+   * is then where the new node goes (canvas coordinates).
+   */
+  function showNodeContextMenu(clientX, clientY, node, { port, inputPort, at, onClose } = {}) {
+    closeNodeContextMenu?.();
     const existing = document.querySelector('.workflow-node-context-menu');
     if (existing) existing.remove();
 
@@ -3220,105 +3512,57 @@ export function buildWorkflowCanvas(root, options = {}) {
     const isScore = node.dataset.nodeType === 'score';
     const isPromptReview = node.dataset.nodeType === 'promptReview';
     const isProcess = node.dataset.nodeType === 'process';
-    let runHasResults = false;
-    if (isRun) {
-      try {
-        const rr = JSON.parse(node.dataset.runResults || '[]');
-        runHasResults = Array.isArray(rr) && rr.length > 0;
-      } catch (_) {}
-    }
-    let processHasResults = false;
-    if (isProcess) {
-      try {
-        const pdf = JSON.parse(node.dataset.processDfResults || 'null');
-        const legacy = JSON.parse(node.dataset.processResults || 'null');
-        processHasResults = Boolean(pdf?.outputs && typeof pdf.outputs === 'object' && Object.keys(pdf.outputs).length)
-          || (!!pdf && Array.isArray(pdf.rows))
-          || (!!legacy && Array.isArray(legacy.rows));
-      } catch (_) {}
-    }
-    let scoreHasResults = false;
-    if (isScore) {
-      const runEdge = connections.find((c) => c.toId === node.dataset.nodeId && c.type === EDGE_TYPE_RUN_TO_SCORE);
-      const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
-      if (runNode) {
-        try {
-          const rr = JSON.parse(runNode.dataset.runResults || '[]');
-          scoreHasResults = Array.isArray(rr) && rr.length > 0;
-        } catch (_) {}
-      }
-    }
-    let reviewHasResult = false;
-    if (isPromptReview) {
-      try {
-        const raw = (node.dataset.reviewResult || '').trim();
-        if (raw) {
-          const data = JSON.parse(raw);
-          const isComplete = data?.streamComplete === true;
-          const sections = Array.isArray(data?.workingSections) ? data.workingSections : (Array.isArray(data?.promptSections) ? data.promptSections : []);
-          reviewHasResult = isComplete && sections.length > 0;
-        }
-      } catch (_) {}
-    }
-
+    const isPortMenu = port !== undefined || inputPort !== undefined;
     const menu = document.createElement('div');
     menu.className = 'workflow-node-context-menu';
     menu.setAttribute('role', 'menu');
-    if (isRun) {
-      menu.innerHTML = `
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--score" data-action="save-to-workspace-and-score" role="menuitem" ${runHasResults ? '' : 'disabled'}>Score</button>
-        <button type="button" class="workflow-node-context-item" data-action="save-results-to-workspace" role="menuitem" ${runHasResults ? '' : 'disabled'}>Save results to workspace</button>
-        <button type="button" class="workflow-node-context-item" data-action="edit-run-name" role="menuitem">Edit name</button>
-      `;
-    } else if (isScore) {
-      const scoreHasGt = (node.dataset.scoreGroundTruthId || '').trim() !== '';
-      const canSaveToWorkspace = scoreHasResults && scoreHasGt;
-      menu.innerHTML = `
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--review" data-action="score-add-review" role="menuitem" ${scoreHasResults && scoreHasGt ? '' : 'disabled'}>Review</button>
-        <button type="button" class="workflow-node-context-item" data-action="score-save-to-workspace" role="menuitem" ${canSaveToWorkspace ? '' : 'disabled'}>Save results to workspace</button>
-        <button type="button" class="workflow-node-context-item" data-action="edit-score-name" role="menuitem">Edit name</button>
-      `;
-    } else if (isPromptReview) {
-      menu.innerHTML = `
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--export" data-action="review-export" role="menuitem" ${reviewHasResult ? '' : 'disabled'}>Apply</button>
-        <button type="button" class="workflow-node-context-item" data-action="edit-review-name" role="menuitem">Edit name</button>
-      `;
-    } else if (isDataset) {
-      const hasSavedSource = node.dataset.savedCopy === '1' && (
-        !!node.dataset.sourceRunNodeId || connections.some((edge) => (
-          edge.type === EDGE_TYPE_PROCESS_TO_DATASET && edge.toId === node.dataset.nodeId
-        )));
-      menu.innerHTML = `
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--sample" data-action="add-sampler" role="menuitem">Sample</button>
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--run" data-action="process-this-dataset" role="menuitem">Process with code</button>
-        ${hasSavedSource ? '<button type="button" class="workflow-node-context-item" data-action="save-current-source-copy" role="menuitem">Save current source as new Dataset</button>' : ''}
+    // New nodes on this node's output (outputMenu.js), offered before it has a result where they can run later.
+    const menuState = getCanvasState();
+    const outputItems = inputPort !== undefined ? inputMenuItems(menuState, node.dataset.nodeId, inputPort)
+      : outputMenuItems(menuState, node.dataset.nodeId, port !== undefined ? { port } : {});
+    const stepItemsHtml = outputItems.map((item) => `<button type="button" class="workflow-node-context-item" data-action="${item.action}" data-port="${escapeHtml(item.source.port)}" data-create-type="${item.createType || ''}" title="${escapeHtml(item.disabledReason || '')}" role="menuitem" ${item.disabled ? 'disabled' : ''}>${escapeHtml(item.label)}</button>`).join('');
+    if (isPortMenu && !outputItems.length) {
+      onClose?.();
+      return null;
+    }
+    const menuGroup = (label, items) => items.trim() ? `
+      <div class="workflow-node-context-group" role="group" aria-label="${label}">
+        <div class="workflow-node-context-group-title" aria-hidden="true">${label}</div>
+        ${items}
+      </div>` : '';
+    const nextStepItems = stepItemsHtml;
+    let manageItems = '';
+    if (!isPortMenu && isRun) {
+      manageItems = '<button type="button" class="workflow-node-context-item" data-action="edit-run-name" role="menuitem">Edit name</button>';
+    } else if (!isPortMenu && isScore) {
+      manageItems = '<button type="button" class="workflow-node-context-item" data-action="edit-score-name" role="menuitem">Edit name</button>';
+    } else if (!isPortMenu && isPromptReview) {
+      manageItems = '<button type="button" class="workflow-node-context-item" data-action="edit-review-name" role="menuitem">Edit name</button>';
+    } else if (!isPortMenu && isDataset) {
+      manageItems = `
         <button type="button" class="workflow-node-context-item" data-action="duplicate-working-dataset" role="menuitem">Duplicate this dataset</button>
-        <button type="button" class="workflow-node-context-item" data-action="add-version-of-dataset" role="menuitem">Add new version of this dataset</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-dataset-name-description" role="menuitem">Edit name & description</button>
       `;
-    } else if (isSampler) {
-      menu.innerHTML = `
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--sample" data-action="create-working-dataset" role="menuitem">Create sample</button>
-        <button type="button" class="workflow-node-context-item" data-action="edit-sampler-name" role="menuitem">Edit name</button>
-      `;
-    } else if (isProcess) {
-      menu.innerHTML = `
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--export" data-action="process-save-to-workspace" role="menuitem" ${processHasResults ? '' : 'disabled'}>Create dataset</button>
+    } else if (!isPortMenu && isSampler) {
+      manageItems = '<button type="button" class="workflow-node-context-item" data-action="edit-sampler-name" role="menuitem">Edit name</button>';
+    } else if (!isPortMenu && isProcess) {
+      manageItems = `
         <button type="button" class="workflow-node-context-item" data-action="duplicate-process" role="menuitem">Duplicate this process</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-process-name" role="menuitem">Edit name</button>
       `;
-    } else {
-      menu.innerHTML = `
-        <button type="button" class="workflow-node-context-item workflow-node-context-item--run" data-action="run-this-prompt" role="menuitem">Run</button>
+    } else if (!isPortMenu) {
+      manageItems = `
         <button type="button" class="workflow-node-context-item" data-action="duplicate" role="menuitem">Duplicate this prompt</button>
-        <button type="button" class="workflow-node-context-item" data-action="new-version" role="menuitem">Add new version of this prompt</button>
         <button type="button" class="workflow-node-context-item" data-action="edit-name-description" role="menuitem">Edit name & description</button>
       `;
     }
 
-    menu.insertAdjacentHTML('beforeend', `
-      <button type="button" class="workflow-node-context-item" data-action="copy-name-and-id" role="menuitem">Copy name and ID</button>
-    `);
+    if (!isPortMenu) {
+      manageItems += '<button type="button" class="workflow-node-context-item" data-action="copy-name" role="menuitem">Copy name</button>';
+    }
+    menu.innerHTML = menuGroup(inputPort !== undefined ? 'Create input' : 'Next steps', nextStepItems) + menuGroup('Manage node', manageItems);
+    /** The output an output item starts from. */
+    const outputSource = (button) => ({ nodeId: node.dataset.nodeId, port: button.dataset.port || RESULT_PORT, kind: isRun ? 'run' : isProcess ? 'process' : 'dataset' });
 
     function duplicateNode(isNewVersion = false) {
       const left = parseFloat(node.style.left) || 0;
@@ -3352,52 +3596,42 @@ export function buildWorkflowCanvas(root, options = {}) {
     }
 
     const actions = {
+      'create-input': async (button) => {
+        const dfCode = button.dataset.createType === 'process' ? buildDefaultProcessCode([]) : '';
+        const codeHash = dfCode ? await codeHashOf(dfCode) : '';
+        // Check before creating anything: stale menus must not leave an unattached node behind.
+        const current = getCanvasState();
+        const choice = inputMenuItems(current, node.dataset.nodeId, inputPort)
+          .find(item => item.createType === button.dataset.createType);
+        if (!choice || choice.disabled) throw new Error(choice?.disabledReason || 'This input is no longer available.');
+        let created;
+        if (choice.createType === 'dataset') created = getNodeById(addDatasetNode({ name: 'Dataset', headers: [], rows: [] }).nodeId);
+        else if (choice.createType === 'prompt') created = getNodeById(addPromptNode({ name: 'Prompt', sections: [] }).nodeId);
+        else if (choice.createType === 'run') created = newRunNode();
+        else {
+          created = createProcessNode({ title: 'Process', dfCode,
+            outputPorts: { ports: [RESULT_PORT], dynamic: false, error: '', codeHash } });
+        }
+        const sourcePort = choice.createType === 'prompt' ? 'prompt' : RESULT_PORT;
+        const connect = checkConnect(getCanvasState(), { nodeId: created.dataset.nodeId, portId: sourcePort }, { nodeId: node.dataset.nodeId, portId: inputPort });
+        if (!connect.ok) throw new Error(connect.reason);
+        if (at) {
+          const headerHeight = created.querySelector('.workflow-node__header')?.offsetHeight || RUN_NODE_FALLBACK_HEIGHT;
+          setNodeCanvasPosition(created, Math.max(0, at.x - (created.offsetWidth || 274)), Math.max(0, at.y - headerHeight / 2));
+        }
+        applyPortOps([connect.op]);
+      },
       'save-results-to-workspace': () => {
-        if (node.dataset.nodeType !== 'run') return;
-        let results = [];
-        let outputFields = [];
-        try {
-          results = JSON.parse(node.dataset.runResults || '[]');
-          outputFields = JSON.parse(node.dataset.runOutputFields || '[]');
-        } catch (_) {}
-        if (!Array.isArray(results) || results.length === 0) return;
-        if (!Array.isArray(outputFields)) outputFields = [];
-        const runName = (node.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Run';
-        const promptEdge = connections.find((c) => c.toId === node.dataset.nodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN);
-        const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
-        const promptName = (promptNode?.dataset?.promptName || promptNode?.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Prompt';
-        const baseName = `${promptName} ${runName}`.trim();
-        const datasetName = findUniqueDatasetExportName(baseName);
-        const runCompleted = node.dataset.runCompleted === '1';
-        const statusLine = runCompleted ? 'Run completed.' : 'Run incomplete.';
-        const description = `Exported from ${promptName} ${runName}.\n${statusLine}`;
-        const headers = [
-          'Input: #',
-          formatResultOutputColumnLabel('#'),
-          ...outputFields.map((f) => formatResultOutputColumnLabel((f && (f.display || f.key)) ? String(f.display || f.key).trim() || 'output' : 'output')),
-        ];
-        const rows = results.map((r) => {
-          const inputNum = String((typeof r.input_row_index === 'number' && !Number.isNaN(r.input_row_index) ? r.input_row_index : r.row_index ?? 0) + 1);
-          const outputNum = String((r.row_index ?? 0) + 1);
-          const outputPart = r.error
-            ? outputFields.map(() => String(r.error))
-            : (outputFields || []).map((f) => {
-                const val = r.output && f && r.output[f.key];
-                if (val === null || val === undefined) return '—';
-                if (Array.isArray(val)) return val.join(', ');
-                return String(val);
-              });
-          return [inputNum, outputNum, ...outputPart];
+        if (node.dataset.nodeType === 'run') saveRunOutputAsDataset(node.dataset.nodeId, { at });
+      },
+      'process-save-to-workspace': () => {
+        if (node.dataset.nodeType === 'process') saveProcessOutputAsDatasets(node.dataset.nodeId, {
+          branch: port !== undefined && port !== LINEAGE_PORT ? port : undefined, at,
         });
-        document.dispatchEvent(
-          new CustomEvent('workflow:add-dataset-node', {
-            detail: { name: datasetName, notes: description, headers, rows, anchorNodeId: node.dataset.nodeId },
-          })
-        );
       },
       'save-to-workspace-and-score': () => {
         if (node.dataset.nodeType !== 'run') return;
-        document.dispatchEvent(new CustomEvent('workflow:add-score-node', { detail: { runNodeId: node.dataset.nodeId } }));
+        document.dispatchEvent(new CustomEvent('workflow:add-score-node', { detail: { runNodeId: node.dataset.nodeId, at } }));
       },
       'score-add-review': async () => {
         if (node.dataset.nodeType !== 'score') return;
@@ -3429,8 +3663,7 @@ export function buildWorkflowCanvas(root, options = {}) {
             outputFields = Array.isArray(arr) ? arr : [];
           } catch (_) {}
           outputFields.forEach((f) => cols.push({ key: f.key || '', label: formatResultOutputColumnLabel((f.display || f.key || '').trim() || f.key || '—') }));
-          const wsId = (runNode.dataset.runWorkingSetId || '').trim();
-          const wsContent = wsId ? datasetContentByNodeId.get(wsId) : null;
+          const wsContent = readRunInputTable(runNode);
           const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
           cols.push({ key: '[#]', label: 'Input: #' });
           wsHeaders.forEach((h) => {
@@ -3454,20 +3687,16 @@ export function buildWorkflowCanvas(root, options = {}) {
           return { results: Array.isArray(results) ? results : [], outputFields: Array.isArray(outputFields) ? outputFields : [] };
         }
         function getRunWorkingSetContent() {
-          const wsId = (runNode && runNode.dataset.runWorkingSetId) ? runNode.dataset.runWorkingSetId.trim() : '';
-          const c = wsId ? datasetContentByNodeId.get(wsId) : null;
+          const c = readRunInputTable(runNode);
           return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
         }
         function getGroundTruthContent(wsNodeId) {
           const c = datasetContentByNodeId.get(wsNodeId || '');
-          if (getNodeById(wsNodeId)?.dataset?.resultMissing === '1') return { headers: [], rows: [], missingResult: true };
           if (!c) return { headers: [], rows: [] };
           return { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) };
         }
         async function getReviewPayload() {
           if (!promptNode || !runNode || !scoreNode) return null;
-          const gtId = String(scoreNode.dataset.scoreGroundTruthId || '').trim();
-          if (gtId && getNodeById(gtId)?.dataset?.resultMissing === '1') return null;
           let sections = [];
           try {
             sections = JSON.parse(promptNode.dataset.promptSections || promptNode.dataset.promptFields || '[]');
@@ -3496,7 +3725,7 @@ export function buildWorkflowCanvas(root, options = {}) {
               };
             }
           } catch (_) {}
-          const comparison_rows = await buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, sections);
+          const comparison_rows = await buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, sections, readRunInputTable(runNode));
           return {
             prompt_sections: sections,
             prompt_full_text: promptFullText,
@@ -3515,16 +3744,17 @@ export function buildWorkflowCanvas(root, options = {}) {
         }
         const credentialId = await resolveReviewCredentialId(scoreNode);
         if (!credentialId) {
-          showAlert('No Review model: set a default Review model in Settings.', { title: 'Review' });
+          showAlert('No Optimize model: set a default Optimize model in Settings.', { title: 'Optimize' });
           return;
         }
         const started = await runReviewFromScore({
           scoreNodeId: scoreNode.dataset.nodeId,
           getReviewPayload,
           credentialId,
+          at,
         });
         if (!started) {
-          showAlert('Could not start Review. Open Score detail and ensure the prompt has sections, Run has results, and ground truth is selected.', { title: 'Review' });
+          showAlert('Could not start Optimize. Open Evaluate detail and ensure the prompt has sections, Run has results, and ground truth is selected.', { title: 'Optimize' });
         }
       },
       'add-sampler': () => {
@@ -3543,6 +3773,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           sampleSize: 100,
         });
         if (newNode?.dataset?.nodeId) {
+          placeNewNodeAt(newNode, at);
           connections.push({
             fromId: sourceNodeId,
             toId: newNode.dataset.nodeId,
@@ -3555,10 +3786,11 @@ export function buildWorkflowCanvas(root, options = {}) {
       },
       'create-working-dataset': () => {
         const samplerNodeId = node.dataset.nodeId || '';
-        document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { samplerNodeId } }));
+        document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: { samplerNodeId, at } }));
       },
-      'process-this-dataset': () => newProcessNode({ datasetNode: node }),
-      'run-this-prompt': () => newRunNode({ promptNode: node }),
+      'run-this-prompt': () => newRunNode({ promptNode: node, at }),
+      'run-prompt-on-output': (button) => newRunNode({ inputSource: outputSource(button), at }),
+      'process-output': (button) => newProcessNode({ inputSource: outputSource(button), at }),
       // A duplicate is a standalone node: no connections are copied (same for Datasets and Processes).
       duplicate: () => {
         duplicateNode(false);
@@ -3566,6 +3798,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       'new-version': () => {
         const newNode = duplicateNode(true);
         if (newNode) {
+          placeNewNodeAt(newNode, at);
           connections.push({
             fromId: node.dataset.nodeId,
             toId: newNode.dataset.nodeId,
@@ -3600,8 +3833,8 @@ export function buildWorkflowCanvas(root, options = {}) {
         openEditNodeNameModal(node, {
           modalTitle: 'Edit Scorecard name',
           fieldLabel: 'Scorecard name',
-          placeholder: 'Score',
-          getCurrentName: () => (node.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Score',
+          placeholder: 'Evaluate',
+          getCurrentName: () => (node.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Evaluate',
           onSave: (name) => {
             const titleEl = node.querySelector('.workflow-node__title');
             if (titleEl) titleEl.textContent = name;
@@ -3624,13 +3857,11 @@ export function buildWorkflowCanvas(root, options = {}) {
           return { results: Array.isArray(results) ? results : [], outputFields: Array.isArray(outputFields) ? outputFields : [] };
         }
         function getRunWorkingSetContent() {
-          const wsId = (runNode && runNode.dataset.runWorkingSetId) ? runNode.dataset.runWorkingSetId.trim() : '';
-          const c = wsId ? datasetContentByNodeId.get(wsId) : null;
+          const c = readRunInputTable(runNode);
           return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
         }
         function getGroundTruthContent(wsNodeId) {
           const c = datasetContentByNodeId.get(wsNodeId || '');
-          if (getNodeById(wsNodeId)?.dataset?.resultMissing === '1') return { headers: [], rows: [], missingResult: true };
           if (!c) return { headers: [], rows: [] };
           return { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) };
         }
@@ -3649,8 +3880,7 @@ export function buildWorkflowCanvas(root, options = {}) {
             outputFields = Array.isArray(arr) ? arr : [];
           } catch (_) {}
           outputFields.forEach((f) => cols.push({ key: f.key || '', label: formatResultOutputColumnLabel((f.display || f.key || '').trim() || f.key || '—') }));
-          const wsId = (runNode.dataset.runWorkingSetId || '').trim();
-          const wsContent = wsId ? datasetContentByNodeId.get(wsId) : null;
+          const wsContent = readRunInputTable(runNode);
           const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
           cols.push({ key: '[#]', label: 'Input: #' });
           wsHeaders.forEach((h) => cols.push({ key: `[${h}]`, label: `Input: ${h}` }));
@@ -3665,12 +3895,12 @@ export function buildWorkflowCanvas(root, options = {}) {
           getRunResultColumns,
         });
         if (!payload || !payload.headers || !payload.rows) return;
-        const scoreName = (scoreNode.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Score';
-        const datasetName = findUniqueDatasetExportName(scoreName + ' comparison');
-        const notes = `Exported from Score "${scoreName}". Run vs ground truth comparison.`;
-        document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', {
-          detail: { name: datasetName, notes, headers: payload.headers, rows: payload.rows, anchorNodeId: scoreNode.dataset.nodeId },
-        }));
+        document.dispatchEvent(new CustomEvent('workflow:score-export-to-workspace', { detail: {
+          scoreNodeId: scoreNode.dataset.nodeId,
+          scoreName: (scoreNode.querySelector('.workflow-node__title')?.textContent || '').trim(),
+          headers: payload.headers, rows: payload.rows,
+          at,
+        } }));
       },
       'review-export': () => {
         if (node.dataset.nodeType !== 'promptReview') return;
@@ -3683,17 +3913,17 @@ export function buildWorkflowCanvas(root, options = {}) {
             : (Array.isArray(data.promptSections) ? data.promptSections : []).map((s) => ({ name: s.name || '', content: s.content || '' }));
           if (sections.length === 0) return;
           document.dispatchEvent(new CustomEvent('workflow:add-prompt-from-review', {
-            detail: { sections, afterReviewNodeId: node.dataset.nodeId },
+            detail: { sections, afterReviewNodeId: node.dataset.nodeId, at },
           }));
         } catch (_) {}
       },
       'edit-review-name': () => {
         if (node.dataset.nodeType !== 'promptReview') return;
         openEditNodeNameModal(node, {
-          modalTitle: 'Edit Review name',
-          fieldLabel: 'Review name',
-          placeholder: 'Review',
-          getCurrentName: () => (node.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Review',
+          modalTitle: 'Edit Optimize name',
+          fieldLabel: 'Optimize name',
+          placeholder: 'Optimize',
+          getCurrentName: () => (node.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Optimize',
           onSave: (name) => {
             node.dataset.promptReviewName = name;
             const titleEl = node.querySelector('.workflow-node__title');
@@ -3728,6 +3958,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           top: (parseFloat(node.style.top) || 0) + (node.offsetHeight || 80) + NEW_NODE_OFFSET,
           title: `${base} (Copy ${copyNumber})`,
           dfCode: resolveDataframeProcessCode({ dfCode: node.dataset.processDfCode, code: node.dataset.processCode }),
+          outputPorts: node.dataset.processOutputPorts,
         });
         updateContentSize();
         document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
@@ -3746,80 +3977,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           },
         });
       },
-      'process-save-to-workspace': () => {
-        if (node.dataset.nodeType !== 'process') return;
-        let saved = null;
-        try {
-          saved = JSON.parse(node.dataset.processDfResults || node.dataset.processResults || 'null');
-        } catch (_) {}
-        const outputs = saved?.outputs && typeof saved.outputs === 'object'
-          ? saved.outputs
-          : (saved && Array.isArray(saved.headers) && Array.isArray(saved.rows)
-            ? { result: saved }
-            : {});
-        const entries = Object.entries(outputs).filter(([, result]) => (
-          result && Array.isArray(result.headers) && Array.isArray(result.rows)
-        ));
-        if (!entries.length) return;
-        const processName = (node.dataset.processName || node.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Process';
-        const left = (parseFloat(node.style.left) || 0) + (node.offsetWidth || 160) + NEW_NODE_OFFSET;
-        const top = parseFloat(node.style.top) || 0;
-        entries.forEach(([branchName, result], index) => {
-          const baseName = entries.length === 1 ? `${processName} results` : `${processName} — ${branchName}`;
-          document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', {
-            detail: {
-              name: findUniqueDatasetExportName(baseName),
-              notes: `Branch "${branchName}" exported from Process "${processName}".`,
-              headers: result.headers,
-              rows: result.rows,
-              processNodeId: node.dataset.nodeId || '',
-              processOutputName: branchName,
-              left,
-              top: top + index * 132,
-            },
-          }));
-        });
-      },
-      'save-current-source-copy': async () => {
-        try {
-          const session = historySession;
-          if (!session?.projectId || canvasHistoryVersion !== 1) {
-            throw new Error('Current source History is unavailable for this project. Run the source node and save its results instead.');
-          }
-          const state = getCanvasState();
-          const id = node.dataset.nodeId;
-          const dataset = state.nodes.find((item) => item.nodeId === id && item.type === 'dataset');
-          if (!dataset?.savedCopy) return;
-          const source = datasetHistorySource({ ...dataset, savedCopy: false }, state.connections);
-          if (!source) throw new Error('This Dataset has no linked Run or Process source.');
-          dataset.savedCopy = false;
-          const resolved = await session.resolve(state);
-          if (session !== historySession || !getNodeById(id)) return;
-          const fresh = resolved.state.nodes.find((item) => item.nodeId === id);
-          const content = fresh?.datasetContent;
-          const recordId = resolved.currentRecordIds[source.sourceId];
-          if (!recordId || fresh?.resultMissing || !Array.isArray(content?.headers) || !Array.isArray(content?.rows)) {
-            throw new Error('The source has no current result. Run it before saving a new Dataset.');
-          }
-          document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: {
-            name: findUniqueDatasetExportName(`${dataset.name || 'Dataset'} current`),
-            notes: `Saved from current ${source.kind} History of "${dataset.name || 'Dataset'}".`,
-            headers: content.headers, rows: content.rows,
-            columnTypes: content.columnTypes, rowIds: content.rowIds,
-            runNodeId: source.kind === 'run' ? source.sourceId : '',
-            processNodeId: source.kind === 'process' ? source.sourceId : '',
-            processOutputName: source.kind === 'process' ? source.branch : '',
-            snapshotSourceRecordId: recordId,
-          } }));
-        } catch (error) {
-          showAlert(error?.message || 'Could not save the current source output.', { title: 'Dataset source' });
-        }
-      },
       'duplicate-working-dataset': () => {
-        if (node.dataset.resultMissing === '1') {
-          showAlert('This Dataset has no current result to duplicate. Select matching upstream History or run the upstream node.', { title: 'Duplicate Dataset' });
-          return;
-        }
         const left = parseFloat(node.style.left) || 0;
         const top = parseFloat(node.style.top) || 0;
         const height = node.offsetHeight || 80;
@@ -3866,6 +4024,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           // Shared row IDs let the version-edge diff line rows up across edits.
           rowIds: content?.rowIds,
         });
+        placeNewNodeAt(newNode, at);
         if (newNode?.dataset?.nodeId) {
           connections.push({
             fromId: node.dataset.nodeId,
@@ -3877,26 +4036,36 @@ export function buildWorkflowCanvas(root, options = {}) {
         updateContentSize();
         document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
       },
-      'copy-name-and-id': async () => {
-        const id = String(node.dataset.nodeId || '').trim();
+      'copy-name': async () => {
         const titleEl = node.querySelector('.workflow-node__title');
         const rawName = (titleEl?.textContent || '').trim();
-        const name = (rawName.replace(/\s+/g, ' ') || id || 'Node').trim();
-        const text = id ? `${name} | ${id}` : name;
-        const ok = await copyTextToClipboard(text);
+        const name = rawName.replace(/\s+/g, ' ').trim() || 'Node';
+        const ok = await copyTextToClipboard(name);
         if (!ok) {
           showAlert('Could not copy to clipboard.', { title: 'Copy' });
         }
       },
     };
 
+    const close = attachContextMenuDismissal(menu, { onClose: () => {
+      if (closeNodeContextMenu === close) closeNodeContextMenu = null;
+      onClose?.();
+    } });
+    closeNodeContextMenu = close;
+    let actionPending = false;
     menu.querySelectorAll('.workflow-node-context-item').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
+      btn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        if (btn.disabled) return;
+        if (btn.disabled || actionPending) return;
+        actionPending = true;
         const action = btn.getAttribute('data-action');
-        if (actions[action]) actions[action]();
-        menu.remove();
+        try {
+          if (actions[action]) await actions[action](btn);
+        } catch (error) {
+          showAlert(error?.message || 'Could not complete this action.', { title: 'Node action' });
+        } finally {
+          close();
+        }
       });
     });
 
@@ -3912,13 +4081,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     menu.style.left = `${left}px`;
     menu.style.top = `${top}px`;
 
-    const close = () => {
-      menu.remove();
-      document.removeEventListener('click', close);
-      document.removeEventListener('contextmenu', close);
-    };
-    requestAnimationFrame(() => document.addEventListener('click', close, { once: true }));
-    document.addEventListener('contextmenu', close, { once: true });
+    return close;
   }
 
   function escapeHtml(str) {
@@ -4233,19 +4396,69 @@ export function buildWorkflowCanvas(root, options = {}) {
   });
 
   document.addEventListener('workflow:score-export-to-workspace', (e) => {
-    const { scoreNodeId = '', scoreName = '', headers, rows } = e.detail || {};
+    const { scoreNodeId = '', scoreName = '', headers, rows, at } = e.detail || {};
     if (!Array.isArray(headers) || !Array.isArray(rows)) return;
-    const baseName = (scoreName && scoreName.trim()) ? scoreName.trim() + ' comparison' : 'Score comparison';
+    const baseName = (scoreName && scoreName.trim()) ? scoreName.trim() + ' comparison' : 'Evaluate comparison';
     const datasetName = findUniqueDatasetExportName(baseName);
-    const notes = `Exported from Score "${(scoreName && scoreName.trim()) ? scoreName.trim() : 'Score'}". Run vs ground truth comparison.`;
+    const notes = `Exported from Evaluate "${(scoreName && scoreName.trim()) ? scoreName.trim() : 'Evaluate'}". Run vs ground truth comparison.`;
     document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', {
-      detail: { name: datasetName, notes, headers, rows, anchorNodeId: scoreNodeId },
+      detail: { name: datasetName, notes, headers, rows, at, savedFrom: scoreSavedFrom(scoreNodeId, currentScoreRecordId(scoreNodeId)) },
     }));
   });
 
+  /** The Score's record for the inputs it has now, if its result has been recorded. */
+  function currentScoreRecordId(scoreNodeId) {
+    const key = historyAnalysisKeys.get(`score:${scoreNodeId}`);
+    if (!key?.signature || !historySession?.projectId) return '';
+    return [...historySession.index.records].reverse().find((entry) => entry.kind === 'score'
+      && entry.nodeId === scoreNodeId && entry.signature === key.signature)?.id || '';
+  }
+
+  /** Save results of a Run: the table its readers get, as a new Dataset beside it (savedDatasets.js). */
+  function saveRunOutputAsDataset(runNodeId, { name = '', left, top, at } = {}) {
+    let saved;
+    try {
+      saved = savedRunOutput(getCanvasState(), runNodeId);
+    } catch (error) {
+      showAppAlert(error?.message || 'Could not save the results.', 'Cannot create dataset');
+      return null;
+    }
+    document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: {
+      name: findUniqueDatasetExportName(name || saved.name), notes: saved.notes, ...saved.table, savedFrom: saved.savedFrom, left, top, at,
+    } }));
+    return saved;
+  }
+
+  /** Save a Process result beside it: the opened branch in its detail view, all branches from its menu. */
+  function saveProcessOutputAsDatasets(processNodeId, options = {}) {
+    const processNode = getNodeById(processNodeId);
+    let saved;
+    try {
+      saved = savedProcessOutputs(getCanvasState(), processNodeId, options);
+    } catch (error) {
+      showAppAlert(error?.message || 'Could not save the output.', 'Cannot create dataset');
+      return;
+    }
+    const left = (parseFloat(processNode.style.left) || 0) + (processNode.offsetWidth || 160) + NEW_NODE_OFFSET;
+    const top = parseFloat(processNode.style.top) || 0;
+    saved.forEach((output, index) => {
+      document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', { detail: {
+        name: findUniqueDatasetExportName(output.name), notes: output.notes, ...output.table, savedFrom: output.savedFrom,
+        left, top: top + index * 132,
+        at: options.at ? { x: options.at.x, y: options.at.y + index * 132 } : undefined,
+      } }));
+    });
+  }
+
+  // The Run and Process windows save through the same functions as the context menu.
+  document.addEventListener('workflow:save-run-output', (e) => saveRunOutputAsDataset(e.detail?.runNodeId || ''));
+  document.addEventListener('workflow:save-process-output', (e) => saveProcessOutputAsDatasets(e.detail?.processNodeId || '', {
+    branch: e.detail?.branch, snapshot: e.detail?.snapshot,
+  }));
+
   document.addEventListener('workflow:add-dataset-node', (e) => {
-    // anchorNodeId: the node the Dataset comes from when nothing else names it (a Score export), for placement only.
-    const { name = '', notes = '', headers, rows, columnTypes, rowIds, left: detailLeft, top: detailTop, samplerNodeId = '', processNodeId = '', processOutputName = '', runNodeId = '', anchorNodeId = '', snapshotSourceRecordId = '', colorIndex: detailColorIndex } = e.detail || {};
+    // savedFrom: the step a saved Dataset comes from (savedDatasets.js); it is placed beside that step.
+    const { name = '', notes = '', headers, rows, columnTypes, rowIds, left: detailLeft, top: detailTop, samplerNodeId = '', savedFrom = null, colorIndex: detailColorIndex, at } = e.detail || {};
     const VISIBLE_PADDING = 40;
     let startLeft = typeof detailLeft === 'number' ? detailLeft : (scrollWrapper.scrollLeft + VISIBLE_PADDING);
     let startTop = typeof detailTop === 'number' ? detailTop : (scrollWrapper.scrollTop + VISIBLE_PADDING);
@@ -4253,11 +4466,11 @@ export function buildWorkflowCanvas(root, options = {}) {
     let datasetRows = Array.isArray(rows) ? rows.map((r) => r.slice()) : [];
     let datasetColumnTypes = Array.isArray(columnTypes) ? columnTypes.slice() : undefined;
     let datasetRowIds = Array.isArray(rowIds) ? rowIds.slice() : undefined;
+    let sampledSourceRowIds;
     let datasetName = (name && name.trim()) ? name.trim() : '';
     let datasetNotes = notes || '';
 
-    const processNode = processNodeId ? getNodeById(processNodeId) : null;
-    const anchor = processNode || getNodeById(runNodeId) || getNodeById(anchorNodeId);
+    const anchor = getNodeById(readSavedFrom(savedFrom)?.nodeId || '');
     if (anchor && typeof detailLeft !== 'number') {
       ({ left: startLeft, top: startTop } = positionFrom(anchor));
     }
@@ -4268,8 +4481,8 @@ export function buildWorkflowCanvas(root, options = {}) {
           samplerNodeId,
           name: datasetName,
           notes: datasetNotes,
-          left: startLeft,
-          top: startTop,
+          left: detailLeft,
+          top: detailTop,
         });
         startLeft = prepared.startLeft;
         startTop = prepared.startTop;
@@ -4277,6 +4490,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         datasetRows = prepared.datasetRows;
         datasetColumnTypes = prepared.datasetColumnTypes;
         datasetRowIds = prepared.datasetRowIds;
+        sampledSourceRowIds = prepared.sampledSourceRowIds;
         datasetName = prepared.datasetName;
         datasetNotes = prepared.datasetNotes;
       } catch (error) {
@@ -4290,50 +4504,32 @@ export function buildWorkflowCanvas(root, options = {}) {
       datasetName = datasetName || findUniqueWorkingDatasetName('Dataset', false);
     }
 
-    const savedCopy = !!(runNodeId || processNode);
-    const sourceNode = runNodeId ? getNodeById(runNodeId) : processNode;
-    const recordId = String(snapshotSourceRecordId || sourceNode?.dataset?.historyRecordId || '').trim();
-    if (savedCopy && !recordId) {
-      showAppAlert(
-        processNode
-          ? 'This Process has no History record yet. Run it again before saving its output.'
-          : 'This Run has no History record yet. Run it again before saving its results.',
-        'Cannot create dataset',
-      );
-      return;
-    }
-
     const newNode = addDatasetNode({
       name: datasetName,
       notes: datasetNotes,
       left: startLeft,
       top: startTop,
       samplerNodeId: samplerNodeId || '',
-      sourceRunNodeId: runNodeId || '',
-      processOutputName,
-      // A saved Run / Process output is a copy: editable until used, never rewritten by History.
-      savedCopy,
-      snapshotSourceRecordId: recordId,
+      savedFrom,
       colorIndex: detailColorIndex,
       headers: datasetHeaders,
       rows: datasetRows,
       columnTypes: datasetColumnTypes,
       rowIds: datasetRowIds,
+      sampledSourceRowIds,
       ensureUniqueName: false,
     });
+    if (at && newNode?.nodeId) {
+      placeNewNodeAt(getNodeById(newNode.nodeId), at);
+      updateContentSize();
+      updateEdges();
+      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+    }
     if (samplerNodeId && newNode?.nodeId) {
       connections.push({
         fromId: samplerNodeId,
         toId: newNode.nodeId,
         type: EDGE_TYPE_SAMPLER_TO_DATASET,
-      });
-      updateEdges();
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-    } else if (processNode && newNode?.nodeId) {
-      connections.push({
-        fromId: processNode.dataset.nodeId,
-        toId: newNode.nodeId,
-        type: EDGE_TYPE_PROCESS_TO_DATASET,
       });
       updateEdges();
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
@@ -4344,6 +4540,16 @@ export function buildWorkflowCanvas(root, options = {}) {
   function visibleNodePosition() {
     return { left: scrollWrapper.scrollLeft + 40, top: scrollWrapper.scrollTop + 40 };
   }
+  /**
+   * Puts a node just made from a dragged line where the line was let go (`at`, canvas coordinates):
+   * its left edge and the middle of its header at that point. Without `at` it stays where it was made.
+   */
+  function placeNewNodeAt(node, at) {
+    if (!node || !at) return;
+    const headerHeight = node.querySelector('.workflow-node__header')?.offsetHeight || RUN_NODE_FALLBACK_HEIGHT;
+    setNodeCanvasPosition(node, at.x, at.y - headerHeight / 2);
+  }
+
   function besideNode(sourceNode) {
     return {
       left: (parseFloat(sourceNode.style.left) || 0) + (sourceNode.offsetWidth || 280) + NEW_NODE_OFFSET,
@@ -4352,19 +4558,16 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
 
   /**
-   * Adds a Process. A Process picks its df Dataset in its window; started from a Dataset, it
-   * begins with that one. `open` opens its window, as when it is added from the top bar.
+   * Adds a Process. Its inputs are connected on the canvas; started from a Dataset or a step's output
+   * (`inputSource`), it begins with that one as df, beside it. `open` opens its window, as when it is
+   * added from the top bar.
    */
-  function newProcessNode({ datasetNode = null, open = false } = {}) {
-    const fromDataset = datasetNode?.dataset?.nodeType === 'dataset';
-    const processNode = createProcessNode({ ...(fromDataset ? besideNode(datasetNode) : visibleNodePosition()), title: 'Process' });
-    if (processNode?.dataset?.nodeId && fromDataset) {
-      processNode.dataset.processPrimaryDatasetId = datasetNode.dataset.nodeId || '';
-      connections.push({
-        fromId: datasetNode.dataset.nodeId,
-        toId: processNode.dataset.nodeId,
-        type: EDGE_TYPE_DATASET_TO_PROCESS,
-      });
+  function newProcessNode({ inputSource = null, open = false, at = null } = {}) {
+    const sourceNode = inputSource?.nodeId ? getNodeById(inputSource.nodeId) : null;
+    const processNode = createProcessNode({ ...(sourceNode ? besideNode(sourceNode) : visibleNodePosition()), title: 'Process' });
+    placeNewNodeAt(processNode, at);
+    if (processNode?.dataset?.nodeId && sourceNode) {
+      writeProcessInputs(processNode, { primary: inputSource, inputs: [{ ...inputSource, alias: 'df' }] });
       updateEdges();
     }
     updateContentSize();
@@ -4373,10 +4576,20 @@ export function buildWorkflowCanvas(root, options = {}) {
     return processNode;
   }
 
-  /** Adds a Run. A Run picks its Prompt and Dataset in its window; started from a Prompt, it begins with that one. */
-  function newRunNode({ promptNode = null, open = false } = {}) {
+  /**
+   * Adds a Run. Its Prompt and input are connected on the canvas; started from a Prompt or from a
+   * step's output (`inputSource`), it begins with that one connected, beside it.
+   */
+  function newRunNode({ promptNode = null, inputSource = null, open = false, at = null } = {}) {
     const fromPrompt = promptNode?.dataset?.nodeType === 'prompt' || promptNode?.classList?.contains('workflow-node--prompt');
-    const runNode = createRunNode({ ...(fromPrompt ? besideNode(promptNode) : visibleNodePosition()), title: 'Run' });
+    const sourceNode = inputSource?.nodeId ? getNodeById(inputSource.nodeId) : null;
+    const anchor = fromPrompt ? promptNode : sourceNode;
+    const runNode = createRunNode({ ...(anchor ? besideNode(anchor) : visibleNodePosition()), title: 'Run' });
+    placeNewNodeAt(runNode, at);
+    if (runNode?.dataset?.nodeId && sourceNode) {
+      writeRunInputSource(runNode, inputSource);
+      updateEdges();
+    }
     if (runNode?.dataset?.nodeId && fromPrompt) {
       connections.push({
         fromId: promptNode.dataset.nodeId,
@@ -4391,13 +4604,15 @@ export function buildWorkflowCanvas(root, options = {}) {
     return runNode;
   }
 
+  // `inputSource` ({ nodeId, port }) starts the step on that output; `sourceNodeId` names a Dataset.
   document.addEventListener('workflow:add-process-node', (e) => {
     const sourceNodeId = e.detail?.sourceNodeId || '';
-    newProcessNode({ datasetNode: sourceNodeId ? getNodeById(sourceNodeId) : null, open: e.detail?.open === true });
+    const inputSource = e.detail?.inputSource || (sourceNodeId ? { nodeId: sourceNodeId, port: RESULT_PORT } : null);
+    newProcessNode({ inputSource, open: e.detail?.open === true });
   });
   document.addEventListener('workflow:add-run-node', (e) => {
     const promptNodeId = e.detail?.promptNodeId || '';
-    newRunNode({ promptNode: promptNodeId ? getNodeById(promptNodeId) : null, open: e.detail?.open === true });
+    newRunNode({ promptNode: promptNodeId ? getNodeById(promptNodeId) : null, inputSource: e.detail?.inputSource || null, open: e.detail?.open === true });
   });
 
   document.addEventListener('workflow:add-sampler-node', (e) => {
@@ -4428,7 +4643,8 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (!runNode || !runNode.classList.contains('workflow-node--run')) return;
     const left = (parseFloat(runNode.style.left) || 0) + (runNode.offsetWidth || 280) + NEW_NODE_OFFSET;
     const top = parseFloat(runNode.style.top) || 0;
-    const scoreNode = createScoreNode({ left, top, title: 'Score' });
+    const scoreNode = createScoreNode({ left, top, title: 'Evaluate' });
+    placeNewNodeAt(scoreNode, e.detail?.at);
     if (scoreNode?.dataset?.nodeId) {
       connections.push({
         fromId: runNodeId,
@@ -4464,6 +4680,10 @@ export function buildWorkflowCanvas(root, options = {}) {
       if (!e.detail) e.detail = {};
       e.detail.reviewNodeId = created.reviewNodeId;
       e.detail.registerPendingReview = registerPendingReview;
+      if (e.detail.at) {
+        placeNewNodeAt(getNodeById(created.reviewNodeId), e.detail.at);
+        updateEdges();
+      }
     } catch (_) {}
   });
 
@@ -4509,12 +4729,21 @@ export function buildWorkflowCanvas(root, options = {}) {
   });
 
   document.addEventListener('workflow:canvas-changed', () => {
+    nodesLayer.querySelectorAll('.workflow-node--sampler').forEach((sampler) => {
+      const summary = sampler.querySelector('.workflow-node__sampler-settings .workflow-node__note');
+      if (summary) summary.textContent = formatSamplerSettings(sampler);
+      updateSamplerProgress(sampler);
+    });
     nodesLayer.querySelectorAll('.workflow-node--score').forEach((sn) => syncScoreNodeProgressFromUpstreamRun(sn));
     syncNodeDependencyColors();
+    refreshNodePorts();
     updateEdges();
   });
   document.addEventListener('workflow:refresh-node-colors', syncNodeDependencyColors);
-  document.addEventListener('workflow:score-ground-truth-changed', () => updateEdges());
+  document.addEventListener('workflow:score-ground-truth-changed', () => {
+    refreshNodePorts();
+    updateEdges();
+  });
 
   document.addEventListener('workflow:save-review-result', (e) => {
     const reviewNodeId = e.detail?.reviewNodeId;
@@ -4582,13 +4811,20 @@ export function buildWorkflowCanvas(root, options = {}) {
   });
 
   document.addEventListener('workflow:add-prompt-from-review', (e) => {
-    const { sections = [], afterReviewNodeId, afterScoreNodeId } = e.detail || {};
+    const { sections = [], afterReviewNodeId, afterScoreNodeId, at } = e.detail || {};
     if (!Array.isArray(sections) || sections.length === 0) return;
     applyReviewSuggestions({
       reviewNodeId: afterReviewNodeId,
       scoreNodeId: afterScoreNodeId,
       sections,
       ensureUniqueName: true,
+    }).then(created => {
+      if (at) {
+        placeNewNodeAt(getNodeById(created.nodeId), at);
+        updateContentSize();
+        updateEdges();
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      }
     }).catch(() => {});
   });
 
@@ -4617,13 +4853,8 @@ export function buildWorkflowCanvas(root, options = {}) {
           name: node.dataset.datasetName || node.dataset.subsetName || '',
           note: node.dataset.datasetNote ?? node.dataset.subsetNote ?? '',
           samplerNodeId: node.dataset.samplerNodeId || '',
-          sourceRunNodeId: node.dataset.sourceRunNodeId || '',
-          processOutputName: node.dataset.processOutputName || '',
-          savedCopy: node.dataset.savedCopy === '1' || undefined,
-          snapshotSourceRecordId: node.dataset.snapshotSourceRecordId || undefined,
-          pipelineRunId: node.dataset.pipelineRunId || undefined,
-          pipelineLogicalId: node.dataset.pipelineLogicalId || undefined,
-          resultMissing: node.dataset.resultMissing === '1' || undefined,
+          sampledSourceRowIds: node.dataset.sampledSourceRowIds ? JSON.parse(node.dataset.sampledSourceRowIds) : undefined,
+          savedFrom: readSavedFrom(node.dataset.savedFrom) || undefined,
           colorIndex: node.dataset.datasetColorIndex != null ? parseInt(node.dataset.datasetColorIndex, 10) : undefined,
           datasetContent: content ? cloneDatasetContent(content) : undefined,
           nodeOrigin: (node.dataset.nodeOrigin || '').trim() || undefined,
@@ -4664,8 +4895,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           name: node.dataset.processName || 'Process',
           dfCode: dfCode || undefined,
           activeMode: 'df',
-          primaryDatasetId: node.dataset.processPrimaryDatasetId || undefined,
-          datasetAliases: node.dataset.processDatasetAliases || undefined,
+          processOutputPorts: parseProcessOutputPorts(node.dataset.processOutputPorts) || undefined,
           dfResults: node.dataset.processDfResults || node.dataset.processResults || undefined,
           processPending: pendingProcesses.has(nodeId),
           processResumable: node.dataset.processResumable === '1' || undefined,
@@ -4699,7 +4929,6 @@ export function buildWorkflowCanvas(root, options = {}) {
           left,
           top,
           runName,
-          runWorkingSetId: (node.dataset.runWorkingSetId || '').trim() || undefined,
           runCredentialId: (node.dataset.runCredentialId || '').trim() || undefined,
           runInputToColumn: node.dataset.runInputToColumn || undefined,
           runSettings: runSettingsOverrides(node),
@@ -4729,7 +4958,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         return out;
       }
       if (node.classList.contains('workflow-node--score')) {
-        const scoreName = node.querySelector('.workflow-node__title')?.textContent?.trim() || 'Score';
+        const scoreName = node.querySelector('.workflow-node__title')?.textContent?.trim() || 'Evaluate';
         const scoreGroundTruthId = (node.dataset.scoreGroundTruthId || '').trim() || undefined;
         let scoreMapping;
         try {
@@ -4772,11 +5001,12 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (node.dataset.scoreActiveMatchMode === 'code') out.scoreActiveMatchMode = 'code';
         if ((node.dataset.scoreMatchResult || '').trim()) out.scoreMatchResult = node.dataset.scoreMatchResult;
         if ((node.dataset.scoreMatchError || '').trim()) out.scoreMatchError = node.dataset.scoreMatchError;
+        if (pendingScoreMatches.has(nodeId) || node.dataset.scoreMatchUiRunning === '1') out.scoreMatchPending = true;
         if (node.dataset.scoreMatchInterrupted === '1') out.scoreMatchInterrupted = true;
         return out;
       }
       if (node.classList.contains('workflow-node--prompt-review')) {
-        const promptReviewName = node.querySelector('.workflow-node__title')?.textContent?.trim() || 'Review';
+        const promptReviewName = node.querySelector('.workflow-node__title')?.textContent?.trim() || 'Optimize';
         const reviewResult = (node.dataset.reviewResult || '').trim();
         const bar = node.querySelector('.workflow-node__review-progress');
         const pct = bar ? parseInt(bar.getAttribute('aria-valuenow') || '0', 10) : (node.dataset.reviewProgress != null ? parseInt(node.dataset.reviewProgress, 10) : 0);
@@ -4801,7 +5031,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       } catch (_) {}
       try {
         const raw = JSON.parse(node.dataset.promptOutputFormat || '[]');
-        const fields = (Array.isArray(raw) ? raw : []).map((o) => ({ key: o.key || '', type: o.type || 'str', description: o.description ?? '', examples: o.examples || [] }));
+        const fields = (Array.isArray(raw) ? raw : []).map((o) => ({ key: o.key || '', type: o.type || 'str', description: o.description ?? '', examples: o.examples || [], allowNone: o.allowNone === true }));
         const returnShape = node.dataset.promptOutputReturnShape || 'single';
         outputFormat = { returnShape, fields };
       } catch (_) {
@@ -4822,7 +5052,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       };
     });
     return {
-      version: 2, ...(canvasHistoryVersion === 1 ? { historyVersion: 1 } : {}), ...(pipelineOwner ? { pipelineOwner } : {}),
+      version: CANVAS_VERSION, ...(canvasHistoryVersion === 1 ? { historyVersion: 1 } : {}), ...(pipelineOwner ? { pipelineOwner } : {}),
       zoomLevel, nodes, connections: connections.slice(),
     };
   }
@@ -4830,6 +5060,8 @@ export function buildWorkflowCanvas(root, options = {}) {
   function loadCanvasState(state) {
     const list = state?.nodes;
     if (!Array.isArray(list)) return;
+    closeNodeContextMenu?.();
+    portDrag.cancel();
     historyRevision += 1;
     canvasHistoryVersion = state.historyVersion === 1 ? 1 : null;
     pipelineOwner = state.pipelineOwner?.id ? { at: String(state.pipelineOwner.at || ''), id: String(state.pipelineOwner.id) } : null;
@@ -4849,19 +5081,14 @@ export function buildWorkflowCanvas(root, options = {}) {
           top: n.top,
           nodeId: n.nodeId || n.id,
           samplerNodeId: n.samplerNodeId || '',
-          sourceRunNodeId: n.sourceRunNodeId || '',
-          processOutputName: n.processOutputName || '',
-          savedCopy: n.savedCopy === true,
-          snapshotSourceRecordId: n.snapshotSourceRecordId || '',
-          pipelineRunId: n.pipelineRunId || '',
-          pipelineLogicalId: n.pipelineLogicalId || '',
+          sampledSourceRowIds: n.sampledSourceRowIds,
+          savedFrom: n.savedFrom,
           colorIndex: n.colorIndex,
           headers: content?.headers,
           rows: content?.rows,
           columnTypes: content?.columnTypes,
           rowIds: content?.rowIds,
         });
-        if (n.resultMissing) node.dataset.resultMissing = '1';
         if (n.nodeOrigin === 'agent') markNodeAsAgentCreated(node);
         createdNodes.push(node);
       } else if (n.type === 'sampler') {
@@ -4889,8 +5116,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           nodeId: n.nodeId || n.id,
           title: n.name || 'Process',
           dfCode,
-          primaryDatasetId: n.primaryDatasetId,
-          datasetAliases: n.datasetAliases,
+          outputPorts: n.processOutputPorts,
         });
         if (n.nodeOrigin === 'agent') markNodeAsAgentCreated(node);
         if (n.dfResults || n.results) node.dataset.processDfResults = n.dfResults || n.results;
@@ -4911,7 +5137,6 @@ export function buildWorkflowCanvas(root, options = {}) {
         });
         if (n.nodeOrigin === 'agent') markNodeAsAgentCreated(runNode);
         if (n.runName) runNode.dataset.runName = n.runName;
-        if (n.runWorkingSetId) runNode.dataset.runWorkingSetId = n.runWorkingSetId;
         if (n.runCredentialId) runNode.dataset.runCredentialId = n.runCredentialId;
         if (n.runInputToColumn) runNode.dataset.runInputToColumn = n.runInputToColumn;
         if (n.runSettings && typeof n.runSettings === 'object') runNode.dataset.runSettings = JSON.stringify(n.runSettings);
@@ -4956,7 +5181,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           left: n.left,
           top: n.top,
           nodeId: n.nodeId || n.id,
-          title: n.scoreName || 'Score',
+          title: n.scoreName || 'Evaluate',
         });
         if (n.nodeOrigin === 'agent') markNodeAsAgentCreated(scoreNode);
         if (n.scoreGroundTruthId) scoreNode.dataset.scoreGroundTruthId = n.scoreGroundTruthId;
@@ -5007,7 +5232,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           left: n.left,
           top: n.top,
           nodeId: n.nodeId || n.id,
-          title: n.promptReviewName || 'Review',
+          title: n.promptReviewName || 'Optimize',
         });
         if (n.nodeOrigin === 'agent') markNodeAsAgentCreated(promptReviewNode);
         if (n.reviewResult && typeof n.reviewResult === 'string') {
@@ -5060,6 +5285,8 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (type === 'prompt-review-to-prompt') type = EDGE_TYPE_PROMPT_REVIEW_TO_PROMPT;
         if (type === 'sampler-to-subset') type = EDGE_TYPE_SAMPLER_TO_DATASET;
         if (type === 'subset-to-subset') type = EDGE_TYPE_DATASET_TO_DATASET;
+        // A data connection also carries the output it reads and, into a Process, the alias of the code.
+        if (type === DATA_EDGE) return { type, fromId: c.fromId, fromPort: c.fromPort || RESULT_PORT, toId: c.toId, ...(c.alias ? { alias: c.alias } : {}) };
         return { fromId: c.fromId, toId: c.toId, type };
       }
       if (typeof c.from === 'number' && typeof c.to === 'number') {
@@ -5076,11 +5303,14 @@ export function buildWorkflowCanvas(root, options = {}) {
       return null;
     }).filter(Boolean).filter((c) => getNodeById(c.fromId) && getNodeById(c.toId));
     nodesLayer.querySelectorAll('.workflow-node--score').forEach((scoreNode) => syncScoreNodeProgressFromUpstreamRun(scoreNode));
+    nodesLayer.querySelectorAll('.workflow-node--sampler').forEach(updateSamplerProgress);
+    refreshNodePorts();
     updateContentSize();
     syncNodeDependencyColors();
     updateEdges();
     getCanvasState();
     root.querySelector('.pipeline-overview-overlay')?.refreshPipelineOverview?.();
+    scheduleProcessOutputSync();
   }
 
   function setOnCanvasChange(fn) {
@@ -5186,10 +5416,16 @@ export function buildWorkflowCanvas(root, options = {}) {
     });
   }
 
-  /** Whether a Prompt, Dataset or Process node's content is locked because it produced a result (contentLocks.js). */
+  /** Results in History and sampled Dataset outputs both lock their source content. */
+  async function getContentLocksForCanvas() {
+    const state = getCanvasState();
+    return historySession?.projectId && canvasHistoryVersion === 1
+      ? historySession.contentLocks(state) : contentLocks([], state);
+  }
+
   async function isContentLocked(nodeId) {
-    if (!nodeId || !historySession?.projectId || canvasHistoryVersion !== 1) return false;
-    return !!(await historySession.contentLocks(getCanvasState())).get(nodeId)?.length;
+    if (!nodeId) return false;
+    return !!(await getContentLocksForCanvas()).get(nodeId)?.length;
   }
 
   function getHistoryForNode(nodeId) {
@@ -5218,7 +5454,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (otherDetails.length > 1) throw new Error('Close other Run or Process windows before switching History.');
         const staleDetails = [...document.querySelectorAll('.modal-overlay')].some((el) =>
           el.dataset.workingDatasetNodeId || el.querySelector('.modal-panel--score-detail'));
-        if (staleDetails) throw new Error('Close open Dataset and Score windows before switching History.');
+        if (staleDetails) throw new Error('Close open Dataset and Evaluate windows before switching History.');
         const plan = await planHistorySelectionForCanvas(recordId);
         const changed = plan.changedNodeIds.map((id) => {
           const node = getNodeById(id);
@@ -5270,14 +5506,35 @@ export function buildWorkflowCanvas(root, options = {}) {
     const run = state.nodes.find((item) => item.nodeId === nodeId);
     const promptEdge = state.connections.find((edge) => edge.type === EDGE_TYPE_PROMPT_TO_RUN && edge.toId === nodeId);
     const prompt = state.nodes.find((item) => item.nodeId === promptEdge?.fromId);
-    const dataset = state.nodes.find((item) => item.nodeId === run?.runWorkingSetId);
+    const input = runInputSource(state, nodeId);
+    const upstream = state.nodes.find((item) => item.nodeId === input?.nodeId);
+    // A step's output changes with the record its step currently shows.
+    const source = upstream?.type === 'run' || upstream?.type === 'process'
+      ? {
+        upstreamRecordId: upstream.historyRecordId,
+        upstreamState: [upstream.runCompleted, upstream.runPending, upstream.processPending, upstream.processResumable],
+      }
+      : { dataset: upstream };
     return JSON.stringify({
-      runWorkingSetId: run?.runWorkingSetId, mapping: run?.runInputToColumn,
+      input, mapping: run?.runInputToColumn,
       settings: run?.runSettings, credential: run?.runCredentialId,
       historyRecordId: run?.historyRecordId,
-      promptId: promptEdge?.fromId, prompt,
-      dataset, datasetProducer: state.connections.find((edge) => edge.type === EDGE_TYPE_PROCESS_TO_DATASET && edge.toId === dataset?.nodeId),
+      promptId: promptEdge?.fromId, prompt, ...source,
     });
+  }
+
+  /**
+   * Marks a Run or Process whose input has no result yet (runHistoryResolver.js): it is shown faded,
+   * naming what it waits for. Neither the attribute nor the tooltip is saved.
+   */
+  function setWaitingForUpstream(live, item) {
+    if (item.waitingForUpstream) {
+      live.dataset.waitingForUpstream = '1';
+      live.title = readStepInputStatus(live).waiting || 'Waiting for upstream results.';
+    } else if (live.dataset.waitingForUpstream) {
+      delete live.dataset.waitingForUpstream;
+      live.removeAttribute('title');
+    }
   }
 
   async function reconcileRunHistory(nodeId) {
@@ -5292,17 +5549,6 @@ export function buildWorkflowCanvas(root, options = {}) {
       const item = resolved.state.nodes.find((entry) => entry.nodeId === nodeId && entry.type === 'run');
       const live = getNodeById(nodeId);
       if (!item || !live) return null;
-      const inputDataset = resolved.state.nodes.find((entry) => entry.nodeId === item.runWorkingSetId && entry.type === 'dataset');
-      if (inputDataset) {
-        const datasetNode = getNodeById(inputDataset.nodeId);
-        if (datasetHistorySource(inputDataset, connections)) {
-          datasetContentByNodeId.set(inputDataset.nodeId, cloneDatasetContent(inputDataset.datasetContent));
-        }
-        if (datasetNode) {
-          if (inputDataset.resultMissing) datasetNode.dataset.resultMissing = '1';
-          else delete datasetNode.dataset.resultMissing;
-        }
-      }
       for (const key of ['runResults', 'runInputContent', 'runOutputFields', 'runCompleted']) {
         if (item[key] == null) delete live.dataset[key];
         else live.dataset[key] = item[key];
@@ -5313,6 +5559,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       else delete live.dataset.historyRecordId;
       if (item.historySelectionSignature) live.dataset.historySelectionSignature = item.historySelectionSignature;
       else delete live.dataset.historySelectionSignature;
+      setWaitingForUpstream(live, item);
       const progress = Number(item.runProgress || 0);
       const bar = live.querySelector('.workflow-node__run-progress');
       if (bar) { bar.style.width = `${progress}%`; bar.setAttribute('aria-valuenow', String(progress)); }
@@ -5384,18 +5631,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     for (const item of resolved.state.nodes) {
       const live = getNodeById(item.nodeId);
       if (!live) continue;
-      if (item.type === 'dataset') {
-        // Only a Dataset that still follows a History record gets its content rewritten; a saved copy
-        // keeps its own table (datasetHistorySource.js).
-        if (datasetHistorySource(item, connections)) {
-          const current = datasetContentByNodeId.get(item.nodeId);
-          if (JSON.stringify(current) !== JSON.stringify(cloneDatasetContent(item.datasetContent))) {
-            datasetContentByNodeId.set(item.nodeId, item.datasetContent);
-          }
-        }
-        if (item.resultMissing) live.dataset.resultMissing = '1';
-        else delete live.dataset.resultMissing;
-      } else if (item.type === 'run') {
+      if (item.type === 'run') {
         for (const key of ['runResults', 'runInputContent', 'runOutputFields', 'runCompleted']) {
           if (item[key] == null) delete live.dataset[key];
           else live.dataset[key] = item[key];
@@ -5407,6 +5643,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         else delete live.dataset.historyRecordId;
         if (item.historySelectionSignature) live.dataset.historySelectionSignature = item.historySelectionSignature;
         else delete live.dataset.historySelectionSignature;
+        setWaitingForUpstream(live, item);
         const bar = live.querySelector('.workflow-node__run-progress');
         if (bar) { bar.style.width = `${progress}%`; bar.setAttribute('aria-valuenow', String(progress)); }
       } else if (item.type === 'process') {
@@ -5419,6 +5656,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         else delete live.dataset.historyRecordId;
         if (item.historySelectionSignature) live.dataset.historySelectionSignature = item.historySelectionSignature;
         else delete live.dataset.historySelectionSignature;
+        setWaitingForUpstream(live, item);
         const bar = live.querySelector('.workflow-node__process-progress');
         if (bar) { bar.style.width = `${progress}%`; bar.setAttribute('aria-valuenow', String(progress)); }
       } else if (item.type === 'score') {
@@ -5456,6 +5694,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       if (priorKeys?.has(`review:${id}`)) historyAnalysisKeys.set(`review:${id}`, priorKeys.get(`review:${id}`));
     }
     historyAnalysisKeysInitialized = true;
+    refreshNodePorts();
     updateEdges();
     document.dispatchEvent(new CustomEvent('workflow:history-resolved', { detail: resolved }));
     return resolved;
@@ -5466,10 +5705,15 @@ export function buildWorkflowCanvas(root, options = {}) {
    * approved. One canvas-changed event follows the load, so the whole proposal is one undo step.
    */
   function applyAgentCanvasState(nextState, { highlightNodeIds = [] } = {}) {
+    if (pendingScoreMatches.size) {
+      throw new Error('Evaluate code matching is running. Wait for it to finish before applying changes.');
+    }
     // A node's detail window keeps a reference to its element; rebuilding the canvas under it
     // would leave its edits writing to a detached node.
+    // The Pipeline Run History window stays in the page, hidden, once the panel has opened; it holds
+    // no node element either way.
     const openWindows = Array.from(document.querySelectorAll('.modal-overlay')).filter((el) => (
-      !el.classList.contains('agent-window-overlay') && !el.classList.contains('pipeline-overview-overlay')
+      !el.hidden && !['agent-window-overlay', 'pipeline-overview-overlay', 'pipeline-runs-overlay'].some((name) => el.classList.contains(name))
     ));
     if (openWindows.length) {
       throw new Error('A node window is open on the canvas. Close it, then apply the proposal again.');
@@ -5498,6 +5742,58 @@ export function buildWorkflowCanvas(root, options = {}) {
    * Run a Process node's saved code (the Agent's run_nodes) and store its output on the node the way
    * its detail view does, so the node shows 100% and its branches can be saved as Datasets.
    */
+  // The output branches each Process's code returns (processOutputPorts.js), detected by the backend
+  // whenever the code changes, however it changed: window, Agent, undo, or opening a project. The
+  // detection is stored with the code's hash, so unchanged code is never sent again. Storing it emits
+  // no canvas change: that would make an undo step of whatever History reconciled in the meantime.
+  // The next real change saves it, and a project opened without it detects again.
+  const processOutputDetections = new Map(); // node id -> hash of the code being detected
+  let processOutputSyncTimer = null;
+  const processCodeOf = (node) => resolveDataframeProcessCode({ dfCode: node.dataset.processDfCode, code: node.dataset.processCode }) || '';
+  async function syncProcessOutputPorts() {
+    let changed = false;
+    await Promise.all(Array.from(nodesLayer.querySelectorAll('.workflow-node--process'), async (node) => {
+      const nodeId = node.dataset.nodeId;
+      const hash = await codeHashOf(processCodeOf(node));
+      if (parseProcessOutputPorts(node.dataset.processOutputPorts)?.codeHash === hash) return;
+      if (processOutputDetections.get(nodeId) === hash) return;
+      processOutputDetections.set(nodeId, hash);
+      try {
+        const detected = await detectProcessOutputs(processCodeOf(node));
+        const live = getNodeById(nodeId);
+        // Code edited while this was in flight: the sync that edit triggered detects the new code.
+        if (!live || await codeHashOf(processCodeOf(live)) !== hash) return;
+        live.dataset.processOutputPorts = JSON.stringify({
+          ports: detected.ok ? detected.ports : [],
+          dynamic: detected.ok && detected.dynamic === true,
+          error: detected.ok ? '' : String(detected.error || 'Could not read the Process code.'),
+          codeHash: hash,
+        });
+        changed = true;
+      } catch (error) {
+        // Backend unavailable: keep the last detection; the next canvas change tries again.
+        console.warn('Could not detect Process outputs:', error);
+      } finally {
+        if (processOutputDetections.get(nodeId) === hash) processOutputDetections.delete(nodeId);
+      }
+    }));
+    if (changed) {
+      refreshNodePorts();
+      updateEdges(); // the branch ports change the node's height
+      // Not a canvas change (no undo step); the Current Pipeline still redraws its branches.
+      document.dispatchEvent(new CustomEvent('workflow:process-outputs-changed'));
+      // A reader of a branch that came or went says so without waiting for History to resolve again.
+      nodesLayer.querySelectorAll('.workflow-node[data-waiting-for-upstream="1"]').forEach((node) => {
+        node.title = readStepInputStatus(node).waiting || 'Waiting for upstream results.';
+      });
+    }
+  }
+  function scheduleProcessOutputSync() {
+    clearTimeout(processOutputSyncTimer);
+    processOutputSyncTimer = setTimeout(() => { void syncProcessOutputPorts(); }, 500);
+  }
+  document.addEventListener('workflow:canvas-changed', scheduleProcessOutputSync);
+
   async function runProcessNode(nodeId, { signal, onStarted, timeoutMs } = {}) {
     if (historySession?.projectId && canvasHistoryVersion === 1) {
       let sync;
@@ -5511,20 +5807,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (!processNode?.classList.contains('workflow-node--process')) throw new Error('Process node was not found.');
     const code = resolveDataframeProcessCode({ dfCode: processNode.dataset.processDfCode, code: processNode.dataset.processCode });
     if (!code) throw new Error('The Process has no code.');
-    const { datasets, primaryDatasetId } = getProcessDatasets(processNode);
-    let savedAliases = {};
-    try { savedAliases = JSON.parse(processNode.dataset.processDatasetAliases || '{}'); } catch (_) {}
-    const bindings = buildProcessDatasetBindings(datasets, primaryDatasetId).map((binding) => ({
-      ...binding, alias: savedAliases[binding.nodeId] || binding.alias,
-    }));
-    const required = new Set([
-      primaryDatasetId,
-      ...connections.filter((edge) => edge.type === EDGE_TYPE_DATASET_TO_PROCESS && edge.toId === nodeId).map((edge) => edge.fromId),
-      ...referencedDatasetAliases(code, bindings, savedAliases),
-    ]);
-    const executionBindings = bindings.filter((binding) => required.has(binding.nodeId));
-    const missingInput = executionBindings.find((binding) => binding.missingResult);
-    if (missingInput) throw new Error(`Input Dataset "${missingInput.name}" has no current result.`);
+    const executionBindings = readProcessExecutionInputs(processNode, code);
     const session = historySession?.projectId && canvasHistoryVersion === 1 ? historySession : null;
     let record = session ? (await session.reserve(getCanvasState(), nodeId)).record : null;
     if (record) {
@@ -5623,7 +5906,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const ctx = resolveLiveScoreComparisonContext(canvasState, raw);
     if (!ctx) return [];
     try {
-      const rows = await buildReviewComparisonRows(ctx.scoreEl, ctx.runEl, ctx.datasetMap, ctx.promptSections);
+      const rows = await buildReviewComparisonRows(ctx.scoreEl, ctx.runEl, ctx.datasetMap, ctx.promptSections, ctx.runInput);
       return Array.isArray(rows) ? rows : [];
     } catch (_) {
       return [];
@@ -5637,6 +5920,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const result = inspectWorkflowNode(getCanvasState(), nodeId, {
       ...options,
       extractInputFields: extractInputFieldsFromSections,
+      contentLocks: await getContentLocksForCanvas(),
     });
     if (result?.found && (result.type === 'run' || result.type === 'process') && history && !history.stale) {
       result.history = await historySession.displayEntriesForNode(nodeId, getCanvasState(), {
@@ -5704,151 +5988,29 @@ export function buildWorkflowCanvas(root, options = {}) {
       showPipelineOverviewModal(() => detectPipelines(getCanvasState()), {
         host: workspacePanels.pipelineHost,
         // Opens the node's own window, where its History is, the same way a new node opens.
-        openCanvasNode: (nodeId) => getNodeById(nodeId)?.click(),
+        revealCanvasNode: revealNode,
         getCanvasState,
         getPipelineProjectId,
         getAssetProjectId: getCurrentProjectId,
+        // A finished run's results are added to the History of the steps it ran, and each step switches
+        // to them; nothing is added to the canvas (docs/design/DATA_FLOW_DESIGN.md §6.3).
         publishPipelineRun: async ({ run, definition, getArtifact }) => {
           const canvasProjectId = getCurrentProjectId();
-          if (await getPipelineProjectId() !== run.project_id) throw new Error('The open project changed while publishing Pipeline results.');
-          if (getCurrentProjectId() !== canvasProjectId) throw new Error('The open project changed while publishing Pipeline results.');
-          const frozen = withCompatibleLegacyCanvas(definition, getCanvasState());
-          const artifactDefs = new Map((definition?.spec?.artifacts || []).map((item) => [item.id, item]));
-          const copyIds = new Map(); // logical artifact id -> its Dataset copy on the canvas
-          let datasets = 0;
-          for (const artifact of run.artifacts || []) {
-            if (getCurrentProjectId() !== canvasProjectId) throw new Error('The open project changed while publishing Pipeline results.');
-            const logicalId = artifact.logical_id;
-            if (!artifact.valid || !artifactDefs.get(logicalId)?.producer) continue;
-            const producer = artifactDefs.get(logicalId).producer;
-            const existing = getCanvasState().nodes.find((item) => item.pipelineRunId === run.run_id && item.pipelineLogicalId === logicalId);
-            if (existing) {
-              copyIds.set(logicalId, existing.nodeId);
-              continue;
-            }
-            const result = await getArtifact(logicalId);
-            const table = result?.table;
-            if (getCurrentProjectId() !== canvasProjectId) throw new Error('The open project changed while publishing Pipeline results.');
-            if (!table || !Array.isArray(table.rows)) continue;
-            const sourceEntry = definition?.spec?.source_map?.[producer?.job_id];
-            const source = sourceEntry?.node_ids || [];
-            const sourceNodeId = source.at(-1) || '';
-            const sourceKind = (definition?.spec?.jobs || []).find((job) => job.id === producer?.job_id)?.type;
-            const [stepName = '', runName = ''] = sourceEntry?.names || [];
-            const port = producer?.port || 'result';
-            const original = String(logicalId).startsWith('dataset:') ? getNodeById(String(logicalId).slice('dataset:'.length)) : null;
-            const sourceLabel = sourceKind === 'llm' ? `${stepName} ${runName}`.trim()
-              : sourceKind === 'process' ? `${port === 'result' ? '' : `branch "${port}" of `}Process "${stepName}"` : '';
-            const created = addDatasetNode({
-              name: artifact.name || 'Pipeline result',
-              notes: pipelineResultNote(run, sourceLabel),
-              ...pipelineResultPosition(logicalId, sourceNodeId),
-              headers: table.headers || [], rows: table.rows || [],
-              columnTypes: table.column_types || [], rowIds: table.row_ids || [],
-              sourceRunNodeId: sourceKind === 'llm' ? sourceNodeId : '',
-              // Named as the Dataset it copies (an unnamed output stays unnamed), so both are one Process branch.
-              processOutputName: sourceKind !== 'process' ? '' : original ? original.dataset.processOutputName || '' : port,
-              savedCopy: true,
-              pipelineRunId: run.run_id, pipelineLogicalId: logicalId,
-            });
-            if (created?.nodeId) copyIds.set(logicalId, created.nodeId);
-            if (created?.nodeId && sourceKind === 'process' && getNodeById(sourceNodeId)) {
-              connections.push({ fromId: sourceNodeId, toId: created.nodeId, type: EDGE_TYPE_PROCESS_TO_DATASET });
-              updateEdges();
-              document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-            }
-            if (created?.created) datasets += 1;
+          const projectChanged = () => new Error('The open project changed while publishing Pipeline results.');
+          if (await getPipelineProjectId() !== run.project_id) throw projectChanged();
+          if (getCurrentProjectId() !== canvasProjectId) throw projectChanged();
+          if (!historySession?.projectId || canvasHistoryVersion !== 1) {
+            return { history: 0, historyError: 'Node History is unavailable for this project.' };
           }
-          // The steps that read an artifact in this run move onto its copy, and their History records
-          // name the copy, so the canvas shows the run's results along the whole chain.
-          const moves = pipelineCopyInputs(definition?.spec, copyIds);
-          const canvasNodes = new Map(getCanvasState().nodes.map((node) => [node.nodeId, node]));
-          const inputCopies = new Map();
-          for (const [jobId, inputs] of moves) {
-            const copies = new Map();
-            for (const [logicalId, nodeId] of inputs) {
-              const node = canvasNodes.get(nodeId);
-              if (node?.datasetContent) copies.set(logicalId, { nodeId, name: node.name, content: node.datasetContent });
-            }
-            if (copies.size) inputCopies.set(jobId, copies);
+          let history;
+          try {
+            history = await importPipelineRunHistory({ run, definition, getArtifact, session: historySession });
+          } catch (error) {
+            return { history: 0, historyError: error?.message || 'Could not import node History.' };
           }
-          let history = { imported: 0, recordIdsByJob: new Map() };
-          let historyError = '';
-          if (historySession?.projectId && canvasHistoryVersion === 1) {
-            try {
-              history = await importPipelineRunHistory({ run, definition: frozen, getArtifact, session: historySession, inputCopies });
-            } catch (error) {
-              historyError = error?.message || 'Could not import node History.';
-            }
-          } else {
-            historyError = 'Node History is unavailable for this project.';
-          }
-          if (getCurrentProjectId() !== canvasProjectId) throw new Error('The open project changed while publishing Pipeline results.');
-          let changed = false;
-          for (const [logicalId, nodeId] of copyIds) {
-            const recordId = history.recordIdsByJob.get(artifactDefs.get(logicalId).producer?.job_id);
-            const live = getNodeById(nodeId);
-            if (recordId && live && live.dataset.snapshotSourceRecordId !== recordId) {
-              live.dataset.snapshotSourceRecordId = recordId;
-              changed = true;
-            }
-          }
-          let rewired = false;
-          for (const [jobId, copies] of inputCopies) {
-            const consumerId = definition.spec.source_map?.[jobId]?.node_ids?.at(-1) || '';
-            const consumer = getNodeById(consumerId);
-            for (const [logicalId, { nodeId: copyId }] of copies) {
-              const oldId = String(logicalId).replace(/^dataset:/, '');
-              if (!consumer || !getNodeById(copyId)) continue;
-              // Only where the step still reads the old Dataset; a canvas edited since then is left alone.
-              if (consumer.classList.contains('workflow-node--run')) {
-                if (consumer.dataset.runWorkingSetId !== oldId) continue;
-                consumer.dataset.runWorkingSetId = copyId;
-              } else if (consumer.classList.contains('workflow-node--process')) {
-                const edge = connections.find((item) => (
-                  item.type === EDGE_TYPE_DATASET_TO_PROCESS && item.fromId === oldId && item.toId === consumerId
-                ));
-                if (!edge) continue;
-                const wasPrimary = getProcessDatasets(consumer).primaryDatasetId === oldId;
-                edge.fromId = copyId;
-                if (wasPrimary) consumer.dataset.processPrimaryDatasetId = copyId;
-                let aliases = null;
-                try { aliases = JSON.parse(consumer.dataset.processDatasetAliases || '{}'); } catch (_) {}
-                if (aliases && oldId in aliases) {
-                  aliases[copyId] = aliases[oldId];
-                  delete aliases[oldId];
-                  consumer.dataset.processDatasetAliases = JSON.stringify(aliases);
-                }
-              } else {
-                continue;
-              }
-              rewired = true;
-            }
-          }
-          // An older output that still follows History would switch to this run's result beside its copy.
-          // Once the copy has taken over every step that read it, it keeps what it shows, as when edited:
-          // the earlier result, dashed with the rest of that earlier chain.
-          for (const [logicalId, copyId] of copyIds) {
-            const datasetId = String(logicalId).replace(/^dataset:/, '');
-            const old = String(logicalId).startsWith('dataset:') ? getNodeById(datasetId) : null;
-            if (!old || old.dataset.resultMissing === '1') continue;
-            const source = datasetHistorySource({
-              nodeId: datasetId, savedCopy: old.dataset.savedCopy === '1',
-              sourceRunNodeId: old.dataset.sourceRunNodeId, processOutputName: old.dataset.processOutputName,
-            }, connections);
-            const takenOver = (definition.spec.jobs || []).every((job) => {
-              if (!Object.values(job.inputs || {}).includes(logicalId)) return true;
-              const step = getNodeById(definition.spec.source_map?.[job.id]?.node_ids?.at(-1));
-              return stepReadsDataset(step, copyId) && !stepReadsDataset(step, datasetId);
-            });
-            if (!source || !takenOver) continue;
-            old.dataset.savedCopy = '1';
-            const sourceRecordId = getNodeById(source.sourceId)?.dataset.historyRecordId;
-            if (sourceRecordId) old.dataset.snapshotSourceRecordId = sourceRecordId;
-            changed = true;
-            updateEdges();
-          }
+          if (getCurrentProjectId() !== canvasProjectId) throw projectChanged();
           // Each step shows this run's result, also where an earlier record had the same inputs.
+          let changed = false;
           for (const [jobId, recordId] of history.recordIdsByJob) {
             const step = getNodeById(definition.spec.source_map?.[jobId]?.node_ids?.at(-1));
             if (step && step.dataset.historyRecordId !== recordId) {
@@ -5856,14 +6018,12 @@ export function buildWorkflowCanvas(root, options = {}) {
               changed = true;
             }
           }
-          if (rewired) {
-            updateEdges();
-            syncNodeDependencyColors();
-          }
-          if (changed || rewired) document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-          if (history.imported || rewired || changed) await reconcileHistory();
-          return { history: history.imported, datasets, historyError };
+          if (changed) document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+          if (history.imported || changed) await reconcileHistory();
+          return { history: history.imported, historyError: '' };
         },
+        isPipelineRunImported: (run) => (historySession?.projectId
+          ? pipelineRunImported(run, historySession.index) : Promise.resolve(false)),
         highlightCanvasNodes: highlightPipelineNodes,
         focusCanvasNodes: focusPipelineNodes,
       });
@@ -5909,7 +6069,6 @@ export function buildWorkflowCanvas(root, options = {}) {
     getCanvasState,
     inspectNode,
     addPromptVersion,
-    addRunNode,
     addScoreNode,
     updateScoreNode,
     updateScoreRowSelection,
@@ -5921,13 +6080,9 @@ export function buildWorkflowCanvas(root, options = {}) {
     stopRunNode,
     runProcessNode,
     stopReviewNode,
-    saveRunResultsToWorkspace,
-    saveScoreResultsToWorkspace,
     addSamplerNode,
-    addSampledDatasetNode,
     addPromptNode,
     addDatasetNode,
-    addProcessNode,
     importPubmedDataset,
     importClinicaltrialsDataset,
     importPreprintDataset,

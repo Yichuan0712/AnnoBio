@@ -7,15 +7,18 @@ import { EditorView, basicSetup } from 'codemirror';
 import { python } from '@codemirror/lang-python';
 import { showAlert } from './alertModal.js';
 import { selectPlaceholderLabel, formatResultOutputColumnLabel } from './displayTextNormalize.js';
+import { renderSourceLink } from './nodeSourceLink.js';
 import { attachModalPaneCycle } from './paneToggleButton.js';
 import { executionIdleLabel } from './executionResumeState.js';
 import { showExecutionError } from './executionErrorPanel.js';
+import { buildMatchGtRowDict, buildMatchRunRowInputDict, buildMatchRunRowOutputDict } from './scoreCodeRunClient.js';
 import { extractInputFieldsFromSections } from './promptDetailModal.js';
 import { computeGreedyRunToGtPairing, flattenScoreRules, isScoreInputSideRuleKey } from './scoreRunGtPairing.js';
 import {
   parseScoreMappingBundle,
   serializeScoreMappingBundle,
   emptyScoreRuleGroup,
+  filterScoreRulesByGtColumns,
   scoreBundleRootsForEmbeddingWalk,
 } from './scoreMappingBundle.js';
 import {
@@ -60,7 +63,7 @@ export {
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { prepareReviewBody, prepareAssets } from './runClient.js';
 import { getCurrentProjectId } from './currentProject.js';
-import { displayCell, cloneCell, isAssetCell } from './datasetContent.js';
+import { displayCell, isAssetCell } from './datasetContent.js';
 import { ensureScoreReviewDefaults } from './nodeSettings.js';
 
 const API_BASE = BACKEND_API_BASE;
@@ -133,38 +136,6 @@ ${sameItemLines}
     #   return set(predicted.split(";")) == set(expected.split(";"))  # same set
     return predicted != "" and predicted == expected
 `;
-}
-
-/** input_row for the "Match by code" run: this run row's input dataset columns, keyed by column name.
- * Image/PDF cells pass through as {kind, assetIds, names} (not stringified) so the backend can resolve
- * them to real file paths before the row reaches user code -- see asset_store.resolve_cell_for_code. */
-function buildMatchRunRowInputDict(runResult, runWs) {
-  const headers = runWs?.headers || [];
-  const rows = runWs?.rows || [];
-  const inputRowIdx = runResult?.input_row_index;
-  const rowValues = (typeof inputRowIdx === 'number' && rows[inputRowIdx]) ? rows[inputRowIdx] : [];
-  const dict = {};
-  headers.forEach((h, i) => { dict[String(h ?? '')] = cloneCell(rowValues[i]); });
-  return dict;
-}
-
-/** output_row for the "Match by code" run: this run row's model output fields, keyed by field name. */
-function buildMatchRunRowOutputDict(runResult) {
-  const out = runResult && runResult.output && typeof runResult.output === 'object' ? runResult.output : {};
-  const dict = {};
-  Object.keys(out).forEach((k) => { dict[k] = out[k] != null ? String(out[k]) : ''; });
-  return dict;
-}
-
-/** gt_row for the "Match by code" run: one candidate ground-truth row's columns, keyed by column name.
- * Image/PDF cells pass through structured (see buildMatchRunRowInputDict above). */
-function buildMatchGtRowDict(gtContent, rowIndex) {
-  const headers = gtContent?.headers || [];
-  const rows = gtContent?.rows || [];
-  const rowValues = rows[rowIndex] || [];
-  const dict = {};
-  headers.forEach((h, i) => { dict[String(h ?? '')] = cloneCell(rowValues[i]); });
-  return dict;
 }
 
 /**
@@ -557,13 +528,14 @@ function parseFlexibleNonNegativeNumber(raw) {
 
 /**
  * Create Review node and start review API (job-based, like Run). Polling is handled by workflowCanvas.
- * @param {{ scoreNodeId: string, getReviewPayload: () => { prompt_sections, prompt_full_text?, run_results, output_fields, comparison_rows } | null, credentialId: string }} options
+ * @param {{ scoreNodeId: string, getReviewPayload: () => { prompt_sections, prompt_full_text?, run_results, output_fields, comparison_rows } | null, credentialId: string, at?: { x: number, y: number } }} options
+ *   at: where the new Review goes on the canvas (a line let go over empty canvas)
  * @returns {Promise<{ reviewNodeId: string } | null>} reviewNodeId after node is created; null if payload/credential invalid
  */
-export async function runReviewFromScore({ scoreNodeId, getReviewPayload, credentialId }) {
+export async function runReviewFromScore({ scoreNodeId, getReviewPayload, credentialId, at }) {
   const payload = await Promise.resolve(getReviewPayload && getReviewPayload());
   if (!credentialId || !payload || !payload.prompt_sections || !payload.prompt_sections.length) return Promise.resolve(null);
-  const addEvent = new CustomEvent('workflow:add-prompt-review-node', { detail: { scoreNodeId } });
+  const addEvent = new CustomEvent('workflow:add-prompt-review-node', { detail: { scoreNodeId, at } });
   document.dispatchEvent(addEvent);
   const reviewNodeId = addEvent.detail?.reviewNodeId || '';
   if (!reviewNodeId) return Promise.resolve(null);
@@ -629,7 +601,7 @@ function reviewPreviewInputGroupMeta(r) {
       key: `gtonly:${j}`,
       sortKey: 1_000_000 + j,
       title: `Ground truth #${j + 1}`,
-      hint: 'GT-only line in Score — no paired model output',
+      hint: 'GT-only line in Evaluate — no paired model output',
     };
   }
   const ri = typeof r.row_index === 'number' && !Number.isNaN(r.row_index) ? r.row_index : 0;
@@ -719,7 +691,7 @@ function buildReviewPreviewModelOutputTable(rows, outputFields) {
   const runHashLabel = formatResultOutputColumnLabel('#');
   const thFields = cols.map((c) => `<th scope="col">${escapeHtml(c.label)}</th>`).join('');
   const thead = `<thead><tr>
-    <th scope="col">Score #</th>
+    <th scope="col">Evaluate #</th>
     <th scope="col" title="Run result row (1-based)">${escapeHtml(runHashLabel)}</th>
     <th scope="col">Result</th>
     ${thFields}
@@ -755,7 +727,7 @@ function buildReviewPreviewGroundTruthTable(rows, outputFields) {
     )
     .join('');
   const thead = `<thead><tr>
-    <th scope="col">Score #</th>
+    <th scope="col">Evaluate #</th>
     <th scope="col" title="Run result row (1-based)">${escapeHtml(runHashLabel)}</th>
     <th scope="col">Result</th>
     ${thFields}
@@ -791,12 +763,12 @@ export async function openReviewSelectionPreviewModal({ getReviewPayload }) {
   if (typeof getReviewPayload !== 'function') return;
   const payload = await Promise.resolve(getReviewPayload());
   if (!payload || !payload.prompt_sections || !payload.prompt_sections.length) {
-    showAlert('Cannot build Review data. Ensure the Score node is connected to a Run with a prompt that has sections.', { title: 'Debug: Review rows' });
+    showAlert('Cannot build Optimize data. Ensure the Evaluate node is connected to a Run with a prompt that has sections.', { title: 'Debug: Optimize rows' });
     return;
   }
   const comparisonRows = Array.isArray(payload.comparison_rows) ? payload.comparison_rows : [];
   if (comparisonRows.length === 0) {
-    showAlert('No rows selected for Review. Turn on the Review checkboxes in the Score results table for the rows you want.', { title: 'Debug: Review rows' });
+    showAlert('No rows selected for Optimize. Turn on the Optimize checkboxes in the Evaluate results table for the rows you want.', { title: 'Debug: Optimize rows' });
     return;
   }
 
@@ -888,7 +860,7 @@ export async function openReviewSelectionPreviewModal({ getReviewPayload }) {
   const summaryHtml = `
     <table class="review-suggestion-debug-table">
       <tbody>
-        <tr><th scope="row">Score lines</th><td>${escapeHtml(String(comparisonRows.length))}${totalFailed > 0 ? ` <span class="review-debug-fail-badge">${escapeHtml(String(totalFailed))} failed</span>` : ''}</td></tr>
+        <tr><th scope="row">Evaluate lines</th><td>${escapeHtml(String(comparisonRows.length))}${totalFailed > 0 ? ` <span class="review-debug-fail-badge">${escapeHtml(String(totalFailed))} failed</span>` : ''}</td></tr>
         <tr><th scope="row">Inputs</th><td>${escapeHtml(String(inputMap.size))}${inputsFailed > 0 ? ` <span class="review-debug-fail-badge">${escapeHtml(String(inputsFailed))} with failures</span>` : ''}</td></tr>
         <tr><th scope="row">Ground truth rows</th><td>${escapeHtml(String(gtMap.size))}</td></tr>
       </tbody>
@@ -905,7 +877,7 @@ export async function openReviewSelectionPreviewModal({ getReviewPayload }) {
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--review-diagnosis-detail" role="dialog">
       <div class="modal-header">
-        <h2 id="review-selection-preview-title" class="modal-title">Debug: Review rows</h2>
+        <h2 id="review-selection-preview-title" class="modal-title">Debug: Optimize rows</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body review-diagnosis-detail-body review-suggestion-debug-body">
@@ -996,7 +968,7 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
     });
     if (!res.ok) {
       document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
-      alert(res.statusText || 'Review request failed.');
+      alert(res.statusText || 'Optimize request failed.');
       return;
     }
     const data = await res.json().catch(() => ({}));
@@ -1014,11 +986,11 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
     }));
   } catch (e) {
     document.dispatchEvent(new CustomEvent('workflow:review-stream-ended', { detail: { reviewNodeId } }));
-    alert(e?.message || 'Review request failed.');
+    alert(e?.message || 'Optimize request failed.');
   }
 }
 
-export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns, getGroundTruthHeaders, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getReviewPayload, autoTriggerReview, getScoreMappingsFromCanvas, getRunInputColsCollapsed, setRunInputColsCollapsed, getScoreOutputColsCollapsed, setScoreOutputColsCollapsed, getScoreGtColsCollapsed, setScoreGtColsCollapsed }) {
+export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSets, getRunResultColumns, getGroundTruthHeaders, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getReviewPayload, autoTriggerReview, getScoreMappingsFromCanvas, getRunInputColsCollapsed, setRunInputColsCollapsed, getScoreOutputColsCollapsed, setScoreOutputColsCollapsed, getScoreGtColsCollapsed, setScoreGtColsCollapsed }) {
   getWorkingSets = getWorkingSets || (() => []);
   getRunResultColumns = getRunResultColumns || (() => []);
   getGroundTruthHeaders = getGroundTruthHeaders || (() => []);
@@ -1030,8 +1002,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
   const workingSets = getWorkingSets();
 
-  const name = (node?.querySelector?.('.workflow-node__title')?.textContent?.trim()) || 'Score';
-  const title = `Score: ${name}`;
+  const name = (node?.querySelector?.('.workflow-node__title')?.textContent?.trim()) || 'Evaluate';
+  const title = `Evaluate: ${name}`;
 
   /** Populated before pairing when any rule uses embedding similarity (local backend FastEmbed). */
   let scoreEmbeddingCosineMap = new Map();
@@ -1427,29 +1399,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     return group;
   }
 
-  /** Remove rules whose gtColumns include any column not in the selected GT headers. Returns new root. */
-  function filterRootByGtHeaders(root, gtSet) {
-    if (!root) return null;
-    if (root.type === 'rule') {
-      const cols = root.gtColumns || [];
-      const allIn = cols.length > 0 && cols.every((c) => {
-        const s = String(c || '').trim();
-        return s === SCORE_GT_ROW_INDEX_COLUMN || gtSet.has(s);
-      });
-      return allIn ? root : null;
-    }
-    if (root.type === 'group' && Array.isArray(root.children)) {
-      const filtered = root.children.map((ch) => filterRootByGtHeaders(ch, gtSet)).filter((x) => x != null);
-      const ops = (root.ops || []).slice(0, Math.max(0, filtered.length - 1));
-      const out = { type: 'group', ops, children: filtered };
-      if (typeof root.groupId === 'number' && Number.isInteger(root.groupId) && root.groupId > 0) {
-        out.groupId = root.groupId;
-      }
-      return out;
-    }
-    return null;
-  }
-
   /** Insert child at path (path points to parent group). Returns new root. */
   function insertChildAtPath(root, path, newChild, index) {
     if (path.length === 0) {
@@ -1497,18 +1446,11 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
       </div>
       <div class="modal-body score-detail-body modal-body--score">
         <div class="score-detail-main">
-          <p class="run-detail-main-label score-detail-main-label">Scoring setup</p>
+          <p class="run-detail-main-label score-detail-main-label">Evaluation setup</p>
           <div class="dataset-meta-wrap score-detail-meta-wrap">
             <div class="dataset-meta-field">
-              <label class="dataset-meta-label" for="score-detail-gt-picker">Ground truth dataset</label>
-              <div class="run-detail-ws-picker" id="score-detail-gt-picker" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="Select ground truth dataset">
-                <div class="run-detail-ws-trigger" tabindex="0">
-                  <span class="run-detail-ws-trigger-color" id="score-detail-gt-trigger-color"></span>
-                  <span class="run-detail-ws-trigger-text" id="score-detail-gt-trigger-text">${escapeHtml(selectPlaceholderLabel('Select ground truth dataset'))}</span>
-                  <span class="run-detail-ws-trigger-arrow" aria-hidden="true">⌵</span>
-                </div>
-                <div class="run-detail-ws-dropdown" id="score-detail-gt-dropdown" role="listbox" hidden></div>
-              </div>
+              <span class="dataset-meta-label">Ground truth dataset</span>
+              <div class="node-source" id="score-detail-gt-source"></div>
             </div>
             <div class="dataset-meta-field score-detail-rules-section" id="score-detail-rules-section" hidden>
               <div class="review-detail-view-switch score-detail-rules-view-switch" role="tablist" aria-label="Set rules: matching rules or custom code">
@@ -1529,7 +1471,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
                   <div class="run-detail-llm-actions-row">
                     <span class="run-detail-llm-actions-lead" aria-hidden="true"></span>
                     <div class="run-detail-llm-actions-right">
-                      <button type="button" class="btn btn-secondary run-detail-run-btn score-detail-code-run-btn">Run</button>
+                      <button type="button" class="btn btn-secondary run-detail-run-btn score-detail-code-run-btn">Run matching code</button>
                     </div>
                   </div>
                 </div>
@@ -1548,8 +1490,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
               <div class="score-detail-results-footer-row" id="score-detail-results-footer-row" hidden>
                 <button type="button" class="btn btn-secondary score-detail-save-to-workspace" id="score-detail-save-to-workspace" title="Save comparison table as a new dataset in workspace">Save to workspace</button>
                 <div class="score-detail-results-footer-right">
-                  <button type="button" class="btn btn-primary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Create a Review node and run analysis with the selected model">Review</button>
-                  <button type="button" class="btn btn-secondary score-detail-review-payload-preview" id="score-detail-review-payload-preview" title="Temporary: preview Review payload by input (model output vs ground-truth tables per group). Does not start a Review job.">Debug</button>
+                  <button type="button" class="btn btn-primary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Create an Optimize node and run analysis with the selected model">Optimize prompt</button>
+                  <button type="button" class="btn btn-secondary score-detail-review-payload-preview" id="score-detail-review-payload-preview" title="Temporary: preview Optimize payload by input (model output vs ground-truth tables per group). Does not start an Optimize node job.">Debug</button>
                 </div>
               </div>
             </div>
@@ -1559,11 +1501,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     </div>
   `;
 
-  const pickerEl = overlay.querySelector('#score-detail-gt-picker');
-  const triggerEl = overlay.querySelector('.run-detail-ws-trigger');
-  const triggerColorEl = overlay.querySelector('#score-detail-gt-trigger-color');
-  const triggerTextEl = overlay.querySelector('#score-detail-gt-trigger-text');
-  const dropdownEl = overlay.querySelector('#score-detail-gt-dropdown');
   const rulesListEl = overlay.querySelector('#score-detail-rules-list');
   const rulesSectionEl = overlay.querySelector('#score-detail-rules-section');
   const rulesTabBar = overlay.querySelector('.score-detail-rules-view-switch');
@@ -1657,9 +1594,13 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
   function setCodeRunningUi(isRunning) {
     codeRunning = isRunning;
+    if (node?.dataset) {
+      if (isRunning) node.dataset.scoreMatchUiRunning = '1';
+      else delete node.dataset.scoreMatchUiRunning;
+    }
     if (!codeRunBtn) return;
-    codeRunBtn.textContent = isRunning ? 'Running, click to stop'
-      : executionIdleLabel({ interrupted: node?.dataset?.scoreMatchInterrupted === '1' });
+    codeRunBtn.textContent = isRunning ? 'Stop matching'
+      : executionIdleLabel({ task: 'matching', interrupted: node?.dataset?.scoreMatchInterrupted === '1' });
     codeRunBtn.classList.toggle('btn-danger', isRunning);
   }
   setCodeRunningUi(false);
@@ -1677,7 +1618,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   }
 
   function setCodeMatchError(error) {
-    lastCodeMatchError = String(error?.message || error || 'Score failed.');
+    lastCodeMatchError = String(error?.message || error || 'Evaluate failed.');
     if (node?.dataset) node.dataset.scoreMatchError = lastCodeMatchError;
     showCodeResultsPlaceholder('');
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
@@ -1712,6 +1653,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     void updateSaveToWorkspaceButton();
   }
   document.addEventListener('workflow:history-resolved', refreshHistoryMatchResult);
+  document.addEventListener('workflow:score-results-updated', refreshHistoryMatchResult);
 
   function persistLastCodeMatchResult() {
     if (!node?.dataset) return;
@@ -1804,6 +1746,10 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   }
 
   async function startCodeMatchRun() {
+    if (node?.dataset?.scoreMatchAgentRunning === '1') {
+      setCodeMatchError('Evaluate matching is already running from Agent Assistant.');
+      return;
+    }
     if (!selectedNodeId) {
       setCodeMatchError('Select a ground truth dataset first.');
       return;
@@ -1811,10 +1757,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const runWs = getRunWorkingSetContent();
     const { results: rawResults, outputFields } = getRunResults();
     const gtContent = getGroundTruthContent(selectedNodeId);
-    if (gtContent.missingResult) {
-      setCodeMatchError('Ground truth Dataset has no current result. Run its upstream node first.');
-      return;
-    }
     const results = (rawResults || []).filter((r) => isValidRunOutputForScoreRow(r, outputFields));
     if (results.length === 0) {
       setCodeMatchError('No run results to match.');
@@ -1901,27 +1843,17 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     }
   }
 
+  /** The ground truth is connected on the canvas (the Score's ground truth port); this window shows it. */
   function updateTriggerDisplay() {
     const ws = getSelectedWorkingSet();
-    if (ws) {
-      triggerColorEl.style.background = ws.color || 'transparent';
-      triggerColorEl.style.display = ws.color ? '' : 'none';
-      triggerTextEl.textContent = ws.name || 'Dataset';
-    } else {
-      triggerColorEl.style.background = '';
-      triggerColorEl.style.display = 'none';
-      triggerTextEl.textContent = selectPlaceholderLabel('Select ground truth dataset');
-    }
-  }
-
-  function closeDropdown() {
-    dropdownEl.hidden = true;
-    pickerEl.setAttribute('aria-expanded', 'false');
-  }
-
-  function openDropdown() {
-    dropdownEl.hidden = false;
-    pickerEl.setAttribute('aria-expanded', 'true');
+    renderSourceLink(overlay.querySelector('#score-detail-gt-source'), {
+      label: ws ? ws.name || 'Dataset' : '', color: ws?.color || '',
+      hint: "Drag a Dataset onto this Evaluate's ground truth port.",
+      onReveal: () => {
+        close();
+        revealNode(selectedNodeId);
+      },
+    });
   }
 
   /** Open Add rule / Edit rule modal. side = 'input' | 'output': the rule's current tree (or the nominal side for a fresh top-level add). editPath = path to rule (edit), or null for add. When add: parentPath + indexInParent. Top-level rules (editPath.length === 1, or parentPath is empty) may pick a column from either side — the actual tree is derived from the column chosen. */
@@ -2587,7 +2519,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const { inputRoot, outputRoot } = loadBundle();
     const rulesFlat = isCodeMode ? [] : getRulesFlat();
     if (isCodeMode && lastCodeMatchError) {
-      showExecutionError(resultsBody, { title: `Score "${title}" failed`, error: lastCodeMatchError });
+      showExecutionError(resultsBody, { title: `Evaluate "${title}" failed`, error: lastCodeMatchError });
       if (resultsToolbar) { resultsToolbar.style.display = 'none'; resultsToolbar.innerHTML = ''; }
       return;
     }
@@ -2610,11 +2542,6 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     const { results: rawResults, outputFields } = getRunResults();
     const runWs = getRunWorkingSetContent();
     const rawGtContent = getGroundTruthContent(selectedNodeId);
-    if (rawGtContent.missingResult) {
-      resultsBody.innerHTML = '<p class="score-detail-placeholder">Ground truth Dataset has no current result. Run its upstream node first.</p>';
-      if (resultsToolbar) { resultsToolbar.style.display = 'none'; resultsToolbar.innerHTML = ''; }
-      return;
-    }
 
     const gtColsUsed = isCodeMode ? (rawGtContent.headers || []).slice() : buildScoreTableGtColumns(rulesFlat, rawGtContent);
 
@@ -2944,7 +2871,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     function runResultCellsHtml(runResult, runRowIndex, scoreTableRowNum, collapsedInputs, collapsedOutputs, blankOutputsOnly = false) {
       const idxDisplay = runResult ? String((runResult.row_index ?? runRowIndex) + 1) : '—';
       const idxTitle = scoreTableRowNum != null
-        ? `Score table row ${scoreTableRowNum}${runResult ? `; Run result row ${(runResult.row_index ?? runRowIndex) + 1}` : ''}`
+        ? `Evaluate table row ${scoreTableRowNum}${runResult ? `; Run result row ${(runResult.row_index ?? runRowIndex) + 1}` : ''}`
         : (runResult ? `Run result row ${(runResult.row_index ?? runRowIndex) + 1}` : 'No run result');
       const inpDisplay = runResult ? String((runResult.input_row_index ?? 0) + 1) : '—';
       const inpTitle = runResult ? `Dataset input row ${inpDisplay}` : '';
@@ -3186,16 +3113,16 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     trHead.appendChild(thMatch);
     const thReview = document.createElement('th');
     thReview.className = 'score-detail-results-th score-detail-results-th--review score-detail-results-th--result-block';
-    thReview.title = 'Include in Review API and in Precision / Recall / F1';
+    thReview.title = 'Include in Optimize API and in Precision / Recall / F1';
     const reviewLab = document.createElement('label');
     reviewLab.className = 'score-detail-results-review-th-label';
     const reviewSpan = document.createElement('span');
-    reviewSpan.textContent = 'Review';
+    reviewSpan.textContent = 'Optimize';
     reviewLab.appendChild(reviewSpan);
     const masterCb = document.createElement('input');
     masterCb.type = 'checkbox';
     masterCb.className = 'score-detail-results-review-master-cb';
-    masterCb.setAttribute('aria-label', 'Select or clear all Review checkboxes (all rows)');
+    masterCb.setAttribute('aria-label', 'Select or clear all Optimize checkboxes (all rows)');
     reviewLab.appendChild(masterCb);
     thReview.appendChild(reviewLab);
     trHead.appendChild(thReview);
@@ -3325,7 +3252,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
         const cb = document.createElement('input');
         cb.type = 'checkbox';
         cb.checked = !isScoreRowExcludedFromScoring(rowKey);
-        cb.setAttribute('aria-label', 'Include in Review and in Precision / Recall / F1');
+        cb.setAttribute('aria-label', 'Include in Optimize and in Precision / Recall / F1');
         cb.addEventListener('change', () => {
           const ex = { ...getScoreRowExcludedFromScoring() };
           if (cb.checked) delete ex[rowKey];
@@ -3457,7 +3384,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
 
   if (saveToWorkspaceBtn) {
     saveToWorkspaceBtn.addEventListener('click', async () => {
-      const scoreName = (node?.querySelector?.('.workflow-node__title')?.textContent || '').trim() || 'Score';
+      const scoreName = (node?.querySelector?.('.workflow-node__title')?.textContent || '').trim() || 'Evaluate';
       if (activePanelMode === 'code') {
         if (!lastCodeMatchResult) return;
         const { headers, rows } = buildCodeMatchTableData(lastCodeMatchResult);
@@ -3480,7 +3407,7 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     if (!(node.dataset.reviewCredentialId || '').trim()) await ensureScoreReviewDefaults(node);
     const credentialId = (node.dataset.reviewCredentialId || '').trim();
     if (!credentialId) {
-      showAlert('No Review model: set a default Review model in Settings.', { title: 'Review' });
+      showAlert('No Optimize model: set a default Optimize model in Settings.', { title: 'Optimize' });
       return;
     }
     await runReviewFromScore({
@@ -3591,81 +3518,9 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
     return added;
   }
 
-  function selectGroundTruth(id) {
-    selectedNodeId = id || '';
-    if (node) {
-      node.dataset.scoreGroundTruthId = selectedNodeId || '';
-      document.dispatchEvent(new CustomEvent('workflow:score-ground-truth-changed'));
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-    }
-    updateTriggerDisplay();
-    updateScoreNodeBorder();
-    syncRulesSectionVisibility();
-    closeDropdown();
-    dropdownEl.querySelectorAll('[role="option"]').forEach((o) => o.setAttribute('aria-selected', o.dataset.nodeId === selectedNodeId ? 'true' : 'false'));
-    void updateReviewButtonState();
-    if (selectedNodeId) {
-      const gtSet = new Set([...(getGroundTruthHeaders(selectedNodeId) || []), SCORE_GT_ROW_INDEX_COLUMN]);
-      const { inputRoot: ir1, outputRoot: or1 } = loadBundle();
-      const inF = filterRootByGtHeaders(ir1, gtSet) || emptyScoreRuleGroup();
-      const outF = filterRootByGtHeaders(or1, gtSet) || emptyScoreRuleGroup();
-      if (JSON.stringify(inF) !== JSON.stringify(ir1) || JSON.stringify(outF) !== JSON.stringify(or1)) {
-        persistBundle(inF, outF);
-      }
-      applyRulesFromMemory();
-    }
-    renderRules();
-  }
-
-  function populateDropdown() {
-    dropdownEl.innerHTML = '';
-    const emptyOption = document.createElement('div');
-    emptyOption.className = 'run-detail-ws-option';
-    emptyOption.setAttribute('role', 'option');
-    emptyOption.setAttribute('aria-selected', !selectedNodeId ? 'true' : 'false');
-    emptyOption.innerHTML = `<span class="run-detail-ws-option-color run-detail-ws-option-color--empty"></span><span class="run-detail-ws-option-text">${escapeHtml(selectPlaceholderLabel('Select ground truth dataset'))}</span>`;
-    emptyOption.dataset.nodeId = '';
-    emptyOption.addEventListener('click', () => selectGroundTruth(''));
-    dropdownEl.appendChild(emptyOption);
-    workingSets.forEach((ws) => {
-      const option = document.createElement('div');
-      option.className = 'run-detail-ws-option';
-      option.setAttribute('role', 'option');
-      option.setAttribute('aria-selected', ws.nodeId === selectedNodeId ? 'true' : 'false');
-      option.innerHTML = `<span class="run-detail-ws-option-color" style="background:${escapeHtml(ws.color || 'transparent')}"></span><span class="run-detail-ws-option-text">${escapeHtml(ws.name || 'Dataset')}</span>`;
-      option.dataset.nodeId = ws.nodeId;
-      option.addEventListener('click', () => selectGroundTruth(ws.nodeId));
-      dropdownEl.appendChild(option);
-    });
-  }
-
-  triggerEl.addEventListener('click', (e) => {
-    e.preventDefault();
-    if (dropdownEl.hidden) {
-      populateDropdown();
-      openDropdown();
-    } else {
-      closeDropdown();
-    }
-  });
-  triggerEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      if (dropdownEl.hidden) {
-        populateDropdown();
-        openDropdown();
-      } else {
-        closeDropdown();
-      }
-    }
-  });
-  overlay.addEventListener('click', (e) => {
-    if (pickerEl.contains(e.target)) return;
-    closeDropdown();
-  });
-
   function close() {
     document.removeEventListener('workflow:history-resolved', refreshHistoryMatchResult);
+    document.removeEventListener('workflow:score-results-updated', refreshHistoryMatchResult);
     // With no saved code the editor shows generated sample code. Writing that back untouched would change
     // the Score's History key (and wipe a running Review's result) although nothing was edited.
     const matchCode = getMatchCode();
@@ -3695,8 +3550,8 @@ export function openScoreDetailModal({ node, getWorkingSets, getRunResultColumns
   if (selectedNodeId) {
     const gtSet = new Set([...(getGroundTruthHeaders(selectedNodeId) || []), SCORE_GT_ROW_INDEX_COLUMN]);
     const { inputRoot: ir2, outputRoot: or2 } = loadBundle();
-    const inF2 = filterRootByGtHeaders(ir2, gtSet) || emptyScoreRuleGroup();
-    const outF2 = filterRootByGtHeaders(or2, gtSet) || emptyScoreRuleGroup();
+    const inF2 = filterScoreRulesByGtColumns(ir2, gtSet) || emptyScoreRuleGroup();
+    const outF2 = filterScoreRulesByGtColumns(or2, gtSet) || emptyScoreRuleGroup();
     if (JSON.stringify(inF2) !== JSON.stringify(ir2) || JSON.stringify(outF2) !== JSON.stringify(or2)) {
       persistBundle(inF2, outF2);
     }
@@ -3844,7 +3699,6 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
   const { results: rawResults, outputFields } = getRunResults();
   const runWs = getRunWorkingSetContent();
   const rawGtContent = getGroundTruthContent(selectedNodeId);
-  if (rawGtContent.missingResult) return null;
   const gtColsUsed = buildScoreTableGtColumns(rulesFlat, rawGtContent);
 
   const resultsForScore = (rawResults || []).filter((r) => r);
@@ -3941,7 +3795,7 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
   const gtExportColLabels = (gtColsUsed.length > 0
     ? gtColsUsed.map((c) => formatScoreGroundTruthColumnLabel(c))
     : ['Ground truth']);
-  const headers = [...runExportHeaders, SCORE_GT_ROW_INDEX_LABEL, ...gtExportColLabels, 'Match', 'Review'];
+  const headers = [...runExportHeaders, SCORE_GT_ROW_INDEX_LABEL, ...gtExportColLabels, 'Match', 'Optimize'];
   function pushRunExportRowCells(parts, runResult, rowIndex, blankOutputsOnly = false) {
     parts.push(runResult ? String((runResult.input_row_index ?? 0) + 1) : '—');
     const inputRow = runResult && Array.isArray(runResult.input_row) ? runResult.input_row : [];

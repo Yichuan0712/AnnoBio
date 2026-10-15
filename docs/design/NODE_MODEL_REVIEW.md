@@ -56,6 +56,8 @@
 
 ## 2. 依赖关系有两套表示
 
+状态：由 [DATA_FLOW_DESIGN.md](DATA_FLOW_DESIGN.md) 实施（2026-10-08）。
+
 ### 现状
 
 | 关系 | 存法 |
@@ -87,6 +89,8 @@
 - 这一条和 §3 的 `origin` 是否合并成一次改动？
 
 ## 3. Dataset 一身多职
+
+状态：由 [DATA_FLOW_DESIGN.md](DATA_FLOW_DESIGN.md) 实施（2026-10-08）。
 
 ### 现状
 

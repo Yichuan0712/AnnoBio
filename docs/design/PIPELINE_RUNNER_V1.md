@@ -34,7 +34,7 @@ backend/data/pipeline_runs/
 
 这样既隔离项目，又不会把用户提供的路径直接用于文件系统寻址。状态/结果/取消/恢复都同时要求 `project_id + run_id`；使用另一个项目 ID 查询时返回不存在。
 
-运行历史目前长期保留在应用数据目录，不随画布 Dataset 的编辑或清空而删除。已结束的运行可在 Pipeline Runs 页签中逐条删除（`DELETE /api/pipeline/runs/{run_id}`，运行中返回 409）；自动保留期尚未实现，在此之前不自动删除成功 checkpoint。Web 项目删除目前也不隐式删除运行历史，防止项目管理动作意外抹掉调试记录。
+运行历史目前长期保留在应用数据目录，不随画布 Dataset 的编辑或清空而删除。已结束的运行可通过 `DELETE /api/pipeline/runs/{run_id}` 删除（运行中返回 409），但界面上目前没有删除入口；自动保留期尚未实现，在此之前不自动删除成功 checkpoint。Web 项目删除目前也不隐式删除运行历史，防止项目管理动作意外抹掉调试记录。
 
 图片/PDF 单元格在 artifact 中保存稳定 asset ID。实际调用模型或 Process 时仍通过现有 `project_session_id` 解析资源。Web/桌面首次 start 需准备该 session；后端重启后恢复含媒体的运行时，客户端应随 resume 提交新 session。完全自动重建媒体 session 属于 P1.5 的重启恢复验收。
 

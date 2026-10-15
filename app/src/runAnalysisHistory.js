@@ -1,5 +1,4 @@
 import { datasetSignature, sha256Signature } from './runHistorySignature.js';
-import { datasetHistorySource } from './datasetHistorySource.js';
 
 const nodeId = (node) => String(node?.nodeId || node?.id || '');
 
@@ -29,18 +28,10 @@ export async function analysisInputKeys(state, currentRecordIds) {
   const score = new Map();
   const review = new Map();
 
+  // A ground truth is always a plain Dataset (docs/design/DATA_FLOW_DESIGN.md §3.8), signed by its content.
   async function currentDatasetSignature(id) {
     const dataset = nodes.get(id);
     if (!dataset || dataset.type !== 'dataset') return null;
-    const link = datasetHistorySource(dataset, edges);
-    if (link) {
-      const sourceRecordId = currentRecordIds[link.sourceId];
-      if (!sourceRecordId) return null;
-      return {
-        signature: await datasetSignature({ nodeId: id, sourceRecordId, branch: link.branch }),
-        sourceRecordId,
-      };
-    }
     const content = dataset.datasetContent || dataset.subsetContent;
     return content ? { signature: await datasetSignature({ nodeId: id, content }) } : null;
   }
@@ -59,7 +50,6 @@ export async function analysisInputKeys(state, currentRecordIds) {
       matchCode: String(node.scoreMatchCode || ''),
       activeMatchMode: String(node.scoreActiveMatchMode || 'rules'),
     };
-    if (groundTruth.sourceRecordId) inputs.groundTruthSourceRecordId = groundTruth.sourceRecordId;
     score.set(id, { signature: await sha256Signature({ kind: 'score', ...inputs }), inputs });
   }
 

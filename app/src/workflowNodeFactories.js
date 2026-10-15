@@ -1,7 +1,9 @@
-import { processDatasetInputs } from './processDatasetBindings.js';
 import { reviewSettingsOverrides } from './nodeSettings.js';
 import { datasetColorAt, promptColorAt } from './workflowNodeColors.js';
-import { normalizeDatasetContent } from './datasetContent.js';
+import { sourceKey } from './stepInputs.js';
+import { readSavedFrom } from './savedDatasets.js';
+import { iconDataset, iconEvaluate, iconPrompt, iconRun, iconTrash } from './icons.js';
+
 export function formatSamplerDescription(samplerNode) {
   if (!samplerNode || !samplerNode.dataset) return '';
   const name = (samplerNode.dataset.samplerName || '').trim() || 'Sample';
@@ -17,6 +19,20 @@ export function formatSamplerDescription(samplerNode) {
   return `${name} · ${typeLabel}, ${sizeLabel}`;
 }
 
+/** Compact settings shown inside the Sample node, without repeating its title. */
+export function formatSamplerSettings(samplerNode) {
+  if (!samplerNode?.dataset) return '';
+  const type = samplerNode.dataset.samplerSamplingType || 'without-replacement';
+  if (type === 'specify-rows') {
+    const rows = (samplerNode.dataset.samplerRowSpec || '').trim();
+    return rows ? `Specify rows\n${rows}` : 'Specify rows';
+  }
+  const mode = type === 'with-replacement' ? 'With replacement' : 'Without replacement';
+  const sizeType = samplerNode.dataset.samplerSampleSizeType || 'ratio';
+  const size = samplerNode.dataset.samplerSampleSize != null ? String(samplerNode.dataset.samplerSampleSize).trim() : '100';
+  return `${mode}\n${sizeType === 'ratio' ? `${size}%` : `${size} rows`}`;
+}
+
 export function createWorkflowNodeFactories(deps = {}) {
   // Ignore the sub-pixel movement routinely emitted between pointerdown and click by mice and
   // trackpads. Without a threshold, that harmless jitter is classified as a drag and every node
@@ -27,7 +43,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     generateNodeId,
     allocateNodePosition,
     setNodeCanvasPosition,
-    scrollWrapper,
+    clientToCanvasPoint,
     nodesLayer,
     getZoomLevel,
     updateContentSize,
@@ -39,6 +55,20 @@ export function createWorkflowNodeFactories(deps = {}) {
     getNodeById,
     getConnections,
     datasetContentByNodeId,
+    readRunInputSource,
+    writeRunInputSource,
+    readRunInputTable,
+    describeSource,
+    readProcessInputRows,
+    revealNode,
+    readSourceOutput,
+    readStepInputStatus,
+    sourceColor,
+    readProcessPrimarySource,
+    writeProcessPrimarySource,
+    readProcessInputBindings,
+    readProcessInputAliases,
+    writeProcessInputs,
     openPromptDetailModal,
     openRunDetailModal,
     startRunNode,
@@ -70,7 +100,6 @@ export function createWorkflowNodeFactories(deps = {}) {
     unregisterPendingReview,
     RUN_API_BASE,
     NEW_NODE_OFFSET,
-    findUniqueDatasetExportName,
     isPromptNameAlreadyUsed,
     isRunNameAlreadyUsedForPrompt,
     openProcessDetailModal,
@@ -83,17 +112,6 @@ export function createWorkflowNodeFactories(deps = {}) {
 
   function getConnectionsList() {
     return Array.isArray(getConnections?.()) ? getConnections() : [];
-  }
-
-  /** Run or Process that produced this Dataset, if any (whether or not History still rewrites it). */
-  function datasetHistorySourceId(node) {
-    return node.dataset.sourceRunNodeId || getConnectionsList().find((edge) =>
-      edge.type === 'process-to-dataset' && edge.toId === node.dataset.nodeId)?.fromId || '';
-  }
-
-  function onRunWorkingSetChange() {
-    updateEdges();
-    emitCanvasChanged();
   }
 
   function attachDrag(node) {
@@ -121,9 +139,6 @@ export function createWorkflowNodeFactories(deps = {}) {
       }
       e.preventDefault();
       lastInteractionWasDrag = false;
-      const swRect = scrollWrapper.getBoundingClientRect();
-      const sl = scrollWrapper.scrollLeft;
-      const st = scrollWrapper.scrollTop;
       dragStartX = e.clientX;
       dragStartY = e.clientY;
 
@@ -136,18 +151,16 @@ export function createWorkflowNodeFactories(deps = {}) {
           const el = getNodeById(id);
           if (!el) return;
           const r = el.getBoundingClientRect();
-          groupDragEntries.push({
-            el,
-            left: (r.left - swRect.left + sl) / getZoomLevel(),
-            top: (r.top - swRect.top + st) / getZoomLevel(),
-          });
+          const start = clientToCanvasPoint(r.left, r.top);
+          groupDragEntries.push({ el, left: start.x, top: start.y });
           el.classList.add('workflow-node--dragging');
         });
       } else {
         groupDragEntries = null;
         const rect = node.getBoundingClientRect();
-        nodeStartLeft = (rect.left - swRect.left + sl) / getZoomLevel();
-        nodeStartTop = (rect.top - swRect.top + st) / getZoomLevel();
+        const start = clientToCanvasPoint(rect.left, rect.top);
+        nodeStartLeft = start.x;
+        nodeStartTop = start.y;
         node.classList.add('workflow-node--dragging');
       }
 
@@ -222,9 +235,9 @@ export function createWorkflowNodeFactories(deps = {}) {
     if (!hasNote) node.classList.add('workflow-node--no-body');
     node.innerHTML = `
       <div class="workflow-node__header">
-        <span class="workflow-node__icon workflow-node__icon--prompt" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="4" x2="12" y2="4"/><line x1="2" y1="7" x2="12" y2="7"/><line x1="2" y1="10" x2="8" y2="10"/></svg></span>
+        <span class="workflow-node__icon workflow-node__icon--prompt" aria-hidden="true">${iconPrompt(14).outerHTML}</span>
         <span class="workflow-node__title">${escapeHtml(title)}</span>
-        <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
+        <button type="button" class="workflow-node__delete" aria-label="Delete node" title="Delete node">${iconTrash(12).outerHTML}</button>
       </div>
       ${hasNote ? `<div class="workflow-node__body"><span class="workflow-node__note">${escapeHtml(noteTrimmed)}</span></div>` : ''}
     `;
@@ -282,7 +295,6 @@ export function createWorkflowNodeFactories(deps = {}) {
           }
           updateContentSize();
           emitCanvasChanged();
-          runNode?.click();
         },
       });
     });
@@ -301,7 +313,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     const nodeId = givenNodeId || generateNodeId();
     const title = (name && name.trim()) ? name.trim() : 'Sample';
     const node = document.createElement('div');
-    node.className = 'workflow-node workflow-node--sampler workflow-node--no-body';
+    node.className = 'workflow-node workflow-node--sampler';
     node.setAttribute('role', 'article');
     node.setAttribute('aria-label', `Sample node: ${title}`);
     node.dataset.nodeId = nodeId;
@@ -325,9 +337,10 @@ export function createWorkflowNodeFactories(deps = {}) {
       <div class="workflow-node__header">
         <span class="workflow-node__icon workflow-node__icon--sampler" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M2 2h10l-2 5H4L2 2z"/><line x1="4" y1="7" x2="10" y2="7"/><line x1="5" y1="11" x2="9" y2="11"/><line x1="6" y1="13" x2="8" y2="13"/></svg></span>
         <span class="workflow-node__title">${escapeHtml(title)}</span>
-        <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
+        <button type="button" class="workflow-node__delete" aria-label="Delete node" title="Delete node">${iconTrash(12).outerHTML}</button>
       </div>
     `;
+    node.insertAdjacentHTML('beforeend', `<div class="workflow-node__body workflow-node__sampler-settings"><span class="workflow-node__note">${escapeHtml(formatSamplerSettings(node))}</span></div><div class="workflow-node__sample-progress" role="progressbar" aria-label="Samples created" aria-valuenow="0" aria-valuemin="0" aria-valuemax="1" hidden></div>`);
     nodesLayer.appendChild(node);
 
     const deleteBtn = node.querySelector('.workflow-node__delete');
@@ -364,7 +377,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     return node;
   }
 
-  function createDatasetNode({ name = '', notes = '', left, top, nodeId: givenNodeId, samplerNodeId = '', sourceRunNodeId = '', processOutputName = '', savedCopy = false, snapshotSourceRecordId = '', pipelineRunId = '', pipelineLogicalId = '', colorIndex: givenColorIndex, headers, rows, columnTypes, rowIds }) {
+  function createDatasetNode({ name = '', notes = '', left, top, nodeId: givenNodeId, samplerNodeId = '', sampledSourceRowIds, savedFrom = null, colorIndex: givenColorIndex, headers, rows, columnTypes, rowIds }) {
     const nodeId = givenNodeId || generateNodeId();
     const title = (name && name.trim()) ? name.trim() : 'Dataset';
     const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
@@ -380,14 +393,10 @@ export function createWorkflowNodeFactories(deps = {}) {
     if (notes !== undefined && notes !== null) node.dataset.datasetNote = String(notes);
     node.dataset.nodeType = 'dataset';
     if (samplerNodeId) node.dataset.samplerNodeId = samplerNodeId;
-    // Links a Dataset saved from Run results to its Run (pipelines chain through it).
-    if (sourceRunNodeId) node.dataset.sourceRunNodeId = sourceRunNodeId;
-    if (processOutputName) node.dataset.processOutputName = processOutputName;
-    // A saved Run / Process output: keeps its pipeline link, but History never rewrites it (datasetHistorySource.js).
-    if (savedCopy) node.dataset.savedCopy = '1';
-    if (snapshotSourceRecordId) node.dataset.snapshotSourceRecordId = snapshotSourceRecordId;
-    if (pipelineRunId) node.dataset.pipelineRunId = pipelineRunId;
-    if (pipelineLogicalId) node.dataset.pipelineLogicalId = pipelineLogicalId;
+    if (Array.isArray(sampledSourceRowIds)) node.dataset.sampledSourceRowIds = JSON.stringify(sampledSourceRowIds);
+    // Where a Dataset saved from a step came from; shown only (savedDatasets.js).
+    const origin = readSavedFrom(savedFrom);
+    if (origin) node.dataset.savedFrom = JSON.stringify(origin);
     const colorIndex = normalizeDatasetColorIndex(givenColorIndex) ?? chooseAutomaticNodeColorIndex();
     node.dataset.datasetColorIndex = String(colorIndex);
     node.style.borderColor = datasetColorAt(colorIndex);
@@ -396,12 +405,13 @@ export function createWorkflowNodeFactories(deps = {}) {
     setNodeCanvasPosition(node, position.left, position.top);
     node.innerHTML = `
       <div class="workflow-node__header">
-        <span class="workflow-node__icon workflow-node__icon--dataset" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><rect x="1" y="1" width="12" height="12" rx="0.5"/><line x1="1" y1="4" x2="13" y2="4"/><line x1="1" y1="7" x2="13" y2="7"/><line x1="1" y1="10" x2="13" y2="10"/><line x1="4.5" y1="1" x2="4.5" y2="13"/><line x1="8" y1="1" x2="8" y2="13"/></svg></span>
+        <span class="workflow-node__icon workflow-node__icon--dataset" aria-hidden="true"></span>
         <span class="workflow-node__title">${escapeHtml(title)}</span>
-        <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
+        <button type="button" class="workflow-node__delete" aria-label="Delete node" title="Delete node">${iconTrash(12).outerHTML}</button>
       </div>
       <div class="workflow-node__body workflow-node__dataset-desc">${bodyText ? `<span class="workflow-node__note">${escapeHtml(bodyText)}</span>` : '<span class="workflow-node__note-placeholder">No description.</span>'}</div>
     `;
+    node.querySelector('.workflow-node__icon--dataset').append(iconDataset(14));
     nodesLayer.appendChild(node);
 
     const deleteBtn = node.querySelector('.workflow-node__delete');
@@ -431,18 +441,9 @@ export function createWorkflowNodeFactories(deps = {}) {
       openDatasetDetailModal({
         node,
         getContent: () => datasetContentByNodeId.get(node.dataset.nodeId) || { headers: [], rows: [] },
-        missingResult: node.dataset.resultMissing === '1',
         readOnly,
         saveContent: (content) => {
           const id = node.dataset.nodeId;
-          // An older Run / Process output still follows History; its first real edit makes it a saved copy
-          // (datasetHistorySource.js) so History stops rewriting it. The editor also saves on close.
-          if (node.dataset.savedCopy !== '1' && getHistoryForNode?.(datasetHistorySourceId(node))
-            && JSON.stringify(normalizeDatasetContent(content)) !== JSON.stringify(datasetContentByNodeId.get(id) || null)) {
-            node.dataset.savedCopy = '1';
-            const sourceRecordId = getNodeById(datasetHistorySourceId(node))?.dataset?.historyRecordId;
-            if (sourceRecordId) node.dataset.snapshotSourceRecordId = sourceRecordId;
-          }
           datasetContentByNodeId.set(id, content);
           emitCanvasChanged();
         },
@@ -473,9 +474,9 @@ export function createWorkflowNodeFactories(deps = {}) {
     setNodeCanvasPosition(node, position.left, position.top);
     node.innerHTML = `
       <div class="workflow-node__header">
-        <span class="workflow-node__icon workflow-node__icon--run" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true"><path d="M3 2v10l8-5-8-5z"/></svg></span>
+        <span class="workflow-node__icon workflow-node__icon--run" aria-hidden="true">${iconRun(14).outerHTML}</span>
         <span class="workflow-node__title">${escapeHtml(runTitle)}</span>
-        <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
+        <button type="button" class="workflow-node__delete" aria-label="Delete node" title="Delete node">${iconTrash(12).outerHTML}</button>
       </div>
       <div class="workflow-node__run-progress" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
     `;
@@ -519,8 +520,7 @@ export function createWorkflowNodeFactories(deps = {}) {
       e.preventDefault();
       e.stopPropagation();
       const runNodeId = node.dataset.nodeId;
-      // A Run picks its Prompt in its window; the prompt-to-run connection records that choice,
-      // so the Prompt is looked up on every call rather than fixed when the window opens.
+      // The Prompt is connected on the canvas (prompt-to-run); it is looked up on every call.
       const currentPromptNode = () => {
         const edge = getConnectionsList().find((c) => c.toId === runNodeId && c.type === 'prompt-to-run');
         return edge ? getNodeById(edge.fromId) : null;
@@ -535,22 +535,6 @@ export function createWorkflowNodeFactories(deps = {}) {
           return [];
         }
       }
-      const workingSets = Array.from(nodesLayer.querySelectorAll('.workflow-node--dataset')).map((n) => {
-        const id = n.dataset.nodeId || '';
-        const content = datasetContentByNodeId.get(id);
-        const colorIndex = n.dataset.datasetColorIndex != null ? parseInt(n.dataset.datasetColorIndex, 10) : 0;
-        const color = datasetColorAt(colorIndex);
-        return {
-          nodeId: id,
-          name: (n.dataset.datasetName || n.dataset.subsetName || '').trim() || 'Dataset',
-          headers: content?.headers ? content.headers.slice() : [],
-          color,
-        };
-      });
-      function getSubsetContent(nodeId) {
-        const c = datasetContentByNodeId.get(nodeId);
-        return c || { headers: [], columnTypes: [], rowIds: [], rows: [] };
-      }
       function getPromptTemplate() {
         const promptNode = currentPromptNode();
         if (!promptNode) return { sections: [], outputSchema: { return_shape: 'single', fields: [] } };
@@ -563,36 +547,32 @@ export function createWorkflowNodeFactories(deps = {}) {
         try { inputTypes = JSON.parse(promptNode.dataset.promptInputTypes || '{}'); } catch (_) {}
         return { sections: promptSectionsOf(promptNode), inputTypes, outputSchema: { return_shape: returnShape, fields } };
       }
-      function selectPrompt(promptNodeId) {
-        const connections = getConnectionsList();
-        for (let index = connections.length - 1; index >= 0; index -= 1) {
-          if (connections[index].toId === runNodeId && connections[index].type === 'prompt-to-run') connections.splice(index, 1);
-        }
-        if (promptNodeId) connections.push({ fromId: promptNodeId, toId: runNodeId, type: 'prompt-to-run' });
-        updateEdges();
-        emitCanvasChanged();
-      }
       openRunDetailModal({
         node,
         startRunNode,
-        getWorkingSets: () => workingSets,
-        getPrompts: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--prompt'))
-          .map((n) => ({
-            nodeId: n.dataset.nodeId || '',
-            name: promptNameOf(n) || 'Prompt',
-            color: promptColorAt(normalizeDatasetColorIndex(n.dataset.promptColorIndex) ?? 0),
-          })),
+        // The table the input gives (stepOutputs.js); the Prompt and the input are shown, not chosen, here.
+        getInputTable: (source) => readSourceOutput(source),
         getPromptId: () => currentPromptNode()?.dataset?.nodeId || '',
-        selectPrompt,
+        describePrompt: () => {
+          const promptNode = currentPromptNode();
+          return promptNode ? {
+            nodeId: promptNode.dataset.nodeId,
+            label: promptNameOf(promptNode) || 'Prompt',
+            color: promptColorAt(normalizeDatasetColorIndex(promptNode.dataset.promptColorIndex) ?? 0),
+          } : null;
+        },
+        describeInput: () => {
+          const source = readRunInputSource(node);
+          return source ? { nodeId: source.nodeId, ...describeSource(source) } : null;
+        },
+        revealNode,
         getPromptInputFields: () => extractInputFieldsFromSections(promptSectionsOf(currentPromptNode())),
-        getSubsetContent,
         getPromptTemplate,
         unregisterPendingRun,
         getPendingRunId: () => pendingRuns.get(node.dataset.nodeId) || null,
-        getPromptName: () => promptNameOf(currentPromptNode()),
-        getUniqueDatasetExportName: findUniqueDatasetExportName,
         isRunNameAlreadyUsedForPrompt,
-        onWorkingSetChange: onRunWorkingSetChange,
+        getInputSource: () => readRunInputSource(node),
+        getInputStatus: () => readStepInputStatus(node),
         getRunMappingsFromCanvas: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--run')).map((n) => {
           try {
             const raw = n.dataset.runInputToColumn;
@@ -609,7 +589,7 @@ export function createWorkflowNodeFactories(deps = {}) {
   }
 
   /** Process node: runs user-written process(df), with one primary Dataset and optional named inputs. */
-  function createProcessNode({ left, top, nodeId: givenNodeId, title: givenTitle, code, dfCode, primaryDatasetId = '', datasetAliases = '' }) {
+  function createProcessNode({ left, top, nodeId: givenNodeId, title: givenTitle, code, dfCode, outputPorts }) {
     const nodeId = givenNodeId || generateNodeId();
     const node = document.createElement('div');
     node.className = 'workflow-node workflow-node--process workflow-node--no-body';
@@ -624,15 +604,14 @@ export function createWorkflowNodeFactories(deps = {}) {
     if (code != null) node.dataset.processCode = String(code);
     if (dfCode != null) node.dataset.processDfCode = String(dfCode);
     if (dfCode != null) node.dataset.processActiveMode = 'df';
-    if (primaryDatasetId) node.dataset.processPrimaryDatasetId = String(primaryDatasetId);
-    if (datasetAliases) node.dataset.processDatasetAliases = String(datasetAliases);
+    if (outputPorts) node.dataset.processOutputPorts = typeof outputPorts === 'string' ? outputPorts : JSON.stringify(outputPorts);
     const position = allocateNodePosition(left, top);
     setNodeCanvasPosition(node, position.left, position.top);
     node.innerHTML = `
       <div class="workflow-node__header">
         <span class="workflow-node__icon workflow-node__icon--process" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 3L1 7l3 4M10 3l3 4-3 4"/></svg></span>
         <span class="workflow-node__title">${escapeHtml(processTitle)}</span>
-        <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
+        <button type="button" class="workflow-node__delete" aria-label="Delete node" title="Delete node">${iconTrash(12).outerHTML}</button>
       </div>
       <div class="workflow-node__process-progress" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
     `;
@@ -666,57 +645,36 @@ export function createWorkflowNodeFactories(deps = {}) {
       if (dragState.wasDrag()) return;
       e.preventDefault();
       e.stopPropagation();
+      // A branch offers new steps on that branch (outputMenu.js) instead of opening the window.
+      const branch = e.target.closest('.workflow-node__port-row[data-port-side="right"][data-port-id]:not(.workflow-node__port-row--unavailable)');
+      if (branch) {
+        showNodeContextMenu(e.clientX, e.clientY, node, { port: branch.dataset.portId });
+        return;
+      }
       const processNodeId = node.dataset.nodeId;
-      function getProcessDatasets() {
-        const datasets = Array.from(nodesLayer.querySelectorAll('.workflow-node--dataset'))
-          .map((datasetNode) => {
-            const savedColorIndex = datasetNode.dataset.datasetColorIndex != null
-              ? parseInt(datasetNode.dataset.datasetColorIndex, 10)
-              : 0;
-            const colorIndex = Number.isFinite(savedColorIndex) && savedColorIndex >= 0
-              ? savedColorIndex % DATASET_BORDER_COLORS.length
-              : 0;
-            return {
-              nodeId: datasetNode.dataset.nodeId,
-              name: datasetNode.dataset.datasetName || 'Dataset',
-              color: datasetColorAt(colorIndex),
-              content: datasetContentByNodeId.get(datasetNode.dataset.nodeId),
-            };
-          })
-          .filter((dataset) => dataset.content);
-        const incoming = getConnectionsList().find((connection) => (
-          connection.toId === processNodeId && connection.type === 'dataset-to-process'
-        ));
-        const primaryDatasetId = datasets.some((dataset) => dataset.nodeId === node.dataset.processPrimaryDatasetId)
-          ? node.dataset.processPrimaryDatasetId
-          : (incoming?.fromId || '');
-        if (primaryDatasetId) node.dataset.processPrimaryDatasetId = primaryDatasetId;
-        return { datasets, primaryDatasetId };
+      /** The key of the Process's df, recording the fallback (its first input) so it stays put when inputs change. */
+      function primaryKey() {
+        const primary = readProcessPrimarySource(node);
+        if (primary) writeProcessPrimarySource(node, primary);
+        return sourceKey(primary);
       }
-      function savedAliases() {
-        try { return JSON.parse(node.dataset.processDatasetAliases || '{}'); } catch (_) { return {}; }
-      }
-      /** Every canvas Dataset with its alias, marking the ones this Process reads with `code`. */
+      /**
+       * Every Dataset and step output with its alias, marking the ones this Process reads with `code`,
+       * each with the table it gives now (none while a step has no result yet).
+       */
       function getProcessInputs(code) {
-        const { datasets, primaryDatasetId } = getProcessDatasets();
-        const content = new Map(datasets.map((dataset) => [dataset.nodeId, dataset]));
-        const bindings = processDatasetInputs({ datasets, primaryDatasetId, savedAliases: savedAliases(), code })
-          .map((binding) => ({ ...binding, color: content.get(binding.nodeId).color, content: content.get(binding.nodeId).content }));
-        return { bindings, primaryDatasetId, savedAliases: savedAliases() };
+        const primaryDatasetId = primaryKey();
+        const bindings = readProcessInputBindings(node, code, primaryDatasetId).map((binding) => ({
+          ...binding,
+          color: sourceColor(binding),
+          content: binding.kind === 'dataset' ? datasetContentByNodeId.get(binding.nodeId) : readSourceOutput(binding).table,
+        }));
+        return { bindings, primaryDatasetId, savedAliases: readProcessInputAliases(node) };
       }
-      /** Connects exactly the Datasets the code declares or uses and saves the alias each has there. */
+      /** Connects exactly the sources the code declares or uses and saves the alias each has there. */
       function syncProcessDependencies(code) {
-        const { datasets, primaryDatasetId } = getProcessDatasets();
-        const inputs = processDatasetInputs({ datasets, primaryDatasetId, savedAliases: savedAliases(), code })
-          .filter((binding) => binding.input);
-        node.dataset.processDatasetAliases = JSON.stringify(Object.fromEntries(inputs.map((binding) => [binding.nodeId, binding.alias])));
-        const allConnections = getConnectionsList();
-        for (let index = allConnections.length - 1; index >= 0; index -= 1) {
-          if (allConnections[index].toId === processNodeId && allConnections[index].type === 'dataset-to-process') allConnections.splice(index, 1);
-        }
-        inputs.forEach((binding) => {
-          allConnections.push({ fromId: binding.nodeId, toId: processNodeId, type: 'dataset-to-process' });
-        });
+        const inputs = readProcessInputBindings(node, code, primaryKey()).filter((binding) => binding.input);
+        writeProcessInputs(node, { primary: readProcessPrimarySource(node), inputs });
         updateEdges();
         emitCanvasChanged();
       }
@@ -725,12 +683,10 @@ export function createWorkflowNodeFactories(deps = {}) {
         runProcessNode,
         getProcessInputs,
         syncProcessDependencies,
-        setPrimaryDataset: (datasetNodeId, code) => {
-          if (datasetNodeId) node.dataset.processPrimaryDatasetId = datasetNodeId;
-          else delete node.dataset.processPrimaryDatasetId;
-          syncProcessDependencies(code);
-        },
-        getUniqueDatasetExportName: findUniqueDatasetExportName,
+        // df and each parameter of the code, with what is connected to it on the canvas.
+        getInputRows: (code) => readProcessInputRows(node, code),
+        revealNode,
+        getInputStatus: () => readStepInputStatus(node),
         history: getHistoryForNode?.(processNodeId),
       });
     });
@@ -743,17 +699,17 @@ export function createWorkflowNodeFactories(deps = {}) {
     const node = document.createElement('div');
     node.className = 'workflow-node workflow-node--score workflow-node--no-body';
     node.setAttribute('role', 'article');
-    node.setAttribute('aria-label', 'Score node');
+    node.setAttribute('aria-label', 'Evaluate node');
     node.dataset.nodeId = nodeId;
     node.dataset.nodeType = 'score';
-    const scoreTitle = (givenTitle != null && givenTitle !== '') ? String(givenTitle) : 'Score';
+    const scoreTitle = (givenTitle != null && givenTitle !== '') ? String(givenTitle) : 'Evaluate';
     const position = allocateNodePosition(left, top);
     setNodeCanvasPosition(node, position.left, position.top);
     node.innerHTML = `
       <div class="workflow-node__header">
-        <span class="workflow-node__icon workflow-node__icon--score" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8v4M6 5v7M9 3v9M12 6v6"/></svg></span>
+        <span class="workflow-node__icon workflow-node__icon--score" aria-hidden="true">${iconEvaluate(14).outerHTML}</span>
         <span class="workflow-node__title">${escapeHtml(scoreTitle)}</span>
-        <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
+        <button type="button" class="workflow-node__delete" aria-label="Delete node" title="Delete node">${iconTrash(12).outerHTML}</button>
       </div>
       <div class="workflow-node__score-progress" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
     `;
@@ -822,8 +778,7 @@ export function createWorkflowNodeFactories(deps = {}) {
         }
         const outputFields = deriveOutputFields(results, schemaFields);
         outputFields.forEach((f) => cols.push({ key: f.key || '', label: formatResultOutputColumnLabel((f.display || f.key || '').trim() || f.key || '—') }));
-        const wsId = (runNode.dataset.runWorkingSetId || '').trim();
-        const wsContent = wsId ? datasetContentByNodeId.get(wsId) : null;
+        const wsContent = readRunInputTable(runNode);
         const wsHeaders = (wsContent && wsContent.headers) ? wsContent.headers.slice() : [];
         cols.push({ key: '[#]', label: 'Input: #' });
         wsHeaders.forEach((h) => {
@@ -855,20 +810,16 @@ export function createWorkflowNodeFactories(deps = {}) {
         return { results, outputFields };
       }
       function getRunWorkingSetContent() {
-        const wsId = (runNode && runNode.dataset.runWorkingSetId) ? runNode.dataset.runWorkingSetId.trim() : '';
-        const c = wsId ? datasetContentByNodeId.get(wsId) : null;
+        const c = readRunInputTable(runNode);
         return c ? { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) } : { headers: [], rows: [] };
       }
       function getGroundTruthContent(wsNodeId) {
         const c = datasetContentByNodeId.get(wsNodeId || '');
-        if (getNodeById(wsNodeId)?.dataset?.resultMissing === '1') return { headers: [], rows: [], missingResult: true };
         if (!c) return { headers: [], rows: [] };
         return { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) };
       }
       async function getReviewPayload() {
         if (!promptNode || !runNode || !node) return null;
-        const gtId = String(node.dataset.scoreGroundTruthId || '').trim();
-        if (gtId && getNodeById(gtId)?.dataset?.resultMissing === '1') return null;
         let sections = [];
         try {
           sections = JSON.parse(promptNode.dataset.promptSections || promptNode.dataset.promptFields || '[]');
@@ -903,7 +854,7 @@ export function createWorkflowNodeFactories(deps = {}) {
             };
           }
         } catch (_) {}
-        const comparison_rows = await buildReviewComparisonRows(node, runNode, datasetContentByNodeId, sections);
+        const comparison_rows = await buildReviewComparisonRows(node, runNode, datasetContentByNodeId, sections, readRunInputTable(runNode));
         return {
           prompt_sections: sections,
           prompt_full_text: promptFullText,
@@ -921,6 +872,7 @@ export function createWorkflowNodeFactories(deps = {}) {
       }
       openScoreDetailModal({
         node,
+        revealNode,
         getWorkingSets: () => workingSets,
         getRunResultColumns,
         getGroundTruthHeaders,
@@ -957,18 +909,18 @@ export function createWorkflowNodeFactories(deps = {}) {
     const node = document.createElement('div');
     node.className = 'workflow-node workflow-node--prompt-review workflow-node--no-body';
     node.setAttribute('role', 'article');
-    node.setAttribute('aria-label', 'Review node');
+    node.setAttribute('aria-label', 'Optimize node');
     node.dataset.nodeId = nodeId;
     node.dataset.nodeType = 'promptReview';
-    const promptReviewTitle = (givenTitle != null && givenTitle !== '') ? String(givenTitle) : 'Review';
-    node.dataset.promptReviewName = String(promptReviewTitle || '').trim() || 'Review';
+    const promptReviewTitle = (givenTitle != null && givenTitle !== '') ? String(givenTitle) : 'Optimize';
+    node.dataset.promptReviewName = String(promptReviewTitle || '').trim() || 'Optimize';
     const position = allocateNodePosition(left, top);
     setNodeCanvasPosition(node, position.left, position.top);
     node.innerHTML = `
       <div class="workflow-node__header">
         <span class="workflow-node__icon workflow-node__icon--prompt-review" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="10" height="10" rx="1"/><path d="M4 7l2.5 2.5L10 4"/></svg></span>
         <span class="workflow-node__title">${escapeHtml(promptReviewTitle)}</span>
-        <button type="button" class="workflow-node__delete" aria-label="Delete node">×</button>
+        <button type="button" class="workflow-node__delete" aria-label="Delete node" title="Delete node">${iconTrash(12).outerHTML}</button>
       </div>
       <div class="workflow-node__review-progress" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
     `;
@@ -1034,7 +986,7 @@ export function createWorkflowNodeFactories(deps = {}) {
           runResults = JSON.parse(runNode.dataset.runResults || '[]');
           outputFields = JSON.parse(runNode.dataset.runOutputFields || '[]');
         } catch (_) {}
-        const comparison_rows = await buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, sections);
+        const comparison_rows = await buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, sections, readRunInputTable(runNode));
         let output_schema = null;
         try {
           const raw = promptNode.dataset.promptOutputFormat || '[]';
@@ -1048,7 +1000,6 @@ export function createWorkflowNodeFactories(deps = {}) {
             output_schema = { return_shape: promptNode.dataset.promptOutputReturnShape || 'single', fields };
           }
         } catch (_) {}
-        const runWsId = (runNode.dataset.runWorkingSetId || '').trim();
         const gtId = (scoreNode.dataset.scoreGroundTruthId || '').trim();
         let run_input_to_column = {};
         try {
@@ -1067,7 +1018,7 @@ export function createWorkflowNodeFactories(deps = {}) {
           score_mapping: scoreNode.dataset.scoreMapping || '[]',
           run_credential_id,
           run_input_to_column,
-          getRunWorkingSetContent: () => runWsId ? (datasetContentByNodeId.get(runWsId) || { headers: [], rows: [] }) : { headers: [], rows: [] },
+          getRunWorkingSetContent: () => readRunInputTable(runNode) || { headers: [], rows: [] },
           getGroundTruthContent: () => gtId ? (datasetContentByNodeId.get(gtId) || { headers: [], rows: [] }) : { headers: [], rows: [] },
         };
       }
@@ -1099,13 +1050,13 @@ export function createWorkflowNodeFactories(deps = {}) {
       }
       async function onResumeReview() {
         try {
-          if (!scoreNode) throw new Error('This Review is no longer connected to a Score node.');
+          if (!scoreNode) throw new Error('This Optimize is no longer connected to an Evaluate node.');
           const payload = await getPayload();
           if (!payload?.prompt_sections?.length) {
-            throw new Error('Could not rebuild the Review input. Check the upstream Prompt, Run, Score, and ground truth.');
+            throw new Error('Could not rebuild the Optimize input. Check the upstream Prompt, Run, Evaluate, and ground truth.');
           }
           const credentialId = await resolveReviewCredentialId(scoreNode);
-          if (!credentialId) throw new Error('No Review model: set a default Review model in Settings.');
+          if (!credentialId) throw new Error('No Optimize model: set a default Optimize model in Settings.');
           scoreNode.dataset.reviewCredentialId = credentialId;
           await runReviewStart({
             reviewNodeId: node.dataset.nodeId,
@@ -1115,7 +1066,7 @@ export function createWorkflowNodeFactories(deps = {}) {
           });
           return pendingReviews.has(node.dataset.nodeId) || pendingReviewNodeIds.has(node.dataset.nodeId);
         } catch (error) {
-          showAlert(String(error?.message || error), { title: 'Review' });
+          showAlert(String(error?.message || error), { title: 'Optimize' });
           return false;
         }
       }

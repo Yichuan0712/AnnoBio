@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { previewProposal, applyProposal } from '../src/agent/operations/proposals.js';
+import { previewProposal, applyProposal, createProposalRuntime } from '../src/agent/operations/proposals.js';
 
 test('Agent select_history previews and applies one atomic ancestor switch', async () => {
   const calls = [];
@@ -38,4 +38,20 @@ test('Agent delete_history previews the cascade and applies only after approval'
   const applied = await applyProposal(proposal, workspace);
   assert.equal(applied.status, 'applied');
   assert.deepEqual(calls, ['preview:old-run', 'apply:old-run']);
+});
+
+test('the chat proposal runtime retains both History preview and apply capabilities', async () => {
+  const calls = [];
+  const runtime = createProposalRuntime({
+    previewHistorySelection: async (id) => { calls.push(`preview select ${id}`); return { changedNodeIds: ['run'], affectedNodeIds: ['run'] }; },
+    applyHistorySelection: async (id) => { calls.push(`apply select ${id}`); return { affectedNodeIds: ['run'] }; },
+    previewHistoryDeletion: async (id) => { calls.push(`preview delete ${id}`); return { records: [{ nodeId: 'run' }] }; },
+    applyHistoryDeletion: async (id) => { calls.push(`apply delete ${id}`); return { records: [{ nodeId: 'run' }] }; },
+  });
+  for (const op of ['select_history', 'delete_history']) {
+    const request = { operations: [{ op, record_id: 'record' }] };
+    assert.equal((await runtime.previewProposal(request)).ok, true);
+    assert.equal((await runtime.applyProposal(request)).status, 'applied');
+  }
+  assert.deepEqual(calls, ['preview select record', 'apply select record', 'preview delete record', 'apply delete record']);
 });

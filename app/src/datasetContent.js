@@ -6,6 +6,21 @@ export function imageCell(assetIds = [], names = []) {
   return { kind: 'images', assetIds: assetIds.slice(), names: names.slice() };
 }
 
+export function moveImageAsset(source, target, index) {
+  if (!isImageCell(source) || !Number.isInteger(index) || index < 0 || index >= source.assetIds.length) return null;
+  const destination = isImageCell(target) ? target : imageCell();
+  return {
+    source: imageCell(
+      source.assetIds.filter((_, itemIndex) => itemIndex !== index),
+      (source.names || []).filter((_, itemIndex) => itemIndex !== index),
+    ),
+    target: imageCell(
+      [...destination.assetIds, source.assetIds[index]],
+      [...(destination.names || []), source.names?.[index] || ''],
+    ),
+  };
+}
+
 export function isPdfCell(value) {
   return !!value && typeof value === 'object' && value.kind === 'pdf' && Array.isArray(value.assetIds);
 }
