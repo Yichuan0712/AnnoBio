@@ -8,6 +8,7 @@ import { selectPlaceholderLabel } from './displayTextNormalize.js';
 import { BACKEND_API_BASE, waitForBackend } from './backendConfig.js';
 import { fetchAgentContext } from './agent/api/agentTurnClient.js';
 import { mountPillSelect } from './pillSelect.js';
+import { attachModelIdAutocomplete } from './modelIdAutocomplete.js';
 
 const API_BASE = BACKEND_API_BASE;
 
@@ -286,73 +287,16 @@ function formatModelPrice(perToken) {
   return `$${(n * 1_000_000).toFixed(2)}/M`;
 }
 
-function defaultModelPickerMeta(m) {
-  const priceBit = (m.prompt_price != null || m.completion_price != null)
-    ? ` · ${formatModelPrice(m.prompt_price)} in / ${formatModelPrice(m.completion_price)} out`
+/** "$3.00/M in / $15.00/M out", or '' when the catalog has no prices for the model. */
+function formatModelPrices(m) {
+  return (m.prompt_price != null || m.completion_price != null)
+    ? `${formatModelPrice(m.prompt_price)} in / ${formatModelPrice(m.completion_price)} out`
     : '';
-  return `${escapeHtml(m.id)}${priceBit}`;
 }
 
-/**
- * Generic "pick a model from a list" overlay, shared by the OpenRouter "Add model" flow and
- * the LiteLLM "Choose model" flow. `loadModels()` resolves to [{id, name, vision?, ...}].
- * `onPick(modelId, close)` decides what happens with the choice and closes on success.
- */
-async function openModelPicker({ loadModels, onPick, renderMeta = defaultModelPickerMeta, renderTitle = (m) => m.name || m.id, title = 'Choose a model' }) {
-  const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
-  overlay.setAttribute('aria-modal', 'true');
-  overlay.innerHTML = `
-    <div class="modal-panel modal-panel--openrouter-models">
-      <div class="modal-header">
-        <h2 class="modal-title">${escapeHtml(title)}</h2>
-        <button type="button" class="modal-close" aria-label="Close">×</button>
-      </div>
-      <div class="modal-body openrouter-model-picker-body">
-        <input type="text" class="dataset-meta-input openrouter-model-picker-filter" placeholder="Search models…" aria-label="Search models" autocomplete="off" />
-        <div class="openrouter-model-picker-list" aria-busy="true">Loading models…</div>
-      </div>
-    </div>
-  `;
-  const close = () => { overlay.remove(); document.body.style.overflow = ''; };
-  overlay.querySelector('.modal-close').addEventListener('click', close);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-  document.body.style.overflow = 'hidden';
-  document.body.appendChild(overlay);
-
-  const filterInput = overlay.querySelector('.openrouter-model-picker-filter');
-  const listEl = overlay.querySelector('.openrouter-model-picker-list');
-
-  let models = [];
-  try {
-    models = await loadModels();
-  } catch (e) {
-    listEl.textContent = (e && e.message) || 'Could not load models.';
-    return;
-  }
-
-  function renderList(filterText) {
-    const q = filterText.trim().toLowerCase();
-    const matches = q ? models.filter((m) => m.id.toLowerCase().includes(q) || (m.name || '').toLowerCase().includes(q)) : models;
-    if (matches.length === 0) {
-      listEl.innerHTML = '<p class="openrouter-model-picker-empty">No matching models.</p>';
-      return;
-    }
-    listEl.innerHTML = matches.slice(0, 200).map((m) => `
-      <button type="button" class="openrouter-model-picker-row" data-model-id="${escapeHtml(m.id)}">
-        <span class="openrouter-model-picker-row-name">${escapeHtml(renderTitle(m))}${m.vision ? ' 🖼' : ''}${m.pdf ? ' 📄' : ''}</span>
-        <span class="openrouter-model-picker-row-meta">${renderMeta(m)}</span>
-      </button>
-    `).join('');
-    listEl.querySelectorAll('.openrouter-model-picker-row').forEach((row) => {
-      row.addEventListener('click', () => onPick(row.getAttribute('data-model-id'), close));
-    });
-  }
-
-  listEl.setAttribute('aria-busy', 'false');
-  renderList('');
-  filterInput.addEventListener('input', () => renderList(filterInput.value));
-  filterInput.focus();
+/** The detail line under a suggested model id: who serves it, its prices and what it can read. */
+function describeSuggestedModel(m, source) {
+  return [source, formatModelPrices(m), m.vision ? 'images' : '', m.pdf ? 'PDF' : ''].filter(Boolean).join(' · ');
 }
 
 function bindCredDeleteButtons(scope) {
@@ -446,17 +390,17 @@ function wireCredentialsAddForm(addFormRoot, tableHost) {
   const modelInput = addFormRoot.querySelector('#credentials-model');
   const baseUrlInput = addFormRoot.querySelector('#credentials-base-url');
   const apiKeyInput = addFormRoot.querySelector('#credentials-api-key');
-  const suggestionsList = addFormRoot.querySelector('#credentials-model-suggestions');
-  const chooseModelBtn = addFormRoot.querySelector('#credentials-choose-model-btn');
 
   let lastDetectKey = '';
+  /** Models the entered Base URL / API key's provider reported; suggested first. */
+  let endpointModels = [];
 
   function resetForm() {
     lastDetectKey = '';
-    if (suggestionsList) suggestionsList.innerHTML = '';
+    endpointModels = [];
   }
 
-  // Cosmetic only: populates the Model ID suggestion dropdown. Never sets what gets saved.
+  // Cosmetic only: feeds the Model ID suggestions. Never sets what gets saved.
   async function runDetect() {
     const model = (modelInput?.value || '').trim();
     const base_url = (baseUrlInput?.value || '').trim();
@@ -469,11 +413,7 @@ function wireCredentialsAddForm(addFormRoot, tableHost) {
     try {
       const data = await fetchDetect(model, base_url, api_key);
       if (lastDetectKey !== detectKey) return; // superseded by a newer probe
-      if (suggestionsList) {
-        suggestionsList.innerHTML = (data.models || [])
-          .map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.label || m.id)}</option>`)
-          .join('');
-      }
+      endpointModels = (data.models || []).filter((m) => m && m.id);
     } catch (e) {
       // Suggestions are a nicety; silently skip on failure.
     }
@@ -483,21 +423,17 @@ function wireCredentialsAddForm(addFormRoot, tableHost) {
   baseUrlInput?.addEventListener('blur', runDetect);
   apiKeyInput?.addEventListener('blur', runDetect);
 
-  function onChooseModelClick() {
-    // Browsing doesn't need a key yet: litellm.model_cost is a static, offline catalog of
-    // known model ids across providers. The key is still required at Add time, same as today.
-    openModelPicker({
-      loadModels: loadLiteLlmCatalog,
-      renderTitle: (m) => PROVIDER_LABELS[m.provider] || m.provider || m.id,
-      renderMeta: defaultModelPickerMeta,
-      onPick: (modelId, close) => {
-        if (modelInput) modelInput.value = modelId;
-        close();
-      },
+  // Suggesting doesn't need a key yet: litellm.model_cost is a static, offline catalog of known model
+  // ids across providers. The key is still required at Add time.
+  if (modelInput) {
+    attachModelIdAutocomplete(modelInput, {
+      loadCatalog: loadLiteLlmCatalog,
+      getEndpointModels: () => endpointModels,
+      describe: (m) => (endpointModels.includes(m)
+        ? describeSuggestedModel(m, 'From your Base URL / API key')
+        : describeSuggestedModel(m, PROVIDER_LABELS[m.provider] || m.provider)),
     });
   }
-
-  chooseModelBtn?.addEventListener('click', onChooseModelClick);
 
   async function onAddCredentialSubmit() {
     const llm = (modelInput?.value || '').trim();
@@ -560,7 +496,6 @@ function wireOpenRouterConnect(addFormRoot, tableHost) {
   const statusEl = addFormRoot.querySelector('#credentials-openrouter-status');
   const modelField = addFormRoot.querySelector('#credentials-openrouter-model-field');
   const modelInput = addFormRoot.querySelector('#credentials-openrouter-model');
-  const chooseModelBtn = addFormRoot.querySelector('#credentials-openrouter-choose-model-btn');
   if (!connectBtn) return;
   let pollTimer = null;
   let connectedCredentialId = null;
@@ -653,15 +588,11 @@ function wireOpenRouterConnect(addFormRoot, tableHost) {
     }, OPENROUTER_POLL_MS);
   }
 
-  function onChooseModelClick() {
-    // OpenRouter's own live catalog (no key needed to browse it, same as before) --
-    // picking here only fills the Model ID field, same as the LiteLLM picker does.
-    openModelPicker({
-      loadModels: loadOpenRouterCatalog,
-      onPick: (modelId, close) => {
-        if (modelInput) modelInput.value = modelId;
-        close();
-      },
+  // OpenRouter's own live catalog (no key needed to browse it); picking only fills the Model ID field.
+  if (modelInput) {
+    attachModelIdAutocomplete(modelInput, {
+      loadCatalog: loadOpenRouterCatalog,
+      describe: (m) => describeSuggestedModel(m, m.name && m.name !== m.id ? m.name : ''),
     });
   }
 
@@ -697,7 +628,6 @@ function wireOpenRouterConnect(addFormRoot, tableHost) {
   }
 
   connectBtn.addEventListener('click', onConnectClick);
-  chooseModelBtn?.addEventListener('click', onChooseModelClick);
 
   return { checkExistingConnection, submit: submitOpenRouterModel };
 }
@@ -737,7 +667,7 @@ export function openSettingsModal() {
                   <div class="review-detail-tab-panels model-settings-tab-panels">
                     <div class="review-detail-tab-panel review-detail-tab-panel--active" id="settings-panel-credentials" role="tabpanel" aria-labelledby="settings-tab-credentials" data-panel="credentials">
                       <div class="defaults-page-scroll settings-credentials-tab-body">
-                        <p class="settings-tab-intro">A credential is a model AnnoBio can call: its model ID and the API key that pays for it. Add one through LiteLLM, which reaches most providers directly (OpenAI, Anthropic, Google, DeepSeek and more, or your own OpenAI compatible server through Base URL), or connect an OpenRouter account to use any model it offers with a single key. Added credentials appear in the list on the left, where Test checks that they work, and can then be chosen for Runs, Optimize nodes and the Agent.</p>
+                        <p class="settings-tab-intro">A credential is a model ID plus the API key that pays for it. Add one through LiteLLM, which reaches most providers and your own server through Base URL, or connect an OpenRouter account. Credentials appear on the left, where Test checks them, and can then be used by Runs, Optimize nodes and the Agent.</p>
                         <div id="model-settings-credentials-add" class="model-settings-credentials-add">
                           <div class="credentials-add-method-row">
                             <label class="dataset-meta-label" for="credentials-add-method-select">Add credential</label>
@@ -751,11 +681,9 @@ export function openSettingsModal() {
                               <div class="credentials-add-row">
                                 <div class="credentials-add-field credentials-add-field--grow credentials-add-field--full-row">
                                   <label class="dataset-meta-label" for="credentials-model">Model ID</label>
-                                  <div class="credentials-model-input-row">
-                                    <input type="text" id="credentials-model" class="dataset-meta-input" placeholder="e.g. gpt-5, anthropic/claude-sonnet-4-6" autocomplete="off" aria-label="Model ID" list="credentials-model-suggestions" />
-                                    <button type="button" class="btn btn-secondary" id="credentials-choose-model-btn">Choose model</button>
+                                  <div class="credentials-model-input-row model-id-autocomplete">
+                                    <input type="text" id="credentials-model" class="dataset-meta-input" placeholder="Start typing, e.g. gpt-5 or claude-sonnet-4-6" autocomplete="off" aria-label="Model ID" />
                                   </div>
-                                  <datalist id="credentials-model-suggestions"></datalist>
                                 </div>
                                 <div class="credentials-add-field credentials-add-field--grow credentials-add-field--full-row">
                                   <label class="dataset-meta-label" for="credentials-api-key">API key</label>
@@ -778,9 +706,8 @@ export function openSettingsModal() {
                                 </div>
                                 <div class="credentials-add-field credentials-add-field--full-row" id="credentials-openrouter-model-field" hidden>
                                   <label class="dataset-meta-label" for="credentials-openrouter-model">Model ID</label>
-                                  <div class="credentials-model-input-row">
-                                    <input type="text" id="credentials-openrouter-model" class="dataset-meta-input" placeholder="e.g. anthropic/claude-sonnet-4.6" autocomplete="off" aria-label="Model ID" />
-                                    <button type="button" class="btn btn-secondary" id="credentials-openrouter-choose-model-btn">Choose model</button>
+                                  <div class="credentials-model-input-row model-id-autocomplete">
+                                    <input type="text" id="credentials-openrouter-model" class="dataset-meta-input" placeholder="Start typing, e.g. claude-sonnet-4.6" autocomplete="off" aria-label="Model ID" />
                                   </div>
                                 </div>
                               </div>
@@ -791,7 +718,7 @@ export function openSettingsModal() {
                     </div>
                     <div class="review-detail-tab-panel" id="settings-panel-run" role="tabpanel" aria-labelledby="settings-tab-run" data-panel="run">
                       <div class="defaults-page-scroll">
-                          <p class="settings-tab-intro">A Run sends a prompt to a model once for every row of its input dataset. These settings apply to all Runs: the model a Run uses when it has none of its own, the longest reply allowed for each row, how many times a failed row is retried, and how many rows are sent at the same time. Sending more rows at once finishes sooner but can hit the provider's rate limits.</p>
+                          <p class="settings-tab-intro">These settings apply to every Run, which sends its prompt to a model once per input row. The default model is used when a Run has none of its own. Running more rows at once finishes sooner but can hit the provider's rate limits.</p>
                           <div class="defaults-row">
                             <div class="defaults-field defaults-field--full">
                               <label class="dataset-meta-label" for="settings-default-run-credential">Default model</label>
@@ -816,7 +743,7 @@ export function openSettingsModal() {
                     </div>
                     <div class="review-detail-tab-panel" id="settings-panel-review" role="tabpanel" aria-labelledby="settings-tab-review" data-panel="review">
                       <div class="defaults-page-scroll">
-                          <p class="settings-tab-intro">An Optimize node studies the rows an Evaluate node marked as wrong, suggests edits to the prompt, and can check each edit on those rows. Here you choose the model that writes and checks the suggestions when an Evaluate node has none of its own, the optimisation method used unless an Evaluate node picks another, and how much work each Optimize does: the reply length, how many failed inputs it looks at, and the trials or iterations of the method. Larger numbers can find better edits but make more model calls. Debug mode adds Reset and Debug buttons to suggestion cards.</p>
+                          <p class="settings-tab-intro">An Optimize node studies the rows an Evaluate node marked wrong and suggests edits to the prompt. The default model and method apply when an Evaluate node picks none of its own. Larger limits can find better edits but make more model calls. Debug mode adds Reset and Debug buttons to suggestion cards.</p>
                           <div class="defaults-row">
                             <div class="defaults-field defaults-field--full">
                               <label class="dataset-meta-label" for="settings-default-review-credential">Default model</label>
@@ -879,7 +806,7 @@ export function openSettingsModal() {
                     </div>
                     <div class="review-detail-tab-panel" id="settings-panel-agent" role="tabpanel" aria-labelledby="settings-tab-agent" data-panel="agent">
                       <div class="defaults-page-scroll">
-                          <p class="settings-tab-intro">The Agent Assistant is the chat in the right panel. It reads your canvas, proposes changes for you to apply and starts jobs once you confirm them. It needs a model that supports tool calling, so choosing one runs a quick check; without a default it uses the Optimize model, and its replies follow Max tokens in Optimize defaults, up to 8,192. Context window sets how much of a long conversation is sent to the model each time; Auto reads the model's published limit.</p>
+                          <p class="settings-tab-intro">The Agent Assistant is the chat in the right panel. Its model must support tool calling, so choosing one runs a quick check. Without a default it uses the Optimize model, with replies capped by Optimize's Max tokens, up to 8,192. Context window limits how much of a long chat is sent each time; Auto uses the model's own limit.</p>
                           <div class="defaults-row">
                             <div class="defaults-field defaults-field--full">
                               <label class="dataset-meta-label" for="settings-default-agent-credential">Default model</label>
