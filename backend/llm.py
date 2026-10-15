@@ -453,6 +453,20 @@ def probe_tool_calling(*, provider: str, model: str, api_key: str, base_url: str
     }
 
 
+def _first_json_value(text: str, opener: str) -> str | None:
+    """The JSON value starting at the first `opener`, ended by the JSON parser itself, so a bracket
+    inside a string does not end it early. When it never completes, the rest of the text, so that
+    parsing it reports why."""
+    start = text.find(opener)
+    if start == -1:
+        return None
+    try:
+        _, end = json.JSONDecoder().raw_decode(text, start)
+    except ValueError:
+        return text[start:]
+    return text[start:end]
+
+
 def _extract_json_from_text(text: str) -> str:
     """Extract a JSON object from text that may be wrapped in <reasoning>, markdown, etc."""
     text = text.strip()
@@ -460,19 +474,8 @@ def _extract_json_from_text(text: str) -> str:
     m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
     if m:
         return m.group(1).strip()
-    # Else find first { and its matching }
-    start = text.find("{")
-    if start == -1:
-        return text
-    depth = 0
-    for i in range(start, len(text)):
-        if text[i] == "{":
-            depth += 1
-        elif text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start : i + 1]
-    return text[start:]
+    found = _first_json_value(text, "{")
+    return text if found is None else found
 
 
 def _extract_json_array_from_text(text: str) -> str:
@@ -481,18 +484,8 @@ def _extract_json_array_from_text(text: str) -> str:
     m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
     if m:
         return m.group(1).strip()
-    start = text.find("[")
-    if start == -1:
-        return "[]"
-    depth = 0
-    for i in range(start, len(text)):
-        if text[i] == "[":
-            depth += 1
-        elif text[i] == "]":
-            depth -= 1
-            if depth == 0:
-                return text[start : i + 1]
-    return text[start:]
+    found = _first_json_value(text, "[")
+    return "[]" if found is None else found
 
 
 def _resolve_ref(schema: dict, ref: str) -> dict:
@@ -719,6 +712,43 @@ def _should_fallback_to_prompt_json(error: Exception) -> bool:
     )
 
 
+def _prompt_json_reply(*, provider: str, model: str, api_key: str, base_url: str, prompt: Any, max_tokens: int) -> str:
+    """The reply to a prompt that asks for JSON. A reply cut off at max tokens is an error: its JSON is
+    incomplete, and reasoning models spend part of that budget thinking."""
+    response = _call_completion(
+        provider=provider,
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=max_tokens,
+    )
+    choices = getattr(response, "choices", None) or []
+    if choices and str(getattr(choices[0], "finish_reason", "") or "") == "length":
+        raise ValueError(
+            f"The model's reply reached the max tokens limit ({max_tokens}) before its JSON was complete. "
+            "Raise Max tokens in Settings."
+        )
+    return _extract_completion_text(response)
+
+
+def _coerce_prompt_json_strings(data: Any, properties: dict) -> None:
+    """A reply to a prompt that asks for JSON is not held to the schema, so a string field may come
+    back null, true/false or a number; store those as text."""
+    if not isinstance(data, dict):
+        return
+    for key, prop in properties.items():
+        if prop.get("type") != "string":
+            continue
+        value = data.get(key)
+        if value is None:
+            data[key] = ""
+        elif isinstance(value, bool):
+            data[key] = "true" if value else "false"
+        elif isinstance(value, (int, float)):
+            data[key] = str(value)
+
+
 def _run_structured_fallback(
     provider: str,
     model: str,
@@ -749,12 +779,12 @@ def _run_structured_fallback(
         safe_print(_HL + _SEP + _R)
         safe_print(instruction)
         safe_print(_HL + _SEP + _R + "\n", flush=True)
-        text = chat(
+        text = _prompt_json_reply(
             provider=provider,
             model=model,
             api_key=api_key,
             base_url=base_url,
-            messages=[{"role": "user", "content": full_prompt}],
+            prompt=full_prompt,
             max_tokens=max_tokens,
         )
         json_str = _extract_json_array_from_text(text)
@@ -763,11 +793,7 @@ def _run_structured_fallback(
             data = [data] if isinstance(data, dict) else []
         item_props = item_schema.get("properties", {})
         for row in data:
-            if not isinstance(row, dict):
-                continue
-            for key, prop in item_props.items():
-                if prop.get("type") == "string" and row.get(key) is None:
-                    row[key] = ""
+            _coerce_prompt_json_strings(row, item_props)
         obj = response_model.model_validate({"rows": data})
         out = obj.model_dump() if hasattr(obj, "model_dump") else obj.dict()
         debug = {"path": "prompt_json_fallback", "raw_response": None, "raw_text": text}
@@ -784,19 +810,17 @@ def _run_structured_fallback(
     safe_print(_HL + _SEP + _R)
     safe_print(instruction)
     safe_print(_HL + _SEP + _R + "\n", flush=True)
-    text = chat(
+    text = _prompt_json_reply(
         provider=provider,
         model=model,
         api_key=api_key,
         base_url=base_url,
-        messages=[{"role": "user", "content": full_prompt}],
+        prompt=full_prompt,
         max_tokens=max_tokens,
     )
     json_str = _extract_json_from_text(text)
     data = json.loads(json_str)
-    for key, prop in schema.get("properties", {}).items():
-        if prop.get("type") == "string" and data.get(key) is None:
-            data[key] = ""
+    _coerce_prompt_json_strings(data, schema.get("properties", {}))
     obj = response_model.model_validate(data)
     out = obj.model_dump() if hasattr(obj, "model_dump") else obj.dict()
     debug = {"path": "prompt_json_fallback", "raw_response": None, "raw_text": text}
