@@ -110,6 +110,11 @@ function formatSchemaExamplesForView(examples, type) {
 
 function schemaToViewHtml(fields, returnShape) {
   if (!fields || fields.length === 0) return '<p class="prompt-detail-placeholder">No output schema.</p>';
+  const isSingle = returnShape === 'single';
+  const rowLabel = isSingle ? 'One output row per input' : 'Multiple output rows per input';
+  const rowHint = isSingle
+    ? 'Each input row produces one output row.'
+    : 'Each input row can produce multiple output rows.';
   const rows = fields.map((f) => {
     const nameRaw = (f.key || '').trim() || 'Unnamed field';
     const descRaw = (f.description ?? '').trim();
@@ -124,6 +129,7 @@ function schemaToViewHtml(fields, returnShape) {
     return `<tr><td class="prompt-detail-schema-cell" data-fulltext="${nameFull}">${name}</td><td class="prompt-detail-schema-cell" data-fulltext="${descFull}">${desc}</td><td class="prompt-detail-schema-cell" data-fulltext="${exFull}">${ex}</td><td>${allowNone ? 'Yes' : 'No'}</td></tr>`;
   }).join('');
   return `<div class="prompt-schema-preview-table-wrap">
+  <span class="prompt-schema-preview-return-shape" title="${rowHint}">${rowLabel}</span>
   <table class="prompt-schema-preview-table" aria-readonly="true">
     <thead><tr><th>Field</th><th>Description</th><th>Examples</th><th>Allow None</th></tr></thead>
     <tbody>${rows}</tbody>
