@@ -8,6 +8,9 @@ import { clampAgentTitle } from './agentTitleLimits.js';
 import { BACKEND_PORT } from './backendConfig.js';
 import { ProjectAssets, YC_EXTENSION, isBundledProjectFile } from './projectAssets.js';
 import { createBackendLog } from './backendLog.js';
+import { APP_NAME, WINDOWS_APP_ID, windowsTaskbarDetails } from './appIdentity.js';
+
+if (process.platform === 'win32') app.setAppUserModelId(WINDOWS_APP_ID);
 
 // Copy, paste, and quit stay on this menu so their shortcuts work. macOS
 // titles the menu from Electron.app until forge's preStart renames that
@@ -409,6 +412,7 @@ const createWindow = () => {
   const height = Math.max(480, Math.min(1080, Math.round(screenHeight * 0.88)));
   const macOS = process.platform === 'darwin';
   const mainWindow = new BrowserWindow({
+    title: APP_NAME,
     width,
     height,
     minWidth: 640,
@@ -423,6 +427,14 @@ const createWindow = () => {
       preload: path.join(__dirname, 'preload.js'),
     },
   });
+
+  if (process.platform === 'win32') {
+    mainWindow.setAppDetails(windowsTaskbarDetails({
+      executablePath: process.execPath,
+      appPath: app.getAppPath(),
+      isPackaged: app.isPackaged,
+    }));
+  }
 
   mainWindow.setMenuBarVisibility(false);
   mainWindow.setMenu(null);
