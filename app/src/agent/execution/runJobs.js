@@ -168,9 +168,9 @@ function previewProcess(job, ctx) {
 function previewScore(job, ctx) {
   const score = findNode(ctx.state, job.node, 'score', 'node');
   if (score.scoreMatchPending) fail(`Evaluate "${nodeTitle(score)}" is already matching.`);
-  if (score.scoreActiveMatchMode !== 'code') fail('Rule-based Evaluate nodes compute automatically; a score job runs custom match code.');
-  if (!/^\s*def\s+match\s*\(/m.test(String(score.scoreMatchCode || ''))) fail('Evaluate code must define match(input_row, output_row, gt_row).');
-  if (!String(ctx.settings.python_path || '').trim()) fail('No Python interpreter is set; choose one in Settings → Python first.');
+  const code = score.scoreActiveMatchMode === 'code';
+  if (code && !/^\s*def\s+match\s*\(/m.test(String(score.scoreMatchCode || ''))) fail('Evaluate code must define match(input_row, output_row, gt_row).');
+  if (code && !String(ctx.settings.python_path || '').trim()) fail('No Python interpreter is set; choose one in Settings → Python first.');
   const run = upstream(ctx.state, score.nodeId, 'run-to-score');
   if (!run) fail(`Evaluate "${nodeTitle(score)}" is not connected to a Generate.`);
   const groundTruth = findNode(ctx.state, score.scoreGroundTruthId, 'dataset', 'ground truth');
@@ -180,8 +180,8 @@ function previewScore(job, ctx) {
       input: stepOutputTable(ctx.state, runInputSource(ctx.state, run.nodeId)).table || runInputContentOf(run),
       groundTruth: datasetContentOf(groundTruth) });
   } catch (error) { fail(error.message); }
-  return { kind: 'score', title: `Evaluate "${nodeTitle(score)}" using code`, nodeIds: [score.nodeId],
-    lines: [`Runs its Python match code on ${payload.runRows.length} model output rows against ${payload.gtRows.length} ground-truth rows (no model calls).`],
+  return { kind: 'score', title: `Run Evaluate "${nodeTitle(score)}"`, nodeIds: [score.nodeId],
+    lines: [`Runs its ${code ? 'Python match code' : 'matching rules'} on ${payload.runRows.length} model output rows against ${payload.gtRows.length} ground-truth rows and saves a new History record.`],
     usd: 0, calls: 0, priced: true };
 }
 
@@ -191,17 +191,12 @@ async function previewReview(job, ctx) {
     interrupted: existing.reviewInterrupted === true, streaming: existing.reviewPending === true }))) fail('This Optimize has no interrupted task to resume.');
   const score = existing ? upstream(ctx.state, existing.nodeId, 'score-to-prompt-review') : findNode(ctx.state, job.score, 'score', 'score');
   if (!score) fail('Optimize is not connected to an Evaluate node.');
-  const run = upstream(ctx.state, score.nodeId, 'run-to-score');
-  if (!run || !runResultsOf(run).length) fail(`Evaluate "${nodeTitle(score)}" has no model outputs to review.`);
-  if (!score.scoreGroundTruthId) fail(`Evaluate "${nodeTitle(score)}" has no ground-truth dataset.`);
-  if (score.scoreActiveMatchMode === 'code' && !score.scoreMatchResult) {
-    fail(`Evaluate "${nodeTitle(score)}" matches by code and has no code-match result yet; run a score job first.`);
-  }
+  if (ctx.state.historyVersion === 1 && (existing ? !existing.evaluateRecordId : !score.historyRecordId || score.historyStaleRecordId)) fail('Run Evaluate before creating Optimize. Each Optimize needs a completed evaluation snapshot.');
   // A resumed Optimize keeps the model it started with (resumeReviewNode).
   const credentialId = String(existing?.reviewCredentialId || score.reviewCredentialId || ctx.settings.default_review_credential_id || '').trim();
   const credential = ctx.credentialsById.get(credentialId);
   if (!credential) fail('No usable Optimize model: set a default Optimize model in Settings.');
-  const rows = await ctx.getScoreComparisonRows(score.nodeId);
+  const rows = existing ? JSON.parse(existing.reviewResult || '{}').comparison_rows || [] : await ctx.getScoreComparisonRows(score.nodeId);
   const failingInputs = new Set(rows.filter((r) => r?.matched !== true).map((r) => r?.input_row_index ?? r?.row_index)).size;
   const cap = Number(ctx.settings.review_max_failed_rows) || 30;
   const analysed = Math.min(failingInputs, cap);
@@ -219,6 +214,7 @@ async function previewReview(job, ctx) {
 
 function previewSuggestionOptimization(job, ctx) {
   const review = findNode(ctx.state, job.review, 'promptReview', 'review');
+  if (ctx.state.historyVersion === 1 && !review.evaluateRecordId) fail('This legacy Optimize has no fixed evaluation snapshot. Run Evaluate and create a new Optimize.');
   if (review.reviewPending || hasNodeExecution(review.nodeId)) fail('This Optimize already has an active task.');
   const result = JSON.parse(review.reviewResult || '{}');
   if (result.supports_segment_optimization === false) fail('This method does not support suggestion-level optimization.');
@@ -247,20 +243,18 @@ function previewStop(job, ctx) {
 const formatRows = (rows) => (rows == null ? 'unknown rows' : `${rows.toLocaleString('en-US')} row${rows === 1 ? '' : 's'}`);
 
 /**
- * run_to: the plan for a Generate or Process, as the user's Run to here (or, with only_this, Run
- * this step) shows it (runPlan.js). When everything up to it is current, it runs the step again.
+ * run_to shares the user's single-node, Resume pipeline and Restart pipeline modes. Resume is a
+ * no-op when all results are current; a fresh run must be requested explicitly.
  */
 function previewRunTo(job, ctx) {
   const target = ctx.state.nodes.find((n) => n.nodeId === String(job.node || '').trim());
   if (!target) fail(`node "${job.node}" is not a node on the canvas.`);
   if (!['run', 'process'].includes(target.type)) fail(`node "${job.node}" is a ${nodeTypeLabel(target.type)}; run_to works on a Generate or a Process.`);
   const context = { settings: ctx.settings, credentialIds: new Set(ctx.credentialsById.keys()) };
-  let planOptions = { onlyThis: job.only_this === true };
-  let plan = planRunTo(ctx.state, target.nodeId, context, planOptions);
-  if (!plan.problems.length && !plan.toRun) {
-    planOptions = { ...planOptions, rerun: true };
-    plan = planRunTo(ctx.state, target.nodeId, context, planOptions);
-  }
+  if (job.only_this === true && job.mode != null && job.mode !== 'only') fail('only_this cannot be combined with a pipeline mode.');
+  const mode = job.mode || (job.only_this === true ? 'only' : 'resume');
+  const planOptions = { mode };
+  const plan = planRunTo(ctx.state, target.nodeId, context, planOptions);
   if (plan.problems.length) fail(plan.problems.map((problem) => problem.message).join(' '));
   const name = plan.steps.at(-1)?.name || nodeTitle(target);
   const reused = plan.steps.filter((step) => step.action === 'reuse');
@@ -268,10 +262,11 @@ function previewRunTo(job, ctx) {
   const lines = [
     `Inputs: ${plan.inputs.map((input) => `${input.name} (${formatRows(input.rows)})`).join(', ') || 'none'}`,
     ...(reused.length ? [`Uses existing results: ${reused.map((step) => step.name).join(', ')}`] : []),
-    `Runs, in order: ${running.map((step) => `${step.name}${step.action === 'resume' ? ' (continues)' : step.action === 'rerun' ? ' (again; its result is current)' : ''}`).join(' → ')}`,
+    ...(mode === 'restart' ? ['Starts every step from the beginning; no existing results or partial progress will be reused. History is kept.'] : []),
+    running.length ? `Runs, in order: ${running.map((step) => `${step.name}${step.action === 'resume' ? ' (continues)' : step.action === 'rerun' ? ' (from the start)' : ''}`).join(' → ')}` : 'All results are current. Nothing will run.',
     plan.calls == null ? 'Model calls: unknown until the steps before them have run.' : `Model calls: ${plan.calls.toLocaleString('en-US')}`,
   ];
-  return { kind: 'run_to', title: `${planOptions.onlyThis ? 'Run' : 'Run to'} "${name}"`, nodeIds: running.map((step) => step.nodeId), lines, usd: null, calls: plan.calls,
+  return { kind: 'run_to', title: `${mode === 'restart' ? 'Restart pipeline to' : mode === 'only' ? 'Run only' : mode === 'resume-node' ? 'Resume' : 'Resume pipeline to'} "${name}"`, nodeIds: running.map((step) => step.nodeId), lines, usd: null, calls: plan.calls,
     priced: false, targetId: target.nodeId, planOptions, planSteps: plan.steps.map(({ nodeId, action }) => ({ nodeId, action })) };
 }
 
@@ -305,6 +300,7 @@ function previewJob(job, ctx) {
 
 function previewVerify(job, ctx) {
   const review = findNode(ctx.state, job.review, 'promptReview', 'review');
+  if (ctx.state.historyVersion === 1 && !review.evaluateRecordId) fail('This legacy Optimize has no fixed evaluation snapshot. Run Evaluate and create a new Optimize.');
   if (review.reviewPending || hasNodeExecution(review.nodeId)) fail(`Optimize "${nodeTitle(review)}" is still running.`);
   const result = JSON.parse(review.reviewResult || '{}');
   const suggestions = (result.suggestions || []).filter((s) => String(s?.source || '').toLowerCase() !== 'assistant');
@@ -320,7 +316,7 @@ function previewVerify(job, ctx) {
   });
   if (!toVerify.length) fail(`The chosen suggestions of Optimize "${nodeTitle(review)}" already have verification results; read them with inspect_node.`);
   const run = upstream(ctx.state, upstream(ctx.state, review.nodeId, 'score-to-prompt-review')?.nodeId, 'run-to-score');
-  const credential = ctx.credentialsById.get(String(run?.runCredentialId || ctx.settings.default_run_credential_id || '').trim());
+  const credential = ctx.credentialsById.get(String(result.run_credential_id || run?.runCredentialId || ctx.settings.default_run_credential_id || '').trim());
   return {
     kind: 'verify',
     title: `Verify ${toVerify.length} suggestion${toVerify.length === 1 ? '' : 's'} of Optimize "${nodeTitle(review)}"`,
@@ -436,6 +432,9 @@ async function executeScore(item, env, { signal, onStatus }) {
     if (signal?.aborted || error?.name === 'AbortError') return { status: 'stopped', lines: [`${item.title}: stopped by the user`] };
     throw error;
   }
+  if (result.metrics) return { status: result.wasCancelled ? 'stopped' : 'completed', lines: [
+    `${item.title}: ${result.wasCancelled ? 'stopped' : 'finished'}; Precision ${result.metrics.precision.toFixed(2)}%, Recall ${result.metrics.recall.toFixed(2)}%, F1 ${result.metrics.f1.toFixed(2)}%. Saved to History.`,
+  ] };
   const matched = result.outcomes.filter((outcome) => outcome.ok && typeof outcome.matched_gt_index === 'number').length;
   const errors = result.outcomes.filter((outcome) => !outcome.ok).length;
   return { status: result.wasCancelled ? 'stopped' : 'completed',

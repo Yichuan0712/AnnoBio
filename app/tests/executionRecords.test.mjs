@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  endInterruptedRecords, executionCounts, executionSummary, newExecutionRecord, updateExecutionRecord,
+  endInterruptedRecords, executionCounts, executionResumeOptions, executionSummary, newExecutionRecord, updateExecutionRecord,
 } from '../src/executionRecords.js';
 
 const plan = {
@@ -18,7 +18,7 @@ const plan = {
 test('a new record lists the plan, reused steps marked as such', () => {
   const record = newExecutionRecord(plan, { id: 'r1', now: 5, source: 'agent' });
   assert.deepEqual(record, {
-    id: 'r1', createdAt: 5, updatedAt: 5, source: 'agent', targetNodeId: 'score', targetName: 'Score', scope: 'to-here', status: 'running',
+    id: 'r1', createdAt: 5, updatedAt: 5, source: 'agent', targetNodeId: 'score', targetName: 'Score', scope: 'to-here', mode: 'resume', status: 'running',
     inputs: [{ nodeId: 'docs', name: 'Docs', rows: 10 }],
     steps: [
       { nodeId: 'extract', name: 'Extract', kind: 'run', action: 'reuse', status: 'reused' },
@@ -61,4 +61,15 @@ test('records the app left running end as stopped; ones running in this window s
   assert.equal(records[1], live);
   assert.equal(records[2], done);
   assert.equal(endInterruptedRecords([done], new Set(), 9).changed, false);
+});
+
+test('Resume keeps the original single-node scope and retains pending fresh work across repeated interruptions', () => {
+  assert.deepEqual(executionResumeOptions({ scope: 'this', mode: 'only', steps: [] }), { mode: 'resume-node', freshNodeIds: [] });
+  const record = { scope: 'to-here', mode: 'resume', steps: [
+    { nodeId: 'completed', status: 'completed', fresh: true },
+    { nodeId: 'partial', status: 'stopped', fresh: true },
+    { nodeId: 'unstarted', status: 'not-started', fresh: true },
+    { nodeId: 'failed', status: 'failed', fresh: true },
+  ] };
+  assert.deepEqual(executionResumeOptions(record), { mode: 'resume', freshNodeIds: ['unstarted', 'failed'] });
 });

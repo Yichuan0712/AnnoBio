@@ -29,12 +29,12 @@ test('Score key changes with Run record, ground truth, code and mapping', async 
   assert.notEqual(changedGt.score.get('score').signature, changedCode.score.get('score').signature);
 });
 
-test('Review key changes with exclusions and model while Score key stays stable', async () => {
+test('Evaluate key changes with exclusions; legacy Review also tracks its own model', async () => {
   const base = state();
   const first = await analysisInputKeys(base, { run: 'record-1' });
   base.nodes.find((node) => node.nodeId === 'score').scoreRowExcludedFromScoring = { 'row-1': true };
   const excluded = await analysisInputKeys(base, { run: 'record-1' });
-  assert.equal(first.score.get('score').signature, excluded.score.get('score').signature);
+  assert.notEqual(first.score.get('score').signature, excluded.score.get('score').signature);
   assert.notEqual(first.review.get('review').signature, excluded.review.get('review').signature);
   base.nodes.find((node) => node.nodeId === 'review').reviewCredentialId = 'model-2';
   const modelChanged = await analysisInputKeys(base, { run: 'record-1' });
@@ -65,7 +65,7 @@ test('a ground truth saved from a step is a plain Dataset, keyed by its content'
   const saved = await analysisInputKeys(base, { run: 'answer-run', 'gt-run': 'other-run' });
   assert.equal(saved.score.get('score').signature, plain.score.get('score').signature);
   assert.deepEqual(Object.keys(saved.score.get('score').inputs).sort(),
-    ['activeMatchMode', 'groundTruthId', 'groundTruthSignature', 'mapping', 'matchCode', 'runRecordId']);
+    ['activeMatchMode', 'exclusions', 'groundTruthId', 'groundTruthSignature', 'mapping', 'matchCode', 'runRecordId']);
   assert.equal(saved.review.get('review').inputs.scoreNodeId, 'score');
 });
 

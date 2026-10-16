@@ -1,7 +1,13 @@
 # Pipeline
 
+Evaluate has its own History alongside Pipeline execution. Both rules and code run explicitly with
+**Run** and save independent attempts. Changed inputs leave the previous evaluation visible with an
+update notice. Each Optimize node stays bound to its original evaluation; use a new Optimize to work
+from another evaluation. Optimize status notices appear below Findings. See
+[Evaluate History design](design/EVALUATION_HISTORY.md).
+
 The Pipeline panel shows the Generate and Process steps that pass data to each other, starting
-from Datasets. It selects the route to export as a standalone Python project; use Run to here on a
+from Datasets. It selects the route to export as a standalone Python project; use Resume pipeline to here on a
 step to run it and the upstream steps it needs.
 
 ## Building a pipeline
@@ -41,20 +47,29 @@ pickers remain inside their step cards; changing one updates the continuation an
 
 ## Run
 
-A Generate or Process step's right-click menu has two ways to run it:
+A Generate or Process node's right-click menu provides three execution scopes:
 
-- **Run to here** (also what its Run button does when an input has no result yet) runs that step
-  and every step before it that has no current result, reusing the steps that have one. A plan shows
-  first: the Datasets it reads, the results it reuses and the steps it runs, in order. To run a whole
-  pipeline, use Run to here on its last step.
-- **Run this step** runs only that step. It is unavailable while a step it reads has no current
-  result; use Run to here then.
+- **Run only this node** starts this node from the beginning using its current upstream results.
+  It is disabled when a required upstream result is unavailable.
+- **Resume pipeline to here** reuses valid completed results, resumes compatible partial Generate
+  results, and runs missing or outdated steps up to this node. It appears only when an upstream
+  step needs execution. If everything is current, Resume does nothing; it never silently reruns.
+- **Restart pipeline to here** starts every required upstream step and this node from the beginning,
+  without reusing completed or partial results. It appears when upstream steps exist and there is
+  prior work, so it differs from the other actions. Its plan always shows before execution.
 
-When the step and everything before it already have current results, either one runs the step again.
-The **Executions** tab lists these runs; a running one can be stopped, and a stopped or failed one
-resumed. Each step's result goes into its History.
+An interrupted Generate with unchanged inputs also offers **Resume** to continue only that node;
+**Run only this node** still starts it fresh. Process code always starts from the beginning.
+The plan lists inputs, reused results and the steps that will run. Execution follows actual data
+dependencies, including every required merge input, and stops at this node. Unrelated branches,
+downstream nodes and Prompt optimization provenance connections are excluded. A saved Dataset is
+an input boundary; it does not rerun the step it was saved from.
 
-A step whose inputs changed since its last run shows **Needs update**; its window still shows the
+The **Executions** tab records the mode and each step's outcome. Running tasks offer **Stop**.
+Resuming an interrupted Restart keeps newly finished steps and partial progress, while its unstarted
+steps still run freshly. Each fresh step creates a new History attempt; older results remain available.
+
+A step whose inputs changed since its last run shows **Historical**; its window still shows the
 earlier result. Running it, or changing its inputs back, clears the mark.
 
 ## Python export

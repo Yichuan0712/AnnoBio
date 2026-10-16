@@ -43,6 +43,26 @@ class ProjectHistoryTest(unittest.TestCase):
     def save(self, item, project_id=None):
         project_store.save_history_record(project_id or self.project_id, item["id"], project_store.HistoryRecordSave(record=item))
 
+    def test_evaluation_attempts_are_independent_and_completed_results_are_immutable(self):
+        first = {**record("score", "same"), "kind": "score", "evaluationVersion": 1}
+        second = {**first, "id": uuid.uuid4().hex}
+        self.save(first)
+        self.save(second)
+        self.assertEqual(len(project_store.get_history_index(self.project_id)["records"]), 2)
+        with self.assertRaises(HTTPException) as error:
+            self.save({**first, "results": ["edited"]})
+        self.assertEqual(error.exception.status_code, 409)
+        self.assertEqual(project_store.get_history_record(self.project_id, first["id"]), first)
+        state = {"historyVersion": 1, "nodes": [
+            {"nodeId": "score", "type": "score", "historyRecordId": second["id"]},
+            {"nodeId": "opt", "type": "promptReview", "evaluateNodeId": "score", "evaluateRecordId": first["id"]},
+        ], "connections": []}
+        project_store.save_project(self.project_id, project_store.ProjectSave(state=state))
+        bundle = project_store.export_yc(self.project_id).body
+        imported = asyncio.run(project_store.import_yc(UploadFile(file=io.BytesIO(bundle), filename="evaluation.yc")))["id"]
+        self.assertEqual(project_store.get_history_record(imported, first["id"]), first)
+        self.assertEqual(project_store.get_project(imported)["state"]["nodes"][1]["evaluateRecordId"], first["id"])
+
     def test_canvas_save_copy_and_bundle_round_trip_keep_history(self):
         item = record()
         self.save(item)

@@ -1,5 +1,12 @@
 # 运行到这里：实施计划
 
+> 当前执行语义更新（2026-10-16）：右键入口为 **Run only this node / Resume pipeline to here / Restart pipeline to here**。
+> Resume 只复用有效结果并补跑或续跑，全部有效时不再自动重跑目标；仅当上游有待执行步骤时显示。
+> Restart 忽略范围内全部完整或部分结果，从输入重新执行到目标，每步新增 History；仅当有上游执行节点和既有工作时显示，并始终展示计划。
+> 单节点 Run 始终从头运行；兼容部分结果的 Generate 额外提供 Resume。停止后从 Executions 继续 Restart 时，已完成步骤保留，尚未重跑的旧结果不能复用。
+> Agent `run_nodes` 的 `run_to.mode` 同步支持 `only / resume / restart / resume-node`；`only_this` 兼容为 `only`。
+> 现行用户说明见 [PIPELINE_GUIDE.md](../PIPELINE_GUIDE.md)；下文保留原实施历史。
+
 > 命名更新（2026-10-16）：界面中的 Run 节点现称 **Generate**；操作称 **Run to here / Run this step / Run again**，Settings 的对应页签称 Generate。本文旧称及历史实施记录保留原义；内部 `type: run`、工具名、字段和 API 不变。
 
 此次命名调整已实施，位置清单、旧名称兼容规则和验证记录见 [GENERATE_RUN_RENAME_PLAN.md](GENERATE_RUN_RENAME_PLAN.md) 第 10 节。下面第 7 步保留原实施历史。

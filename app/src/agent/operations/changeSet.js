@@ -14,6 +14,7 @@ import { buildSamplerNodeSpec, formatSamplerModeSummary } from './sampler_node_s
 import { PORT_TYPES, applyPortOp, checkConnect, checkDisconnect, keepSharedMapping, nodePorts } from '../../nodePorts.js';
 import { referencedDatasetAliasNames } from '../../processDatasetBindings.js';
 import { rebuildWorkingFromApplied } from '../../reviewWorkingText.js';
+import { optimizationApplyBlockReason } from '../../evaluationHistory.js';
 import { effectiveProcessOutputs } from '../../processOutputPorts.js';
 import { savedProcessOutputs, savedRunOutput } from '../../savedDatasets.js';
 import {
@@ -1081,7 +1082,7 @@ export function planChangeSet(state, operations, ctx) {
           lines.push(...bundle.lines);
         }
         if (['ground_truth', 'match_code', 'pairing', 'comparison', 'combine', 'rule_tree'].some((k) => k in set) && node.reviewResult) {
-          lines.push('Its saved comparison is recomputed from the new settings.');
+          lines.push('Run Evaluate again to save results for the new settings. Existing Optimize evidence stays fixed.');
           const saved = parseJson(node.reviewResult, {});
           delete saved.comparison_rows;
           node.reviewResult = JSON.stringify(saved);
@@ -1165,7 +1166,9 @@ export function planChangeSet(state, operations, ctx) {
       const known = new Set(suggestions.map((s) => clean(s?.suggestion_id)));
       const unknown = ids.filter((id) => !known.has(id));
       if (unknown.length) fail(`Optimize "${nodeTitle(review)}" has no suggestion ${unknown.join(', ')}. Ids: ${[...known].join(', ')}.`);
-      const score = byId().get(next.connections.find((c) => c.type === 'score-to-prompt-review' && c.toId === review.nodeId)?.fromId);
+      const score = byId().get(review.evaluateNodeId || next.connections.find((c) => c.type === 'score-to-prompt-review' && c.toId === review.nodeId)?.fromId);
+      const applyBlockReason = optimizationApplyBlockReason(review, score);
+      if (applyBlockReason) fail(applyBlockReason);
       const run = score ? byId().get(next.connections.find((c) => c.type === 'run-to-score' && c.toId === score.nodeId)?.fromId) : null;
       const source = run ? byId().get(next.connections.find((c) => c.type === 'prompt-to-run' && c.toId === run.nodeId)?.fromId) : null;
       if (!source) fail(`Optimize "${nodeTitle(review)}" is not connected through a score and run to a prompt.`);

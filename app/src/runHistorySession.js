@@ -47,6 +47,13 @@ export class RunHistorySession {
     if (!projectId) throw new Error('Open a project before using history.');
     this.projectId = projectId;
     this.index = await this.storage.loadIndex(projectId);
+    // Evaluate runs are owned by this renderer. A prior renderer cannot finish these attempts.
+    for (const entry of this.index.records.filter(item => item.kind === 'score' && item.status === 'running')) {
+      const record = await this.storage.loadRecord(projectId, entry.id);
+      if (record?.evaluationVersion === 1) await this.storage.saveRecord(projectId, { ...record,
+        status: 'stopped', updatedAt: this.now?.() || new Date().toISOString(), error: 'Evaluation was interrupted. Run Evaluate again.' });
+    }
+    this.index = await this.storage.loadIndex(projectId);
     let canvas = state;
     if (state?.historyVersion !== 1) {
       canvas = { ...state, historyVersion: 1 };
@@ -112,7 +119,7 @@ export class RunHistorySession {
   }
 
   /** Reserve an execution record before submitting a backend job. Completed inputs create a new attempt. */
-  async reserve(state, nodeId) {
+  async reserve(state, nodeId, { fresh = false } = {}) {
     const capture = await this.capture(state, nodeId);
     const node = (state?.nodes || []).find((item) => String(item?.nodeId || item?.id || '') === String(nodeId));
     const matching = this.index.records.filter((item) => item.nodeId === nodeId && item.signature === capture.signature);
@@ -120,6 +127,12 @@ export class RunHistorySession {
     const entry = matching.find((item) => item.id === preferredId) || matching.at(-1);
     if (matching.some((item) => item.status === 'running') && entry?.status !== 'running') {
       throw new Error('These inputs already have a running job.');
+    }
+    if (fresh) {
+      if (matching.some(item => item.status === 'running')) throw new Error('These inputs already have a running job.');
+      const record = runningHistoryRecord(capture, { createId: this.createId, now: this.now });
+      await this.putRecord(record);
+      return { record, mode: matching.length ? 'rerun' : 'new' };
     }
     if (entry) {
       const existing = await this.storage.loadRecord(this.projectId, entry.id);
@@ -160,6 +173,7 @@ export class RunHistorySession {
     const currentIds = new Set(Object.values(currentRecordIds).filter(Boolean));
     const analysis = await analysisInputKeys(canvasState, currentRecordIds);
     for (const [kind, keys] of [['score', analysis.score], ['review', analysis.review]]) {
+      if (kind === 'score') continue; // Explicit Evaluate selection is already in currentRecordIds.
       for (const [analysisNodeId, key] of keys) {
         const current = [...this.index.records].reverse().find((entry) => entry.kind === kind
           && entry.nodeId === analysisNodeId && entry.signature === key.signature);
@@ -176,6 +190,7 @@ export class RunHistorySession {
       const downstream = directHistoryDownstreamIds(records, record.id).map(summarize).sort(byCurrentThenDate);
       return {
         ...entry,
+        restorable: record.kind !== 'score' || (record.evaluationVersion === 1 && record.status === 'completed'),
         error: record.error || '',
         relationships: { upstream, downstream },
         display: describeHistoryRecord(record, canvasState),
@@ -192,6 +207,7 @@ export class RunHistorySession {
   async saveAnalysis(nodeId, kind, key, results) {
     if (!this.projectId || !['score', 'review'].includes(kind) || !key?.signature) return null;
     const previous = await this.analysisRecord(nodeId, kind, key.signature);
+    if (previous?.evaluationVersion === 1) return previous;
     if (previous && JSON.stringify(previous.results) === JSON.stringify(results)) return previous;
     let inputs = key.inputs || {};
     if (kind === 'review' && !inputs.scoreRecordId) {
@@ -216,12 +232,15 @@ export class RunHistorySession {
     if (!this.projectId) throw new Error('Open a project before using history.');
     const records = await Promise.all(this.index.records.map((entry) => this.storage.loadRecord(this.projectId, entry.id)));
     if (records.some((record) => !record)) throw new Error('A history record is missing.');
-    if (!['run', 'process'].includes(records.find((record) => record.id === recordId)?.kind)) {
-      throw new Error('Select a Generate or Process history record to delete.');
+    if (!['run', 'process', 'score'].includes(records.find((record) => record.id === recordId)?.kind)) {
+      throw new Error('Select a Generate, Process or Evaluate history record to delete.');
     }
     const ids = dependentHistoryIds(records, recordId);
     const removed = new Set(ids);
     const affected = records.filter((record) => removed.has(record.id));
+    if ((state?.nodes || []).some(node => node.type === 'promptReview' && removed.has(node.evaluateRecordId))) {
+      throw new Error('An Optimize node is bound to this evaluation. Remove that Optimize before deleting its source history.');
+    }
     if (affected.some((record) => record.status === 'running' || runningNodeIds.includes(record.nodeId))) {
       throw new Error('A dependent history record is running. Stop it before deleting.');
     }
@@ -230,7 +249,7 @@ export class RunHistorySession {
       throw new Error('The current result depends on this record. Select another result before deleting.');
     }
     const analysis = await analysisInputKeys(resolved.state, resolved.currentRecordIds);
-    if (affected.some((record) => record.kind === 'score' && analysis.score.get(record.nodeId)?.signature === record.signature
+    if (affected.some((record) => record.kind === 'score' && record.evaluationVersion !== 1 && analysis.score.get(record.nodeId)?.signature === record.signature
       || record.kind === 'review' && analysis.review.get(record.nodeId)?.signature === record.signature)) {
       throw new Error('The current analysis depends on this record. Select another result before deleting.');
     }

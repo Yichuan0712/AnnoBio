@@ -15,6 +15,7 @@ import { datasetColorAt } from './workflowNodeColors.js';
 import { reviewNeedsResume } from './executionResumeState.js';
 import { optimizeReviewSuggestion, optimizedReviewSuggestion } from './reviewSuggestionOptimizer.js';
 import { registerNodeStop } from './nodeExecutionControl.js';
+import { optimizationApplyBlockReason } from './evaluationHistory.js';
 
 export function createWorkflowCanvasRuntime(deps = {}) {
   const {
@@ -61,6 +62,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     pendingReviews,
     registerPendingReview,
     buildReviewComparisonRows,
+    getEvaluationPayload,
     findUniquePromptName,
     isPromptNameAlreadyUsed,
     getPromptDataFromNode,
@@ -160,6 +162,9 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     ensureUniqueName = true,
     agentCreated = false,
   } = {}) {
+    const projectId = getCurrentProjectId();
+    await reconcileHistory?.();
+    if (getCurrentProjectId() !== projectId) throw new Error('The project changed. Open Optimize again before applying.');
     const normalizedReviewNodeId = String(reviewNodeId || '').trim();
     const normalizedScoreNodeId = String(scoreNodeId || '').trim();
     let refNode = normalizedReviewNodeId ? getNodeById(normalizedReviewNodeId) : null;
@@ -175,10 +180,13 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       const scoreEdge = getConnectionsList().find(
         (connection) => connection.toId === refNode.dataset.nodeId && connection.type === 'score-to-prompt-review',
       );
-      scoreNode = scoreEdge ? getNodeById(scoreEdge.fromId) : null;
+      scoreNode = getNodeById(refNode.dataset.evaluateNodeId || scoreEdge?.fromId);
     } else if (normalizedScoreNodeId) {
       scoreNode = getNodeById(normalizedScoreNodeId);
     }
+
+    const applyBlockReason = optimizationApplyBlockReason(refNode?.dataset, scoreNode?.dataset);
+    if (applyBlockReason) throw new Error(applyBlockReason);
 
     let sourcePromptNode = null;
     let sourcePromptData = null;
@@ -268,6 +276,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
 
   async function startRunNode({
     runNodeId = '',
+    fresh = false,
   } = {}) {
     const normalizedRunNodeId = String(runNodeId || '').trim();
     if (!normalizedRunNodeId) {
@@ -280,6 +289,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
 
     const existingPendingRunId = pendingRuns.get(normalizedRunNodeId) || null;
     if (existingPendingRunId) {
+      if (fresh) throw new Error('Generate is already running.');
       return {
         started: true,
         alreadyRunning: true,
@@ -294,7 +304,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       const sync = await reconcileRunHistory(normalizedRunNodeId);
       if (!sync) throw new Error('Project changed while preparing Run history. Try again.');
     }
-    const rerunCompleted = !!historySession && node.dataset.runCompleted === '1';
+    const startFresh = fresh || node.dataset.runCompleted === '1';
 
     const connections = getConnectionsList();
     const promptEdge = connections.find((c) => c.toId === normalizedRunNodeId && c.type === 'prompt-to-run');
@@ -310,7 +320,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     }
     if (input.waiting) throw new Error(input.message);
     let existingResults = [];
-    if (!rerunCompleted) {
+    if (!startFresh) {
       try {
         existingResults = JSON.parse(node.dataset.runResults || '[]');
         if (!Array.isArray(existingResults)) existingResults = [];
@@ -364,7 +374,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     if (rows.length === 0) {
       // There are no model calls to make, but the empty Run is still a completed result for
       // this exact input and must be addressable by downstream History and Process nodes.
-      const historyRecord = historySession ? (await historySession.reserve(getCanvasState(), normalizedRunNodeId)).record : null;
+      const historyRecord = historySession ? (await historySession.reserve(getCanvasState(), normalizedRunNodeId, { fresh: startFresh })).record : null;
       if (historyRecord) node.dataset.historyRecordId = historyRecord.id;
       const runInputContent = { headers, columnTypes: content?.columnTypes || [], rowIds: content?.rowIds || [], rows: [] };
       if (historyRecord) await historySession.putRecord({
@@ -416,7 +426,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     let inputTypes = {};
     try { inputTypes = JSON.parse(promptNode.dataset.promptInputTypes || '{}'); } catch (_) {}
     const samples = compileRows(templateText, headers, rowsToRun, runInputToColumn, inputTypes);
-    let historyRecord = historySession ? (await historySession.reserve(getCanvasState(), normalizedRunNodeId)).record : null;
+    let historyRecord = historySession ? (await historySession.reserve(getCanvasState(), normalizedRunNodeId, { fresh: startFresh })).record : null;
     if (historyRecord) node.dataset.historyRecordId = historyRecord.id;
     if (historyRecord) {
       let model = credentialId;
@@ -434,7 +444,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     }
     if (historyRecord) pendingRunHistoryRecords.set(normalizedRunNodeId, historyRecord);
 
-    if (rerunCompleted) {
+    if (startFresh) {
       node.dataset.runResults = '[]';
       node.dataset.runOutputFields = '[]';
       delete node.dataset.runCompleted;
@@ -995,7 +1005,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
 
     let comparisonRowCountIncluded = null;
     const ctx = getScoreComparisonContext(scoreNode);
-    if (ctx) {
+    if (ctx && !getEvaluationPayload) {
       try {
         const rows = await buildReviewComparisonRows(
           scoreNode,
@@ -1019,11 +1029,14 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       invalid_row_keys: [...new Set(invalidKeys)],
       hint: invalidKeys.length > 0
         ? 'Some keys were skipped as invalid; valid keys were applied. Confirm with the user if needed. Then inspect_node for refreshed metrics.'
-        : 'Call inspect_node on this score for refreshed metrics; Optimize uses only included rows.',
+        : 'Run Evaluate to save updated metrics and row selection before creating a new Optimize. Existing Optimize nodes keep their original evidence.',
     };
   }
 
   async function buildReviewPayloadForScoreNode(scoreNode) {
+    if (getEvaluationPayload) return { payload: { ...await getEvaluationPayload(scoreNode.dataset.nodeId),
+      review_method: scoreNode.dataset.reviewMethod || undefined, settings_overrides: reviewSettingsOverrides(scoreNode) } };
+
     if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) {
       throw new Error('Evaluate node was not found.');
     }
@@ -1127,6 +1140,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     top,
     ensureUniqueName = false,
     reviewCredentialId = '',
+    evaluateRecordId = '', evaluateNodeId = '', reviewMethodId = '', reviewSettings = null,
   } = {}) {
     const normalizedScoreNodeId = String(scoreNodeId || '').trim();
     if (!normalizedScoreNodeId) {
@@ -1136,6 +1150,8 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) {
       throw new Error('Evaluate node was not found.');
     }
+    const boundId = evaluateRecordId || scoreNode.dataset.historyRecordId;
+    if (getEvaluationPayload && (!boundId || (!evaluateRecordId && scoreNode.dataset.historyStaleRecordId))) throw new Error('Run Evaluate before creating Optimize.');
     const requestedName = (name || '').trim() || 'Optimize';
     const finalName = ensureUniqueName
       ? findUniqueReviewName(requestedName, normalizedScoreNodeId)
@@ -1151,6 +1167,13 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     });
     if (promptReviewNode?.dataset?.nodeId) {
       promptReviewNode.dataset.promptReviewName = finalName;
+      if (boundId) {
+        promptReviewNode.dataset.evaluateRecordId = boundId;
+        promptReviewNode.dataset.evaluateNodeId = evaluateNodeId || normalizedScoreNodeId;
+        promptReviewNode.dataset.reviewMethodId = reviewMethodId || scoreNode.dataset.reviewMethod || '';
+        promptReviewNode.dataset.reviewSettings = JSON.stringify(reviewSettings || reviewSettingsOverrides(scoreNode) || {});
+      }
+
       // The Optimize keeps the model it runs with; the Evaluate's model only seeds the next Optimize.
       const model = String(reviewCredentialId || scoreNode.dataset.reviewCredentialId || '').trim();
       if (model) promptReviewNode.dataset.reviewCredentialId = model;
@@ -1209,6 +1232,8 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       top,
       ensureUniqueName,
       reviewCredentialId: resolvedReviewCredentialId,
+      evaluateRecordId: payload.evaluation_record_id, evaluateNodeId: payload.evaluation_node_id,
+      reviewMethodId: payload.review_method, reviewSettings: payload.settings_overrides,
     });
     const reviewNodeId = String(created?.reviewNodeId || created?.nodeId || '').trim();
     const createdReviewEl = reviewNodeId ? getNodeById(reviewNodeId) : null;
@@ -1247,7 +1272,13 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     const { reviewNode, scoreNode } = getReviewContext(reviewNodeId);
     if (!reviewNeedsResume({ result: parseReviewResult(reviewNode), interrupted: reviewNode.dataset.reviewInterrupted === '1',
       streaming: pendingReviews.has(reviewNodeId) || pendingReviewNodeIds.has(reviewNodeId) })) throw new Error('This Optimize has no interrupted task to resume.');
-    const { payload } = await buildReviewPayloadForScoreNode(scoreNode);
+    let payload;
+    if (getEvaluationPayload) {
+      if (!reviewNode.dataset.evaluateRecordId) throw new Error('This legacy Optimize has no fixed evaluation snapshot. Create a new Optimize from Evaluate.');
+      payload = { ...await getEvaluationPayload(reviewNode.dataset.evaluateNodeId || scoreNode.dataset.nodeId, { recordId: reviewNode.dataset.evaluateRecordId }),
+        review_method: reviewNode.dataset.reviewMethodId || undefined,
+        settings_overrides: JSON.parse(reviewNode.dataset.reviewSettings || '{}') };
+    } else ({ payload } = await buildReviewPayloadForScoreNode(scoreNode));
     // Resume with the model this Optimize started with, even if the Evaluate's model changed since.
     const credentialId = await resolveReviewCredentialId(scoreNode, reviewNode.dataset.reviewCredentialId);
     if (!credentialId) throw new Error('Set a default Optimize model in Settings.');
@@ -1303,6 +1334,9 @@ export function createWorkflowCanvasRuntime(deps = {}) {
 
   function getReviewContext(reviewNodeId) {
     const reviewNode = getReviewNodeById(reviewNodeId);
+    if (getEvaluationPayload && reviewNode.dataset.evaluateRecordId) {
+      return { reviewNode, scoreNode: getNodeById(reviewNode.dataset.evaluateNodeId), runNode: null, promptNode: null };
+    }
     const connections = getConnectionsList();
     const scoreEdge = connections.find((connection) => connection.toId === reviewNode.dataset.nodeId && connection.type === 'score-to-prompt-review');
     const scoreNode = scoreEdge ? getNodeById(scoreEdge.fromId) : null;
@@ -1354,6 +1388,19 @@ export function createWorkflowCanvasRuntime(deps = {}) {
   }
 
   async function buildReviewVerificationPayload(reviewNodeId) {
+    const bound = getNodeById(reviewNodeId);
+    if (getEvaluationPayload) {
+      if (!bound?.dataset.evaluateRecordId) throw new Error('This legacy Optimize has no fixed evaluation snapshot. Create a new Optimize from Evaluate.');
+      const payload = await getEvaluationPayload(bound.dataset.evaluateNodeId, { recordId: bound.dataset.evaluateRecordId });
+      const saved = parseReviewResult(bound) || {};
+      const scoreNode = getNodeById(bound.dataset.evaluateNodeId);
+      return { reviewNode: bound, scoreNode, originalText: payload.prompt,
+        reviewResult: { ...saved, promptText: payload.prompt, workingText: saved.workingText || payload.prompt,
+          suggestions: Array.isArray(saved.suggestions) ? saved.suggestions.map(item => ({ ...item })) : [],
+          verify_states: { ...(saved.verify_states || {}) }, verify_results: { ...(saved.verify_results || {}) },
+          comparison_rows: payload.comparison_rows }, verificationPayload: payload };
+    }
+
     const { reviewNode, scoreNode, runNode, promptNode } = getReviewContext(reviewNodeId);
     const promptText = promptNode.dataset.promptText || '';
     if (!promptText.trim()) {

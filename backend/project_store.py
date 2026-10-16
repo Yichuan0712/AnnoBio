@@ -716,9 +716,9 @@ def save_history_record(project_id: str, record_id: str, body: HistoryRecordSave
             for key in ("id", "nodeId", "kind", "signature", "inputs"):
                 if record.get(key) != existing.get(key):
                     raise HTTPException(409, "History record inputs cannot change.")
-            if existing.get("status") == "completed" and existing.get("kind") in ("run", "process") and record != existing:
+            if existing.get("status") == "completed" and (existing.get("kind") in ("run", "process") or existing.get("evaluationVersion") == 1) and record != existing:
                 raise HTTPException(409, "Completed history records cannot change.")
-        elif record.get("kind") not in ("run", "process") and any(
+        elif record.get("kind") not in ("run", "process") and record.get("evaluationVersion") != 1 and any(
                 entry.get("nodeId") == record["nodeId"] and entry.get("signature") == record["signature"]
                 for entry in index["records"]):
             raise HTTPException(409, "This input already has a history record.")

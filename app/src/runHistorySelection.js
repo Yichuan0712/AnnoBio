@@ -37,6 +37,7 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
   const desired = new Map();
   const selectedRecords = new Map();
   const promptEdges = new Map();
+  const scoreEdges = new Map();
   const runInputs = new Map(); // Generate node id -> input source { nodeId, port, kind }
   const processInputs = new Map(); // Process node id -> { primary: source, inputs: [{ nodeId, port, kind, alias }] }
   const active = new Set();
@@ -93,7 +94,7 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
   async function visitRecord(id) {
     if (active.has(id)) throw new Error(`History dependency cycle at record ${id}.`);
     const record = await historyRecord(id);
-    if (!record || record.id !== id || !['run', 'process'].includes(record.kind) || !record.inputs) {
+    if (!record || record.id !== id || !['run', 'process', 'score'].includes(record.kind) || !record.inputs) {
       throw new Error(`History record is missing or invalid: ${id}`);
     }
     const previous = selectedRecords.get(record.nodeId);
@@ -103,7 +104,21 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
     selectedRecords.set(record.nodeId, id);
     active.add(id);
     try {
-      if (record.kind === 'run') {
+      if (record.kind === 'score') {
+        if (record.evaluationVersion !== 1 || record.status !== 'completed' || !record.inputs.groundTruth?.content) {
+          throw new Error('This legacy evaluation has no complete input snapshot. Run Evaluate to create one.');
+        }
+        const upstream = await visitRecord(record.inputs.runRecordId);
+        if (upstream.kind !== 'run' || upstream.nodeId !== record.inputs.runNodeId) throw new Error('Evaluate history source is invalid.');
+        await visitDataset(record.inputs.groundTruth);
+        demand(record.nodeId, 'score', {
+          scoreGroundTruthId: record.inputs.groundTruthId,
+          scoreMapping: typeof record.inputs.mapping === 'string' ? record.inputs.mapping : JSON.stringify(record.inputs.mapping),
+          scoreMatchCode: record.inputs.matchCode || '', scoreActiveMatchMode: record.inputs.activeMatchMode,
+          scoreRowExcludedFromScoring: record.inputs.exclusions || {}, historyRecordId: record.id,
+        });
+        scoreEdges.set(record.nodeId, upstream.nodeId);
+      } else if (record.kind === 'run') {
         const prompt = record.inputs.prompt;
         const dataset = record.inputs.dataset;
         if (!prompt?.nodeId || !dataset?.nodeId) throw new Error(`Generate history inputs are incomplete: ${id}`);
@@ -211,6 +226,10 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
     if (oldPromptId !== promptId && !changedNodeIds.includes(id)) changedNodeIds.push(id);
     next.connections = next.connections.filter((edge) => !(edge.type === 'prompt-to-run' && edge.toId === id));
     next.connections.push({ type: 'prompt-to-run', fromId: promptId, toId: id });
+  }
+  for (const [id, runId] of scoreEdges) {
+    next.connections = next.connections.filter(edge => !(edge.type === 'run-to-score' && edge.toId === id));
+    next.connections.push({ type: 'run-to-score', fromId: runId, toId: id });
   }
 
   // A changed ancestor also changes every descendant's visible result, even if its own inputs

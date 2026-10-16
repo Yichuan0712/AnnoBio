@@ -29,14 +29,15 @@ export function runPlanView(plan, { modelLabel = (id) => id } = {}) {
         detail = `${step.credentialId ? `${modelLabel(step.credentialId)} · ` : ''}${calls}`;
       }
       if (step.action === 'resume') detail += step.kind === 'run' ? ' · continues where it stopped' : ' · runs again from the start';
-      if (step.action === 'rerun') detail += ' · runs again: it already has a current result';
+      if (step.action === 'rerun') detail += ' · runs again from the start';
     }
     return { nodeId: step.nodeId, kind: step.kind, name: step.name, detail, problems: problemsOf(step.nodeId) };
   };
   const stepIds = new Set(plan.steps.map((step) => step.nodeId));
   const target = plan.steps.at(-1);
   return {
-    title: `${plan.scope === 'this' ? 'Run' : 'Run to'} "${target?.name || 'this step'}"`,
+    title: `${plan.mode === 'restart' ? 'Restart pipeline to' : plan.scope === 'this' ? (plan.mode === 'resume-node' ? 'Resume' : 'Run only') : 'Resume pipeline to'} "${target?.name || 'this step'}"`,
+    note: plan.mode === 'restart' ? 'All steps up to this node will run from the start. Existing results and partial progress will not be reused; their History is kept.' : '',
     inputs: plan.inputs.map((input) => ({
       nodeId: input.nodeId,
       text: `${input.name} · ${input.rows == null ? 'unknown rows' : plural(input.rows, 'row')} · read by ${input.readBy.map((id) => names.get(id) || id).join(', ')}`,
@@ -89,6 +90,7 @@ export function openRunPlanDialog({ plan, modelLabel, showNode }) {
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body run-plan-dialog__body">
+        ${view.note ? `<p class="run-plan-dialog__note">${escapeHtml(view.note)}</p>` : ''}
         ${view.otherProblems.length ? `<ul class="run-plan-dialog__errors" role="alert">${view.otherProblems.map((problem) => `<li>${escapeHtml(problem)}</li>`).join('')}</ul>` : ''}
         ${sectionHtml('Reads', inputs ? `<ul class="run-plan-dialog__inputs">${inputs}</ul>` : '')}
         ${sectionHtml('Uses existing results', view.reused.map(cardHtml).join(''))}

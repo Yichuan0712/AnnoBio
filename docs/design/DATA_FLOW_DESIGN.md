@@ -368,7 +368,7 @@ Process 窗口在每个输入旁显示它的别名，和现在一样。
 - Pipeline 留下的副本不自动删除，由用户自己删除。
 - 改动之前产生、但还没导入画布的 Pipeline 运行（冻结定义中的中间产物是带生产者的 `dataset:` 产物），不再导入节点 History，只在 Run History 列表中保留记录。已经导入过的运行不受影响。
 - 删除旧格式迁移代码后：
-  - 从未启用 History 的老项目（画布没有 `historyVersion: 1`）打开时直接标记为已启用，不再把节点上的旧结果转成记录。这些节点、以及旧 Score/Review 的缓存结果都显示“没有结果”。
+  - 从未启用 History 的老项目（画布没有 `historyVersion: 1`）打开时直接标记为已启用，不再把节点上的旧结果转成记录。Generate/Process 没有记录时显示“没有结果”。Evaluate/Optimize 的完整快照与旧结果处理见 [Evaluate History](EVALUATION_HISTORY.md)：旧 Optimize 保留可查看内容，但不自动绑定当前评估。
   - 把这样的老项目合并进来时，带过来的节点同样显示“没有结果”。
   - 没有冻结画布定义的旧 Pipeline 运行不再导入。
 

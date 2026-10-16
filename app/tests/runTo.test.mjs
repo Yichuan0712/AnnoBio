@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { planRunTo } from '../src/runPlan.js';
 import { planHeldNodeIds, runTo } from '../src/runTo.js';
 import { isTaskLocked, taskLockedIds } from '../src/runTaskLocks.js';
+import { executionResumeOptions, newExecutionRecord, updateExecutionRecord } from '../src/executionRecords.js';
 
 const table = (count) => ({ headers: ['text'], rows: Array.from({ length: count }, (_, i) => [`row ${i}`]) });
 const data = (fromId, toId, alias) => ({ type: 'data', fromId, fromPort: 'result', toId, ...(alias ? { alias } : {}) });
@@ -185,7 +186,7 @@ test('the Agent run_to card shows the plan the user confirms', async () => {
     const env = { getCanvasState: () => state, credentialsById: new Map([['cred', { id: 'cred', model: 'some/model' }]]) };
     const preview = await previewRunRequest({ jobs: [{ kind: 'run_to', node: 'score' }] }, env);
     assert.equal(preview.ok, true, preview.error);
-    assert.equal(preview.items[0].title, 'Run to "Score"');
+    assert.equal(preview.items[0].title, 'Resume pipeline to "Score"');
     assert.deepEqual(preview.items[0].planSteps, [
       { nodeId: 'extract', action: 'reuse' }, { nodeId: 'tidy', action: 'run' }, { nodeId: 'score', action: 'run' },
     ]);
@@ -201,16 +202,21 @@ test('the Agent run_to card shows the plan the user confirms', async () => {
     // only_this: just that step, which needs current results before it.
     const lone = await previewRunRequest({ jobs: [{ kind: 'run_to', node: 'tidy', only_this: true }] }, env);
     assert.equal(lone.ok, true, lone.error);
-    assert.equal(lone.items[0].title, 'Run "Tidy"');
+    assert.equal(lone.items[0].title, 'Run only "Tidy"');
     assert.deepEqual(lone.items[0].planSteps, [{ nodeId: 'tidy', action: 'run' }]);
     const early = await previewRunRequest({ jobs: [{ kind: 'run_to', node: 'score', only_this: true }] }, env);
     assert.match(early.error, /"Tidy" has no current result/);
 
-    // Everything current: it runs the step again.
+    // Everything current: Resume does not silently rerun the target.
     const again = await previewRunRequest({ jobs: [{ kind: 'run_to', node: 'extract' }] }, env);
     assert.equal(again.ok, true, again.error);
-    assert.deepEqual(again.items[0].planSteps, [{ nodeId: 'extract', action: 'rerun' }]);
-    assert.match(again.items[0].lines.at(-2), /Extract \(again; its result is current\)/);
+    assert.deepEqual(again.items[0].planSteps, [{ nodeId: 'extract', action: 'reuse' }]);
+    assert.match(again.items[0].lines.at(-2), /Nothing will run/);
+    const restart = await previewRunRequest({ jobs: [{ kind: 'run_to', node: 'tidy', mode: 'restart' }] }, env);
+    assert.equal(restart.ok, true, restart.error);
+    assert.equal(restart.items[0].title, 'Restart pipeline to "Tidy"');
+    assert.deepEqual(restart.items[0].planSteps, [{ nodeId: 'extract', action: 'rerun' }, { nodeId: 'tidy', action: 'run' }]);
+    assert.match(restart.items[0].lines.join(' '), /no existing results or partial progress/);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -230,6 +236,39 @@ test('Run this step refuses while a step before it has no result', async () => {
   const env = fakeEnv(chain());
   const task = await runTo('tidy', env, { context, planOptions: { onlyThis: true } });
   assert.equal(task.status, 'failed');
-  assert.match(task.error, /Use Run to here/);
+  assert.match(task.error, /Use Resume pipeline to here/);
   assert.deepEqual(env.calls, []);
+});
+
+test('Restart executes every ancestor freshly, while normal Resume performs no work on current results', async () => {
+  const state = chain();
+  await runTo('score', fakeEnv(state), { context });
+  const env = fakeEnv(state);
+  const fresh = [];
+  const start = env.startRunNode, process = env.runProcessNode;
+  env.startRunNode = options => { fresh.push([options.runNodeId, options.fresh]); return start(options); };
+  env.runProcessNode = (id, options) => { fresh.push([id, options.fresh]); return process(id, options); };
+  const task = await runTo('score', env, { context, planOptions: { mode: 'restart' } });
+  assert.equal(task.status, 'completed');
+  assert.deepEqual(fresh, [['extract', true], ['tidy', true], ['score', true]]);
+  env.calls.length = 0;
+  await runTo('score', env, { context });
+  assert.deepEqual(env.calls, []);
+});
+
+test('continuing an interrupted Restart preserves finished steps but still reruns old unstarted results', async () => {
+  const state = chain();
+  await runTo('score', fakeEnv(state), { context });
+  const plan = planRunTo(state, 'score', context, { mode: 'restart' });
+  const controller = new AbortController();
+  const env = fakeEnv(state, { during: id => { if (id === 'extract') controller.abort(); } });
+  const task = await runTo('score', env, { context, planOptions: { mode: 'restart' }, signal: controller.signal });
+  assert.equal(task.status, 'stopped');
+  const record = updateExecutionRecord(newExecutionRecord(plan, { id: 'restart', now: 1 }), task, { ended: true, now: 2 });
+  const options = executionResumeOptions(record);
+  assert.deepEqual(options.freshNodeIds, ['tidy', 'score']);
+  const resumedEnv = fakeEnv(state);
+  const resumed = await runTo('score', resumedEnv, { context, planOptions: options });
+  assert.equal(resumed.status, 'completed');
+  assert.deepEqual(resumedEnv.calls, ['tidy', 'score']);
 });

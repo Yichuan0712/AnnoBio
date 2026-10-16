@@ -45,8 +45,8 @@ export async function runTo(targetId, env, { context = {}, planOptions = {}, sig
   const task = {
     status: 'completed',
     plan,
-    steps: plan.steps.map(({ nodeId, name, kind, action }) => ({
-      nodeId, name, kind, action, status: action === 'reuse' ? 'reused' : 'pending',
+    steps: plan.steps.map(({ nodeId, name, kind, action, fresh }) => ({
+      nodeId, name, kind, action, ...(fresh ? { fresh: true } : {}), status: action === 'reuse' ? 'reused' : 'pending',
     })),
   };
   const refuse = (error) => ({ ...task, status: 'failed', error });
@@ -79,8 +79,8 @@ export async function runTo(targetId, env, { context = {}, planOptions = {}, sig
       let outcome;
       try {
         outcome = step.kind === 'run'
-          ? await executeRunStep(item, env, { signal })
-          : await executeProcessStep(item, env, { signal });
+          ? await executeRunStep(item, env, { signal, fresh: step.action !== 'resume' })
+          : await executeProcessStep(item, env, { signal, fresh: step.action !== 'resume' });
       } catch (error) {
         outcome = { status: 'failed', lines: [`"${step.name}": ${error instanceof Error ? error.message : String(error)}`] };
       }

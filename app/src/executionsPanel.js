@@ -11,7 +11,7 @@ const STEP_LABELS = {
   reused: 'Used existing result', pending: 'Waiting', running: 'Running', completed: 'Ran',
   failed: 'Failed', stopped: 'Stopped', 'not-started': 'Not started', interrupted: 'Interrupted',
 };
-const KIND_LABELS = { run: 'Generate', process: 'Process data' };
+const KIND_LABELS = { run: 'Generate', process: 'Process' };
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -40,7 +40,7 @@ function recordHtml(record, { open, active }) {
     <div class="executions__head">
       <button type="button" class="executions__toggle" data-action="toggle" data-record-id="${escapeHtml(record.id)}" aria-expanded="${open}">
         <span class="executions__chevron" aria-hidden="true">${open ? '▾' : '▸'}</span>
-        <span class="executions__title">${record.scope === 'this' ? 'Run' : 'Run to'} "${escapeHtml(record.targetName || 'step')}"</span>
+        <span class="executions__title">${record.mode === 'restart' ? 'Restart pipeline to' : record.scope === 'this' ? (record.mode === 'resume-node' ? 'Resume' : 'Run only') : 'Resume pipeline to'} "${escapeHtml(record.targetName || 'step')}"</span>
         <span class="executions__status executions__status--${escapeHtml(record.status)}">${escapeHtml(STATUS_LABELS[record.status] || record.status)}</span>
         <span class="executions__summary">${escapeHtml(executionSummary(record))}</span>
         <span class="executions__time">${escapeHtml(when)}${record.source === 'agent' ? ' · by the Agent' : ''}</span>
@@ -77,7 +77,7 @@ export function mountExecutionsPanel(container, { getRecords, isActive, onStop, 
     }
     const html = records.length
       ? `<ol class="executions__list">${records.map((record) => recordHtml(record, { open: opened.has(record.id), active: isActive(record.id) })).join('')}</ol>`
-      : '<p class="executions__empty">No executions yet. Use Run to here or Run this step on a Generate or Process step (its right-click menu, or its Run button when an input has no result).</p>';
+      : '<p class="executions__empty">No executions yet. Right-click a Generate or Process node to run only that node, resume its pipeline to that point, or restart its pipeline from the beginning.</p>';
     if (html === previousHtml) return;
     previousHtml = html;
     view.innerHTML = html;

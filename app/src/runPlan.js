@@ -14,6 +14,12 @@ import {
 } from './stepInputs.js';
 
 const STEP_TYPES = new Set(['run', 'process']);
+export const RUN_ACTION_LABELS = {
+  only: 'Run only this node',
+  resume: 'Resume pipeline to here',
+  restart: 'Restart pipeline to here',
+  'resume-node': 'Resume',
+};
 const nodeIdOf = (node) => String(node?.nodeId || node?.id || '').trim();
 const findNode = (state, id) => (state?.nodes || []).find((node) => nodeIdOf(node) === String(id || '').trim());
 
@@ -81,7 +87,7 @@ export function upstreamWithoutResult(state, nodeId) {
   for (const source of stepSources(state, node)) {
     if (!isStepSource(source) || !findNode(state, source.nodeId)) continue;
     const waiting = stepOutputTable(state, source).waiting;
-    if (waiting && waiting !== 'missing-port') return stepSourceLabel(state, { ...source, port: RESULT_PORT });
+    if (waiting) return stepSourceLabel(state, { ...source, port: RESULT_PORT });
   }
   return null;
 }
@@ -91,9 +97,11 @@ export function upstreamWithoutResult(state, nodeId) {
  * @param {string} targetId a Generate or Process node
  * @param {{ settings?: object, credentialIds?: Set<string> }} context Settings (default Generate model,
  *   Python path) and the credentials that exist
- * @param {{ onlyThis?: boolean, rerun?: boolean }} [options] onlyThis: Run this step, without the
- *   steps before it, which then must have current results; rerun: run the target again although its
- *   result is current (what Execute does when everything up to it is current)
+ * @param {{ mode?: 'resume'|'restart'|'only'|'resume-node', freshNodeIds?: string[], onlyThis?: boolean,
+ *   rerun?: boolean }} [options] resume reuses valid results; restart computes every dependency;
+ *   only computes just the target freshly; resume-node continues only its compatible partial result.
+ *   freshNodeIds preserves unstarted work when continuing an interrupted Restart. onlyThis/rerun
+ *   are retained for existing readiness checks and callers.
  * @returns {{
  *   targetId: string, scope: 'to-here'|'this',
  *   steps: Array<{ nodeId: string, kind: 'run'|'process', name: string, action: 'reuse'|'run'|'resume'|'rerun',
@@ -105,10 +113,17 @@ export function upstreamWithoutResult(state, nodeId) {
  * }} steps upstream first; `calls` is model calls, null when some count is unknown; nothing may
  *   start while `problems` is not empty
  */
-export function planRunTo(state, targetId, { settings = {}, credentialIds = new Set() } = {}, { onlyThis = false, rerun = false } = {}) {
+export function planRunTo(state, targetId, { settings = {}, credentialIds = new Set() } = {}, { onlyThis = false, rerun = false, restart = false, mode, freshNodeIds = [] } = {}) {
+  if (mode != null) {
+    if (!Object.hasOwn(RUN_ACTION_LABELS, mode)) throw new Error(`Unknown Run mode: ${mode}`);
+    onlyThis = mode === 'only' || mode === 'resume-node';
+    rerun = mode === 'only';
+    restart = mode === 'restart';
+  }
   const id = String(targetId || '').trim();
+  const forcedIds = new Set(freshNodeIds);
   const target = findNode(state, id);
-  const plan = { targetId: id, scope: onlyThis ? 'this' : 'to-here', steps: [], inputs: [], problems: [], toRun: 0, calls: 0 };
+  const plan = { targetId: id, scope: onlyThis ? 'this' : 'to-here', mode: restart ? 'restart' : onlyThis ? (rerun ? 'only' : 'resume-node') : 'resume', steps: [], inputs: [], problems: [], toRun: 0, calls: 0 };
   const problem = (nodeId, message) => {
     if (!plan.problems.some((item) => item.nodeId === nodeId && item.message === message)) plan.problems.push({ nodeId, message });
   };
@@ -123,9 +138,15 @@ export function planRunTo(state, targetId, { settings = {}, credentialIds = new 
   const sourcesOf = new Map();
   const inputs = new Map();
   const seen = new Set();
+  const visiting = new Set();
   const visit = (nodeId) => {
+    if (visiting.has(nodeId)) {
+      problem(nodeId, 'This pipeline contains a cycle. Remove the circular connection before running.');
+      return;
+    }
     if (seen.has(nodeId)) return;
     seen.add(nodeId);
+    visiting.add(nodeId);
     const node = findNode(state, nodeId);
     const sources = stepSources(state, node);
     sourcesOf.set(nodeId, sources);
@@ -138,6 +159,7 @@ export function planRunTo(state, targetId, { settings = {}, credentialIds = new 
       }
     }
     order.push(nodeId);
+    visiting.delete(nodeId);
   };
   visit(id);
 
@@ -154,10 +176,13 @@ export function planRunTo(state, targetId, { settings = {}, credentialIds = new 
   for (const nodeId of order) {
     const node = findNode(state, nodeId);
     const status = stepState(node);
-    const action = rerun && nodeId === id && status === 'ready' ? 'rerun' : ACTIONS[status];
+    const sources = sourcesOf.get(nodeId);
+    const upstreamChanges = sources.some(source => isStepSource(source)
+      && actionOf.has(source.nodeId) && actionOf.get(source.nodeId) !== 'reuse');
+    const fresh = restart || forcedIds.has(nodeId) || (rerun && nodeId === id) || upstreamChanges;
+    const action = fresh ? (status === 'ready' || status === 'stopped' ? 'rerun' : 'run') : ACTIONS[status];
     actionOf.set(nodeId, action);
     const name = stepSourceLabel(state, { nodeId, port: RESULT_PORT, kind: node.type });
-    const sources = sourcesOf.get(nodeId);
     if (status === 'running') problem(nodeId, `"${name}" is already running.`);
 
     // What it reads must exist: a Dataset with content, a branch its upstream gives.
@@ -177,7 +202,7 @@ export function planRunTo(state, targetId, { settings = {}, credentialIds = new 
         if (waiting === 'missing-port') problem(nodeId, stepInputWaitingMessage(state, source, waiting));
         else if (waiting) {
           const upstreamName = stepSourceLabel(state, { ...source, port: RESULT_PORT });
-          problem(nodeId, `"${upstreamName}" has no current result. Use Run to here to run it first.`);
+          problem(nodeId, `"${upstreamName}" has no current result. Use Resume pipeline to here to run it first.`);
         }
       } else if (actionOf.get(source.nodeId) === 'reuse') {
         if (stepOutputTable(state, source).waiting === 'missing-port') problem(nodeId, stepInputWaitingMessage(state, source, 'missing-port'));
@@ -191,7 +216,7 @@ export function planRunTo(state, targetId, { settings = {}, credentialIds = new 
       }
     }
 
-    const step = { nodeId, kind: node.type, name, action, inputRows: null, calls: null };
+    const step = { nodeId, kind: node.type, name, action, inputRows: null, calls: null, ...(fresh ? { fresh: true } : {}) };
     if (node.type === 'run') {
       const source = sources[0];
       step.inputRows = source ? rowsOf(source) : null;
@@ -245,4 +270,32 @@ export function planRunTo(state, targetId, { settings = {}, credentialIds = new 
   plan.calls = plan.steps.some((step) => step.kind === 'run' && step.calls == null)
     ? null : plan.steps.reduce((sum, step) => sum + (step.kind === 'run' ? step.calls : 0), 0);
   return plan;
+}
+
+/** Context actions reflect actual execution scope, without loading model settings. */
+export function runMenuItems(state, targetId, { isLocked = () => false } = {}) {
+  const target = findNode(state, targetId);
+  if (!target || !STEP_TYPES.has(target.type)) return [];
+  const plan = planRunTo(state, targetId);
+  const busy = id => isLocked(id) || stepState(findNode(state, id)) === 'running';
+  const held = busy(targetId) ? 'This node is part of a run in progress.' : '';
+  const pipelineHeld = plan.steps.some(step => busy(step.nodeId)) ? 'Part of this pipeline is already running.' : '';
+  const waiting = upstreamWithoutResult(state, targetId);
+  const onlyBlocked = held || (waiting ? `"${waiting}" has no current result. Use Resume pipeline to here.` : '');
+  const items = [{ action: 'run-this-step', label: RUN_ACTION_LABELS.only, blocked: onlyBlocked }];
+  if (target.type === 'run' && stepState(target) === 'stopped' && !waiting) {
+    items.push({ action: 'resume-this-step', label: RUN_ACTION_LABELS['resume-node'], blocked: held });
+  }
+  if (plan.steps.some(step => step.nodeId !== targetId && step.action !== 'reuse')) {
+    items.push({ action: 'run-to-here', label: RUN_ACTION_LABELS.resume, blocked: pipelineHeld });
+  }
+  const hasPriorWork = plan.steps.some(step => {
+    const node = findNode(state, step.nodeId);
+    return step.action === 'reuse' || step.action === 'resume' || !!node.historyRecordId || !!node.historyStaleRecordId;
+  });
+  if (plan.steps.length > 1 && hasPriorWork) {
+    items.push({ action: 'restart-to-here', label: RUN_ACTION_LABELS.restart, blocked: pipelineHeld });
+  }
+  if (held) items.push({ action: 'stop-node-run', label: 'Stop', blocked: '' });
+  return items;
 }

@@ -33,6 +33,14 @@ function outputLabel(rowCount) {
 /** Human-readable facts for a Generate/Process History entry, including old saved records. */
 export function describeHistoryRecord(record, canvasState = null) {
   if (!record) return { title: 'Saved result', input: 'Input details unavailable', output: 'Result details unavailable', meta: '' };
+  if (record.kind === 'score') {
+    const metrics = record.results?.metrics;
+    return { title: record.summary?.name || 'Evaluate result',
+      input: `Generate: ${record.summary?.runName || record.inputs?.runRecordId || 'Unknown'} · Ground truth: ${record.summary?.groundTruthName || 'Unknown'}`,
+      output: metrics ? `Precision ${metrics.precision.toFixed(2)}% · Recall ${metrics.recall.toFixed(2)}% · F1 ${metrics.f1.toFixed(2)}%`
+        : record.evaluationVersion === 1 ? 'Evaluation did not complete' : 'Legacy result — complete inputs unavailable',
+      meta: `${record.summary?.rowCount || 0} result rows · ${record.inputs?.activeMatchMode || 'rules'}` };
+  }
   if (record.kind === 'run') {
     const prompt = String(record.inputs?.prompt?.name || record.summary?.promptName || '').trim();
     const input = record.inputs?.dataset;

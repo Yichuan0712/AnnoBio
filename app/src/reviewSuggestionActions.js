@@ -50,9 +50,11 @@ async function runPromptsAndWaitForResults({
   credentialId,
   samples,
   outputSchema,
+  runSettings = {},
 }) {
   const runResponse = await postRun({
     credential_id: credentialId,
+    settings_overrides: runSettings,
     samples,
     output_schema: outputSchema,
   }, undefined, apiBase, getCurrentProjectId());
@@ -125,6 +127,7 @@ export async function verifyReviewSuggestion({
       credentialId,
       samples,
       outputSchema,
+      runSettings: reviewPayload.run_settings || {},
     });
     if (finalData?.error) {
       throw new Error(String(finalData.error));
@@ -134,6 +137,7 @@ export async function verifyReviewSuggestion({
     const { verifyRows, matchedCount, total } = await evaluateScoreOutputGt({
       apiBase,
       scoreMapping,
+      scoreMatchCode: reviewPayload.score_match_code || '',
       results: rawResults,
       inputEntries,
       outputFields: Array.isArray(finalData?.output_fields) ? finalData.output_fields : outputFields,

@@ -23,8 +23,8 @@ const modelLabel = (id) => (id === 'cred' ? 'claude-sonnet' : id);
 
 test('the plan reads as inputs, reused results and the steps that run, in order', () => {
   const view = runPlanView(plan(), { modelLabel });
-  assert.equal(view.title, 'Run to "Score"');
-  assert.equal(runPlanView({ ...plan(), scope: 'this' }).title, 'Run "Score"');
+  assert.equal(view.title, 'Resume pipeline to "Score"');
+  assert.equal(runPlanView({ ...plan(), scope: 'this' }).title, 'Run only "Score"');
   assert.deepEqual(view.inputs.map((input) => input.text), [
     'Docs · 1,000 rows · read by Extract',
     'Species · 1 row · read by Tidy',
@@ -66,4 +66,11 @@ test('problems sit on their step or input and keep it from starting', () => {
 test('a plan that runs only Process steps has no model calls line', () => {
   const steps = [{ nodeId: 'tidy', kind: 'process', name: 'Tidy', action: 'run', inputRows: 3, calls: 0 }];
   assert.equal(runPlanView(plan({ steps, calls: 0, toRun: 1 }), { modelLabel }).calls, '');
+});
+
+test('Restart explicitly states that old results and partial progress will not be reused', () => {
+  const view = runPlanView(plan({ mode: 'restart' }));
+  assert.equal(view.title, 'Restart pipeline to "Score"');
+  assert.match(view.note, /partial progress will not be reused/);
+  assert.match(view.note, /History is kept/);
 });

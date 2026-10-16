@@ -94,7 +94,7 @@ test('run_nodes previews and executes a custom-code Score through the canvas API
     assert.deepEqual(calls, ['score']);
     assert.match(result.results[0], /2\/2 model output rows matched/);
     canvas.nodes.find((node) => node.nodeId === 'score').scoreActiveMatchMode = 'rules';
-    assert.match((await previewRunRequest(request, env)).error, /compute automatically/);
+    assert.equal((await previewRunRequest(request, env)).ok, true);
   } finally { globalThis.fetch = previousFetch; }
 });
 

@@ -6,6 +6,16 @@
  */
 import { BACKEND_API_BASE } from './backendConfig.js';
 
+/** Continue an interrupted restart without accidentally reusing its unstarted old branches. */
+export function executionResumeOptions(record) {
+  return {
+    mode: record.scope === 'this' ? 'resume-node' : 'resume',
+    freshNodeIds: (record.steps || []).filter(step =>
+      (record.mode === 'restart' || step.fresh || step.action === 'rerun')
+      && ['pending', 'not-started', 'failed'].includes(step.status)).map(step => step.nodeId),
+  };
+}
+
 const webStorage = {
   async loadRunRecords(projectId) {
     const res = await fetch(`${BACKEND_API_BASE}/api/projects/${encodeURIComponent(projectId)}/run-records`);
@@ -48,10 +58,11 @@ export function newExecutionRecord(plan, { id, now, source = 'user' }) {
     targetNodeId: plan.targetId,
     targetName: plan.steps.at(-1)?.name || '',
     scope: plan.scope || 'to-here',
+    mode: plan.mode || (plan.scope === 'this' ? 'only' : 'resume'),
     status: 'running',
     inputs: plan.inputs.map(({ nodeId, name, rows }) => ({ nodeId, name, rows })),
-    steps: plan.steps.map(({ nodeId, name, kind, action }) => ({
-      nodeId, name, kind, action, status: action === 'reuse' ? 'reused' : 'pending',
+    steps: plan.steps.map(({ nodeId, name, kind, action, fresh }) => ({
+      nodeId, name, kind, action, ...(fresh ? { fresh: true } : {}), status: action === 'reuse' ? 'reused' : 'pending',
     })),
   };
 }

@@ -66,7 +66,7 @@ export function attachRunHistoryPicker({ overlay, loadEntries, onSelect, onDelet
         const row = document.createElement('button');
         row.type = 'button';
         row.className = 'modal-history-popup__item';
-        row.disabled = item.current || isDisabled();
+        row.disabled = item.current || entry.restorable === false || isDisabled();
         row.setAttribute('aria-current', item.current ? 'true' : 'false');
         const top = document.createElement('span');
         top.className = 'modal-history-popup__top';

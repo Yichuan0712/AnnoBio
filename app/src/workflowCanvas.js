@@ -5,6 +5,7 @@
  */
 
 import { generateDisplayName } from './nodeLabels.js';
+import { canonicalJson } from './runHistorySignature.js';
 import { openPromptDetailModal } from './promptDetailModal.js';
 import { extractInputFields } from './promptText.js';
 import { openRunDetailModal, deriveOutputFields } from './runDetailModal.js';
@@ -76,7 +77,7 @@ import { showPipelineOverviewModal } from './pipelineOverviewModal.js';
 import { createWorkspacePanels } from './workspacePanels.js';
 import { setLogPanelAvailable, subscribeAppErrors } from './appErrors.js';
 import { mountBackendLogPanel } from './backendLogPanel.js';
-import { hasNodeExecution, nodeExecutionIdentity, registerNodeJob, stopNodeExecution } from './nodeExecutionControl.js';
+import { hasNodeExecution, nodeExecutionIdentity, registerNodeJob, registerNodeStop, stopNodeExecution } from './nodeExecutionControl.js';
 import { mountPromptOptimizationPanel } from './promptOptimizationPanel.js';
 import { iconGitCompareArrows, iconLayoutPanel, iconLayoutSidebarRight } from './icons.js';
 import { runSettingsOverrides, reviewSettingsOverrides } from './nodeSettings.js';
@@ -100,12 +101,13 @@ import { readSavedFrom, savedFromLabel, savedProcessOutputs, savedRunOutput, sco
 import { inputMenuItems, outputMenuItems } from './outputMenu.js';
 import { getCurrentProjectId } from './currentProject.js';
 import { analysisInputKeys, analysisKeyForSave } from './runAnalysisHistory.js';
+import { runEvaluation, evaluationPayload, optimizationSourceIsEarlier } from './evaluationHistory.js';
 import { contentLocks } from './contentLocks.js';
 import { isTaskLocked, taskLockedIds } from './runTaskLocks.js';
-import { planRunTo, upstreamWithoutResult } from './runPlan.js';
+import { planRunTo, runMenuItems, RUN_ACTION_LABELS } from './runPlan.js';
 import { runTo } from './runTo.js';
 import { openRunPlanDialog } from './runPlanDialog.js';
-import { endInterruptedRecords, loadExecutionRecords, newExecutionRecord, saveExecutionRecords, updateExecutionRecord } from './executionRecords.js';
+import { endInterruptedRecords, executionResumeOptions, loadExecutionRecords, newExecutionRecord, saveExecutionRecords, updateExecutionRecord } from './executionRecords.js';
 import { mountExecutionsPanel } from './executionsPanel.js';
 
 /** Same backend as Run/Review (embeddings API). */
@@ -328,7 +330,7 @@ function evaluateScoreNode(node, runRowIndex, gtRowIndex, resultsByIndex, runWs,
  * Build comparison rows for Review API: same logic as score detail (getRunValue, getGtValue, computeMatchPerRow).
  * `runInput` is the table the Generate read (stepInputs.js); `datasetContentByNodeId` supplies the ground truth.
  */
-async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, promptText = '', runInput = null) {
+async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, promptText = '', runInput = null, evaluationState = null) {
   if ((scoreNode?.dataset?.scoreActiveMatchMode || 'rules') === 'code') {
     return buildReviewComparisonRowsFromCodeMatch(scoreNode, runNode, datasetContentByNodeId, promptText, runInput);
   }
@@ -377,6 +379,8 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
   };
   let reviewEmbeddingCosineMap = new Map();
   const ruleMatchesRow = (rule, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) => {
+    const key = canonicalJson([rule, runRowIndex, gtRowIndex]);
+    if (evaluationState?.ruleDecisions && Object.hasOwn(evaluationState.ruleDecisions, key)) return evaluationState.ruleDecisions[key];
     if (!rule || rule.type !== 'rule') return false;
     const runResult = resultsByIndex.get(runRowIndex) || null;
     const runValRaw = getRunValue(runResult, rule.outputKey, runWs, outputFields);
@@ -480,8 +484,8 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
 
   const nonErrorResults = validDedupedResults || [];
   const runRowIndices = [...new Set(nonErrorResults.map((r) => r.row_index))];
-  reviewEmbeddingCosineMap = new Map();
-  if (rulesFlat.some((r) => getMatchFlags(r).embeddingSimilarity)) {
+  reviewEmbeddingCosineMap = new Map(evaluationState?.embeddingMap || []);
+  if (!evaluationState && rulesFlat.some((r) => getMatchFlags(r).embeddingSimilarity)) {
     try {
       reviewEmbeddingCosineMap = await prefetchEmbeddingCosineMap(SCORE_BACKEND_BASE, {
         root: scoreBundleRootsForEmbeddingWalk(inputRoot, outputRoot),
@@ -1436,6 +1440,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   const pendingRuns = new Map();
   const pendingProcesses = new Set();
   const pendingScoreMatches = new Set();
+  const scoreControllers = new Map();
   const pendingRunHistoryRecords = new Map();
   async function persistRunHistoryProgress(nodeId, status, results, outputFields) {
     const record = pendingRunHistoryRecords.get(nodeId);
@@ -1566,6 +1571,11 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
   function syncScoreNodeProgressFromUpstreamRun(scoreNode) {
     if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) return;
+    if (pendingScoreMatches.has(scoreNode.dataset.nodeId)) return;
+    if (historySession?.projectId) {
+      setScoreNodeProgress(scoreNode, scoreNode.dataset.historyRecordId && !scoreNode.dataset.historyStaleRecordId ? 100 : 0);
+      return;
+    }
     const runEdge = connections.find((c) => c.toId === scoreNode.dataset.nodeId && c.type === EDGE_TYPE_RUN_TO_SCORE);
     if (!runEdge) {
       setScoreNodeProgress(scoreNode, 0);
@@ -1591,6 +1601,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       if (c.fromId !== runNodeId || c.type !== EDGE_TYPE_RUN_TO_SCORE) continue;
       const scoreNode = getNodeById(c.toId);
       if (!scoreNode || !scoreNode.classList.contains('workflow-node--score')) continue;
+      if (historySession?.projectId) { syncScoreNodeProgressFromUpstreamRun(scoreNode); continue; }
       const ready = scoreNodeIsReadyForScoring(scoreNode);
       setScoreNodeProgress(scoreNode, hasResults && ready ? 100 : 0);
     }
@@ -2094,56 +2105,96 @@ export function buildWorkflowCanvas(root, options = {}) {
     return readRunInput(runNode).table || null;
   }
 
+  async function loadEvaluationRecord(nodeId, { currentOnly = false, reconcile = true } = {}) {
+    if (!historySession?.projectId) return null;
+    if (reconcile) await reconcileHistory();
+    const node = getNodeById(nodeId);
+    const id = node?.dataset.historyRecordId || (!currentOnly && node?.dataset.historyStaleRecordId);
+    if (!id) return null;
+    const record = await historySession.storage.loadRecord(historySession.projectId, id);
+    return record?.evaluationVersion === 1 && record.nodeId === nodeId && record.status === 'completed' ? record : null;
+  }
+
+  async function getEvaluationPayload(nodeId, { recordId = '', currentOnly = true } = {}) {
+    const session = historySession;
+    const record = recordId && session?.projectId
+      ? await session.storage.loadRecord(session.projectId, recordId)
+      : await loadEvaluationRecord(nodeId, { currentOnly });
+    if (!record || record.nodeId !== nodeId) throw new Error('Run Evaluate to create a current evaluation before creating Optimize.');
+    return evaluationPayload(record);
+  }
+
   async function runScoreNode(nodeId, { signal, onProgress } = {}) {
     const node = getNodeById(nodeId);
     if (!node?.classList.contains('workflow-node--score')) throw new Error('Evaluate node was not found.');
-    if (pendingScoreMatches.has(nodeId) || node.dataset.scoreMatchUiRunning === '1' || hasNodeExecution(nodeId)) throw new Error('Evaluate matching is already running.');
-    if (node.dataset.scoreActiveMatchMode !== 'code') throw new Error('Rule-based Evaluate nodes compute automatically; this job runs custom match code.');
-    const runId = connections.find((edge) => edge.type === 'run-to-score' && edge.toId === nodeId)?.fromId;
-    const run = getNodeById(runId);
-    const runResultsRaw = run?.dataset.runResults || '[]';
-    const groundTruthId = node.dataset.scoreGroundTruthId;
-    const groundTruth = datasetContentByNodeId.get(node.dataset.scoreGroundTruthId);
-    let results = [];
-    let fields = [];
-    try { results = JSON.parse(runResultsRaw); } catch (_) {}
-    try { fields = JSON.parse(run?.dataset.runOutputFields || '[]'); } catch (_) {}
-    const code = String(node.dataset.scoreMatchCode || '');
-    if (!code.trim()) throw new Error('Evaluate has no custom match code.');
+    if (pendingScoreMatches.has(nodeId) || hasNodeExecution(nodeId)) throw new Error('Evaluate is already running.');
+    const session = historySession;
+    await reconcileHistory();
+    if (session !== historySession || !getNodeById(nodeId)) throw new Error('The open project changed. Run Evaluate again.');
+    if (pendingScoreMatches.has(nodeId) || hasNodeExecution(nodeId)) throw new Error('Evaluate is already running.');
     pendingScoreMatches.add(nodeId);
-    const control = registerNodeJob(nodeId, async (jobId) => {
-      const res = await fetch(`${RUN_API_BASE}/api/score/match/run/cancel/${jobId}`, { method: 'POST' });
-      if (!res.ok) throw new Error('Could not stop Evaluate matching.');
-    });
+    const controller = new AbortController();
+    scoreControllers.set(nodeId, controller);
+    const abort = () => controller.abort();
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+    const release = registerNodeStop(nodeId, abort);
     node.dataset.scoreMatchAgentRunning = '1';
-    node.dataset.scoreMatchInterrupted = '1';
-    delete node.dataset.scoreMatchError;
+    setScoreNodeProgress(node, 0);
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     try {
-      const result = await runScoreCode({ code, results, outputFields: fields, input: readRunInputTable(run), groundTruth, signal,
-        onStarted: (jobId) => control.started(jobId),
-        onProgress: (completed, total) => {
-          const bar = getNodeById(nodeId)?.querySelector('.workflow-node__score-progress');
-          if (bar) bar.style.width = `${total ? Math.min(100, Math.round(completed * 100 / total)) : 0}%`;
-          onProgress?.(completed, total);
-        },
-      });
-      const live = getNodeById(nodeId);
-      if (!live) throw new Error('Evaluate was removed before matching finished.');
-      if (live.dataset.scoreActiveMatchMode !== 'code' || live.dataset.scoreMatchCode !== code || live.dataset.scoreGroundTruthId !== groundTruthId
-        || getNodeById(runId)?.dataset.runResults !== runResultsRaw) throw new Error('Evaluate inputs changed while matching; run matching again.');
-      live.dataset.scoreMatchResult = JSON.stringify(result);
-      delete live.dataset.scoreMatchError;
-      if (!result.wasCancelled) delete live.dataset.scoreMatchInterrupted;
-      return result;
+      const record = await runEvaluation(session, getCanvasState(), nodeId, async inputs => {
+        const score = document.createElement('div'), run = document.createElement('div');
+        Object.assign(score.dataset, { scoreGroundTruthId: inputs.groundTruthId,
+          scoreMapping: JSON.stringify(inputs.mapping), scoreMatchCode: inputs.matchCode,
+          scoreActiveMatchMode: inputs.activeMatchMode, scoreRowExcludedFromScoring: JSON.stringify(inputs.exclusions || {}) });
+        Object.assign(run.dataset, { runResults: JSON.stringify(inputs.runResults), runOutputFields: JSON.stringify(inputs.outputFields),
+          runInputToColumn: JSON.stringify(inputs.runMapping) });
+        let matchResult = null, table = null, evaluationState;
+        if (inputs.activeMatchMode === 'code') {
+          matchResult = await runScoreCode({ code: inputs.matchCode, results: inputs.runResults, outputFields: inputs.outputFields,
+            input: inputs.input, groundTruth: inputs.groundTruth.content, signal: controller.signal, onProgress: (completed, total) => {
+              setScoreNodeProgress(node, total ? completed / total * 100 : 0); onProgress?.(completed, total);
+            } });
+          score.dataset.scoreMatchResult = JSON.stringify(matchResult);
+          const runToGt = buildCodeMatchRunToGt(matchResult, inputs.groundTruth.content.rows.length);
+          const excluded = inputs.exclusions || {};
+          const included = matchResult.runRowIndices.filter(i => !excluded[runToGt[i] >= 0 ? String(runToGt[i]) : `run:${i}`]);
+          const tp = included.filter(i => runToGt[i] >= 0).length;
+          const gtCount = inputs.groundTruth.content.rows.filter((_, j) => !excluded[String(j)]).length;
+          const precision = included.length ? tp / included.length * 100 : 0;
+          const recall = gtCount ? tp / gtCount * 100 : 0;
+          evaluationState = { runToGt, metrics: { precision, recall, f1: precision + recall ? 2 * precision * recall / (precision + recall) : 0, matched: tp } };
+        } else {
+          table = await getScoreExportData({ node: score,
+            getRunResults: () => ({ results: inputs.runResults, outputFields: inputs.outputFields }),
+            getRunWorkingSetContent: () => inputs.input, getGroundTruthContent: () => inputs.groundTruth.content,
+            getGroundTruthHeaders: () => inputs.groundTruth.content.headers, captureEvaluationState: true });
+          if (!table) throw new Error('Add at least one evaluation rule before running Evaluate.');
+          evaluationState = table.evaluationState;
+        }
+        if (controller.signal.aborted && !matchResult) throw new DOMException('Aborted', 'AbortError');
+        const comparisonRows = await buildReviewComparisonRows(score, run, new Map([[inputs.groundTruthId, inputs.groundTruth.content]]), inputs.prompt.text, inputs.input, evaluationState);
+        return { scoreMatchResult: matchResult, table: table ? { headers: table.headers, rows: table.rows } : null,
+          evaluationState, metrics: evaluationState.metrics, comparisonRows, wasCancelled: matchResult?.wasCancelled || false };
+      }, { signal: controller.signal });
+      if (session !== historySession || !getNodeById(nodeId)) return record.results.scoreMatchResult || record.results;
+      if (record.status === 'completed') {
+        node.dataset.historyRecordId = record.id;
+        delete node.dataset.historyStaleRecordId;
+        if (record.results.scoreMatchResult) node.dataset.scoreMatchResult = JSON.stringify(record.results.scoreMatchResult);
+        delete node.dataset.scoreMatchError;
+      }
+      await reconcileHistory();
+      return record.results.scoreMatchResult || record.results;
     } catch (error) {
-      if (error.name !== 'AbortError') node.dataset.scoreMatchError = error.message || String(error);
+      node.dataset.scoreMatchError = error.message || String(error);
       throw error;
     } finally {
-      control.release();
+      release(); signal?.removeEventListener('abort', abort);
       delete node.dataset.scoreMatchAgentRunning;
-      const live = getNodeById(nodeId);
-      if (live) delete live.dataset.scoreMatchAgentRunning;
-      pendingScoreMatches.delete(nodeId);
+      if (scoreControllers.get(nodeId) === controller) { scoreControllers.delete(nodeId); pendingScoreMatches.delete(nodeId); }
+      syncScoreNodeProgressFromUpstreamRun(node);
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
       document.dispatchEvent(new CustomEvent('workflow:score-results-updated', { detail: { nodeId } }));
     }
@@ -3164,7 +3215,9 @@ export function buildWorkflowCanvas(root, options = {}) {
     startRunNode: (options) => startRunNode(options),
     runToHere: (nodeId, options) => runToHere(nodeId, options),
     loadStaleRecord: (nodeId) => loadStaleRecord(nodeId),
+    runScoreNode: (nodeId, options) => runScoreNode(nodeId, options),
     resumeReviewNode: (nodeId) => resumeReviewNode(nodeId),
+    applyReviewSuggestions: (options) => applyReviewSuggestions(options),
     openSamplerDetailModal,
     openDatasetDetailModal,
     openScoreDetailModal,
@@ -3177,6 +3230,8 @@ export function buildWorkflowCanvas(root, options = {}) {
     deriveOutputFields,
     formatResultOutputColumnLabel,
     buildReviewComparisonRows,
+    getEvaluationPayload,
+    loadEvaluationRecord,
     resolveRunCredentialId,
     resolveReviewCredentialId,
     runReviewStart,
@@ -3283,6 +3338,8 @@ export function buildWorkflowCanvas(root, options = {}) {
     findUniqueSamplerName,
     findUniqueReviewName,
     buildReviewComparisonRows,
+    getEvaluationPayload,
+    loadEvaluationRecord,
     escapeRegex,
     markNodeAsAgentCreated,
     setNodeCanvasPosition,
@@ -3554,15 +3611,10 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (!isPortMenu) {
       manageItems += '<button type="button" class="workflow-node-context-item" data-action="copy-name" role="menuitem">Copy name</button>';
     }
-    // Execute (runToHere): to here also runs every step before it that has no current result; this
-    // step runs it alone, so what it reads must be current. Either runs it again when it is current.
     let runItems = '';
     if (!isPortMenu && (isRun || isProcess)) {
-      const held = isTaskLocked(node.dataset.nodeId) ? 'This step is part of a run in progress.' : '';
-      const waitingFor = held ? null : upstreamWithoutResult(getCanvasState(), node.dataset.nodeId);
-      const thisBlocked = held || (waitingFor ? `"${waitingFor}" has no current result yet. Use Run to here.` : '');
-      const item = (action, label, blocked) => `<button type="button" class="workflow-node-context-item" data-action="${action}" role="menuitem"${blocked ? ` disabled title="${escapeAttr(blocked)}"` : ''}>${label}</button>`;
-      runItems = item('run-to-here', 'Run to here', held) + item('run-this-step', 'Run this step', thisBlocked);
+      runItems = runMenuItems(getCanvasState(), node.dataset.nodeId, { isLocked: isTaskLocked })
+        .map(({ action, label, blocked }) => `<button type="button" class="workflow-node-context-item" data-action="${action}" role="menuitem"${blocked ? ` disabled title="${escapeAttr(blocked)}"` : ''}>${label}</button>`).join('');
     }
     menu.innerHTML = menuGroup('Run', runItems) + menuGroup(inputPort !== undefined ? 'Create input' : 'Next steps', nextStepItems) + menuGroup('Manage node', manageItems);
     /** The output an output item starts from. */
@@ -3783,7 +3835,15 @@ export function buildWorkflowCanvas(root, options = {}) {
       'run-this-prompt': () => newRunNode({ promptNode: node, at }),
       'run-prompt-on-output': (button) => newRunNode({ inputSource: outputSource(button), at }),
       'run-to-here': () => { void runToHere(node.dataset.nodeId); },
-      'run-this-step': () => { void runToHere(node.dataset.nodeId, { onlyThis: true }); },
+      'run-this-step': () => { void runToHere(node.dataset.nodeId, { mode: 'only' }); },
+      'resume-this-step': () => { void runToHere(node.dataset.nodeId, { mode: 'resume-node' }); },
+      'restart-to-here': () => { void runToHere(node.dataset.nodeId, { mode: 'restart' }); },
+      'stop-node-run': () => {
+        const active = executionRecords.find(record => activeExecutions.has(record.id)
+          && record.steps.some(step => step.nodeId === node.dataset.nodeId));
+        if (active) activeExecutions.get(active.id).abort();
+        else void stopNodeTask(node.dataset.nodeId).catch(error => showAppAlert(String(error?.message || error), 'Stop'));
+      },
       'process-output': (button) => newProcessNode({ inputSource: outputSource(button), at }),
       // A duplicate is a standalone node: no connections are copied (same for Datasets and Processes).
       duplicate: () => {
@@ -4393,18 +4453,20 @@ export function buildWorkflowCanvas(root, options = {}) {
   });
 
   document.addEventListener('workflow:score-export-to-workspace', (e) => {
-    const { scoreNodeId = '', scoreName = '', headers, rows, at } = e.detail || {};
+    const { scoreNodeId = '', scoreName = '', headers, rows, at, recordId } = e.detail || {};
     if (!Array.isArray(headers) || !Array.isArray(rows)) return;
     const baseName = (scoreName && scoreName.trim()) ? scoreName.trim() + ' comparison' : 'Evaluate comparison';
     const datasetName = findUniqueDatasetExportName(baseName);
     const notes = `Exported from Evaluate "${(scoreName && scoreName.trim()) ? scoreName.trim() : 'Evaluate'}". Model outputs vs ground truth comparison.`;
     document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', {
-      detail: { name: datasetName, notes, headers, rows, at, savedFrom: scoreSavedFrom(scoreNodeId, currentScoreRecordId(scoreNodeId)) },
+      detail: { name: datasetName, notes, headers, rows, at, savedFrom: scoreSavedFrom(scoreNodeId, recordId || currentScoreRecordId(scoreNodeId)) },
     }));
   });
 
   /** The Score's record for the inputs it has now, if its result has been recorded. */
   function currentScoreRecordId(scoreNodeId) {
+    const selected = getNodeById(scoreNodeId)?.dataset.historyRecordId;
+    if (selected) return selected;
     const key = historyAnalysisKeys.get(`score:${scoreNodeId}`);
     if (!key?.signature || !historySession?.projectId) return '';
     return [...historySession.index.records].reverse().find((entry) => entry.kind === 'score'
@@ -4674,6 +4736,10 @@ export function buildWorkflowCanvas(root, options = {}) {
         top: Number.isFinite(Number(e.detail?.top)) ? Number(e.detail.top) : undefined,
         ensureUniqueName: e.detail?.ensureUniqueName === true,
         reviewCredentialId: e.detail?.reviewCredentialId,
+        evaluateRecordId: e.detail?.evaluateRecordId,
+        evaluateNodeId: e.detail?.evaluateNodeId,
+        reviewMethodId: e.detail?.reviewMethodId,
+        reviewSettings: e.detail?.reviewSettings,
       });
       if (!e.detail) e.detail = {};
       e.detail.reviewNodeId = created.reviewNodeId;
@@ -4822,7 +4888,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         updateEdges();
         document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
       }
-    }).catch(() => {});
+    }).catch(error => showAppAlert(String(error?.message || error), 'Optimize'));
   });
 
   let canvasHistoryVersion = null;
@@ -4984,6 +5050,8 @@ export function buildWorkflowCanvas(root, options = {}) {
           scoreGroundTruthId,
           scoreMapping,
           scoreRowExcludedFromScoring: scoreRowExcludedFromScoringObj,
+          historyRecordId: node.dataset.historyRecordId || undefined,
+          historyStaleRecordId: node.dataset.historyStaleRecordId || undefined,
           reviewResult: reviewResult || undefined,
           reviewCredentialId,
           reviewMethod,
@@ -5015,6 +5083,10 @@ export function buildWorkflowCanvas(root, options = {}) {
           reviewResult: reviewResult || undefined,
           reviewMethodId: node.dataset.reviewMethodId || undefined,
           reviewCredentialId: (node.dataset.reviewCredentialId || '').trim() || undefined,
+          evaluateRecordId: node.dataset.evaluateRecordId || undefined,
+          evaluateNodeId: node.dataset.evaluateNodeId || undefined,
+          reviewSourceEarlier: node.dataset.reviewSourceEarlier === '1',
+          reviewSettings: node.dataset.reviewSettings || undefined,
         };
         if ((node.dataset.nodeOrigin || '').trim()) out.nodeOrigin = node.dataset.nodeOrigin.trim();
         if (pct > 0) out.reviewProgress = pct;
@@ -5220,6 +5292,8 @@ export function buildWorkflowCanvas(root, options = {}) {
           scoreNode.dataset.scoreMatchError = n.scoreMatchError;
         }
         if (n.scoreMatchInterrupted === true) scoreNode.dataset.scoreMatchInterrupted = '1';
+        if (n.historyRecordId) scoreNode.dataset.historyRecordId = n.historyRecordId;
+        if (n.historyStaleRecordId) scoreNode.dataset.historyStaleRecordId = n.historyStaleRecordId;
         createdNodes.push(scoreNode);
       } else if (n.type === 'promptReview') {
         const promptReviewNode = createPromptReviewNode({
@@ -5230,6 +5304,10 @@ export function buildWorkflowCanvas(root, options = {}) {
         });
         if (n.nodeOrigin === 'agent') markNodeAsAgentCreated(promptReviewNode);
         if (n.reviewMethodId) promptReviewNode.dataset.reviewMethodId = n.reviewMethodId;
+        if (n.evaluateRecordId) promptReviewNode.dataset.evaluateRecordId = n.evaluateRecordId;
+        if (n.evaluateNodeId) promptReviewNode.dataset.evaluateNodeId = n.evaluateNodeId;
+        if (n.reviewSourceEarlier) promptReviewNode.dataset.reviewSourceEarlier = '1';
+        if (n.reviewSettings) promptReviewNode.dataset.reviewSettings = typeof n.reviewSettings === 'string' ? n.reviewSettings : JSON.stringify(n.reviewSettings);
         if (typeof n.reviewCredentialId === 'string' && n.reviewCredentialId.trim()) promptReviewNode.dataset.reviewCredentialId = n.reviewCredentialId.trim();
         if (n.reviewResult && typeof n.reviewResult === 'string') {
           promptReviewNode.dataset.reviewResult = n.reviewResult;
@@ -5327,6 +5405,9 @@ export function buildWorkflowCanvas(root, options = {}) {
       pendingRuns.clear();
       pendingRunHistoryRecords.clear();
       pendingProcesses.clear();
+      for (const controller of scoreControllers.values()) controller.abort();
+      scoreControllers.clear();
+      pendingScoreMatches.clear();
     }
     historySession = session;
     historyAnalysisKeys = new Map();
@@ -5441,6 +5522,8 @@ export function buildWorkflowCanvas(root, options = {}) {
     // No node means no History; a plain Dataset passes no source and must stay editable.
     if (!nodeId || !historySession?.projectId || canvasHistoryVersion !== 1) return null;
     return {
+      loadCurrent: () => loadEvaluationRecord(nodeId, { reconcile: false }),
+      loadRecord: id => historySession.storage.loadRecord(historySession.projectId, id),
       reconcile: () => getNodeById(nodeId)?.classList.contains('workflow-node--run')
         ? reconcileRunHistory(nodeId) : reconcileHistory(),
       loadEntries: async () => {
@@ -5459,10 +5542,10 @@ export function buildWorkflowCanvas(root, options = {}) {
       },
       select: async (recordId, closeModal) => {
         const otherDetails = [...document.querySelectorAll('.modal-overlay')].filter((el) =>
-          el.querySelector('.modal-panel--run-detail, .modal-panel--process'));
-        if (otherDetails.length > 1) throw new Error('Close other Generate or Process windows before switching History.');
+          el.querySelector('.modal-panel--run-detail, .modal-panel--process, .modal-panel--score-detail'));
+        if (otherDetails.length > 1) throw new Error('Close other Generate, Process or Evaluate windows before switching History.');
         const staleDetails = [...document.querySelectorAll('.modal-overlay')].some((el) =>
-          el.dataset.workingDatasetNodeId || el.querySelector('.modal-panel--score-detail'));
+          el.dataset.workingDatasetNodeId || (el.querySelector('.modal-panel--score-detail') && el.dataset.scoreNodeId !== nodeId));
         if (staleDetails) throw new Error('Close open Dataset and Evaluate windows before switching History.');
         const plan = await planHistorySelectionForCanvas(recordId);
         const changed = plan.changedNodeIds.map((id) => {
@@ -5543,8 +5626,8 @@ export function buildWorkflowCanvas(root, options = {}) {
     else delete live.dataset.historyStaleRecordId;
     live.classList.toggle('workflow-node--stale', !!item.historyStaleRecordId);
     if (item.historyStaleRecordId && !item.waitingForUpstream) {
-      live.title = 'Needs update: its inputs changed since its last run. Open it to see the earlier result, or run it to update.';
-    } else if (!item.waitingForUpstream && live.title.startsWith('Needs update')) live.removeAttribute('title');
+      live.title = 'Historical: its inputs changed since its last run. Open it to see the earlier result, or run it to update.';
+    } else if (!item.waitingForUpstream && live.title.startsWith('Historical:')) live.removeAttribute('title');
   }
 
   /** The record a node's earlier result is in, while it needs updating; null otherwise. */
@@ -5611,18 +5694,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const initialKeys = await analysisInputKeys(resolved.state, resolved.currentRecordIds);
     const priorKeys = historyAnalysisKeys;
     for (const node of before.nodes) {
-      if (node.type !== 'score' && node.type !== 'promptReview') continue;
-      const scoreKey = analysisKeyForSave(priorKeys, initialKeys, 'score', node.nodeId, historyAnalysisKeysInitialized);
-      if (node.type === 'score' && scoreKey && (
-        node.scoreMatchResult || node.scoreMatchError || node.scoreRowExcludedFromScoring
-        || await session.analysisRecord(node.nodeId, 'score', scoreKey.signature)
-      )) {
-        await session.saveAnalysis(node.nodeId, 'score', scoreKey, {
-          scoreMatchResult: node.scoreMatchResult || null,
-          scoreMatchError: node.scoreMatchError || null,
-          scoreRowExcludedFromScoring: node.scoreRowExcludedFromScoring || {},
-        });
-      }
+      if (node.type !== 'promptReview' || !node.evaluateRecordId) continue;
       const reviewKey = analysisKeyForSave(priorKeys, initialKeys, 'review', node.nodeId, historyAnalysisKeysInitialized);
       if (reviewKey && (node.reviewResult || node.reviewProgress
         || await session.analysisRecord(node.nodeId, 'review', reviewKey.signature))) {
@@ -5631,23 +5703,9 @@ export function buildWorkflowCanvas(root, options = {}) {
         });
       }
     }
-    for (const node of resolved.state.nodes) {
-      if (node.type !== 'score') continue;
-      const key = initialKeys.score.get(node.nodeId);
-      const saved = key ? await session.analysisRecord(node.nodeId, 'score', key.signature) : null;
-      if (saved) {
-        node.scoreMatchResult = saved.results?.scoreMatchResult || undefined;
-        node.scoreMatchError = saved.results?.scoreMatchError || undefined;
-        node.scoreRowExcludedFromScoring = saved.results?.scoreRowExcludedFromScoring || {};
-      } else {
-        delete node.scoreMatchResult;
-        delete node.scoreMatchError;
-        delete node.scoreRowExcludedFromScoring;
-      }
-    }
     const reviewKeys = (await analysisInputKeys(resolved.state, resolved.currentRecordIds)).review;
     for (const node of resolved.state.nodes) {
-      if (node.type !== 'score' && node.type !== 'promptReview') continue;
+      if (node.type !== 'promptReview' || !node.evaluateRecordId) continue;
       const key = reviewKeys.get(node.nodeId);
       const saved = key ? await session.analysisRecord(node.nodeId, 'review', key.signature) : null;
       if (saved) {
@@ -5694,6 +5752,9 @@ export function buildWorkflowCanvas(root, options = {}) {
         const bar = live.querySelector('.workflow-node__process-progress');
         if (bar) { bar.style.width = `${progress}%`; bar.setAttribute('aria-valuenow', String(progress)); }
       } else if (item.type === 'score') {
+        if (item.historyRecordId) live.dataset.historyRecordId = item.historyRecordId;
+        else delete live.dataset.historyRecordId;
+        setHistoryStale(live, item);
         if (item.scoreMatchResult == null) delete live.dataset.scoreMatchResult;
         else live.dataset.scoreMatchResult = item.scoreMatchResult;
         if (item.scoreMatchError == null) delete live.dataset.scoreMatchError;
@@ -5704,6 +5765,13 @@ export function buildWorkflowCanvas(root, options = {}) {
         else live.dataset.reviewResult = item.reviewResult;
         syncScoreNodeProgressFromUpstreamRun(live);
       } else if (item.type === 'promptReview') {
+        const scoreId = item.evaluateNodeId || resolved.state.connections.find(edge => edge.type === 'score-to-prompt-review' && edge.toId === item.nodeId)?.fromId;
+        const score = resolved.state.nodes.find(node => node.nodeId === scoreId);
+        const earlier = optimizationSourceIsEarlier(item, score);
+        if (earlier) live.dataset.reviewSourceEarlier = '1'; else delete live.dataset.reviewSourceEarlier;
+        live.classList.toggle('workflow-node--stale', earlier);
+        if (earlier) live.title = 'This optimization uses a different Evaluate History record.';
+        else if (live.title === 'This optimization uses a different Evaluate History record.' || live.title === 'This optimization is based on an earlier evaluation.') live.removeAttribute('title');
         // The poller rebuilds a running Review from the live node; replacing it here would drop the
         // prompt text and comparison rows saved at start, leaving an empty Review window.
         if (streamingReviewIds.has(item.nodeId)) continue;
@@ -5828,7 +5896,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
   document.addEventListener('workflow:canvas-changed', scheduleProcessOutputSync);
 
-  async function runProcessNode(nodeId, { signal, onStarted, timeoutMs } = {}) {
+  async function runProcessNode(nodeId, { signal, onStarted, timeoutMs, fresh = false } = {}) {
     if (pendingProcesses.has(nodeId) || hasNodeExecution(nodeId)) throw new Error('Process is already running.');
     if (historySession?.projectId && canvasHistoryVersion === 1) {
       let sync;
@@ -5844,7 +5912,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (!code) throw new Error('The Process has no code.');
     const executionBindings = readProcessExecutionInputs(processNode, code);
     const session = historySession?.projectId && canvasHistoryVersion === 1 ? historySession : null;
-    let record = session ? (await session.reserve(getCanvasState(), nodeId)).record : null;
+    let record = session ? (await session.reserve(getCanvasState(), nodeId, { fresh })).record : null;
     if (record) {
       processNode.dataset.historyRecordId = record.id;
       delete processNode.dataset.processDfResults;
@@ -5934,28 +6002,27 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
 
   /**
-   * Run to here: plans the steps up to `nodeId`, shows the plan when steps before it would run
-   * or something keeps it from running, and runs it once confirmed. Each step runs as it does from its
-   * own window, so its window shows its progress and its Stop stops the whole run. When everything up
-   * to it is current, it runs `nodeId` again.
-   * @param {{ single?: 'run'|'skip', onShowNode?: () => void, onlyThis?: boolean }} options single:
+   * Plan a single-node run, pipeline continuation, or fresh pipeline restart. Resume is a no-op
+   * when every result is current. Restart always shows its plan and keeps previous History.
+   * @param {{ single?: 'run'|'skip', onShowNode?: () => void, onlyThis?: boolean,
+   *   mode?: 'only'|'resume'|'restart'|'resume-node', freshNodeIds?: string[] }} options single:
    *   when only this step needs running, 'run' runs it here and 'skip' returns { status: 'single' } so
    *   the window that asked runs it its own way. onShowNode: called before the plan shows a node on the
-   *   canvas, so the window that asked can close instead of covering it. onlyThis: Run this step,
-   *   which runs none of the steps before it
+   *   canvas, so the window that asked can close instead of covering it. onlyThis is a legacy alias
+   *   for mode: only. freshNodeIds carries unstarted work from an interrupted Restart.
    */
-  async function runToHere(nodeId, { single = 'run', onShowNode, onlyThis = false } = {}) {
-    const title = onlyThis ? 'Run this step' : 'Run to here';
+  async function runToHere(nodeId, { single = 'run', onShowNode, onlyThis = false, mode = onlyThis ? 'only' : 'resume', freshNodeIds = [] } = {}) {
+    const title = RUN_ACTION_LABELS[mode] || 'Run';
+    const projectId = getCurrentProjectId();
+    await reconcileHistory();
     const context = await loadRunPlanContext();
-    let planOptions = { onlyThis };
-    let plan = planRunTo(getCanvasState(), nodeId, context, planOptions);
-    if (!plan.problems.length && plan.toRun === 0) {
-      planOptions = { onlyThis, rerun: true };
-      plan = planRunTo(getCanvasState(), nodeId, context, planOptions);
-    }
+    if (getCurrentProjectId() !== projectId) return { status: 'cancelled' };
+    const planOptions = { mode, freshNodeIds };
+    const plan = planRunTo(getCanvasState(), nodeId, context, planOptions);
+    if (!plan.problems.length && plan.toRun === 0) return { status: 'completed', plan, steps: [] };
     const lone = !plan.problems.length && plan.toRun === 1 && plan.steps.at(-1)?.action !== 'reuse';
     if (lone && single === 'skip') return { status: 'single' };
-    if (!lone) {
+    if (!lone || mode === 'restart') {
       const start = await openRunPlanDialog({
         plan,
         modelLabel: (id) => context.modelLabels.get(id) || id,
@@ -5963,6 +6030,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       });
       if (!start) return { status: 'cancelled' };
     }
+    if (getCurrentProjectId() !== projectId) return { status: 'cancelled' };
     const task = await runPlanned(nodeId, { context, approvedPlan: plan, planOptions });
     if (task.status === 'failed') {
       const failed = task.steps.find((step) => step.status === 'failed');
@@ -6093,22 +6161,8 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   /** A Score's comparison rows: the saved ones, or rebuilt from its live Run and ground truth. */
   async function getScoreComparisonRows(nodeId) {
-    const canvasState = getCanvasState();
-    const nid = canvasNormalizeNodeId(nodeId);
-    const raw = canvasState.nodes.find((n) => canvasNormalizeNodeId(n?.nodeId) === nid);
-    if (!raw || raw.type !== 'score') return [];
-    try {
-      const saved = raw.reviewResult ? JSON.parse(raw.reviewResult)?.comparison_rows : null;
-      if (Array.isArray(saved) && saved.length) return saved;
-    } catch (_) {}
-    const ctx = resolveLiveScoreComparisonContext(canvasState, raw);
-    if (!ctx) return [];
-    try {
-      const rows = await buildReviewComparisonRows(ctx.scoreEl, ctx.runEl, ctx.datasetMap, ctx.promptText, ctx.runInput);
-      return Array.isArray(rows) ? rows : [];
-    } catch (_) {
-      return [];
-    }
+    const record = await loadEvaluationRecord(nodeId);
+    return record?.results?.comparisonRows || [];
   }
 
   /** The Agent's view of one node (agent/canvas/workflowNodeInspector.js) with live Score metrics. */
@@ -6120,14 +6174,17 @@ export function buildWorkflowCanvas(root, options = {}) {
       extractInputFields,
       contentLocks: await getContentLocksForCanvas(),
     });
-    if (result?.found && (result.type === 'run' || result.type === 'process') && history && !history.stale) {
+    if (result?.found && ['run', 'process', 'score'].includes(result.type) && history && !history.stale) {
       result.history = await historySession.displayEntriesForNode(nodeId, getCanvasState(), {
         currentRecordIds: history.currentRecordIds || {},
       });
       result.currentHistoryRecordId = history.currentRecordIds?.[nodeId] || null;
     }
     if (!result?.found || result.type !== 'score') return result;
-    return enrichInspectScoreResultWithComparisonRows(result, await getScoreComparisonRows(nodeId));
+    const enriched = enrichInspectScoreResultWithComparisonRows(result, await getScoreComparisonRows(nodeId));
+    const evaluation = await loadEvaluationRecord(nodeId, { reconcile: false });
+    if (evaluation) enriched.details.metrics = evaluation.results.metrics;
+    return enriched;
   }
 
   // Web-only empty-canvas guidance: nothing here before pointed a new user at the top bar's
@@ -6221,7 +6278,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         showAlert('That step is no longer on the canvas.', { title: 'Executions' });
         return;
       }
-      void runToHere(record.targetNodeId);
+      void runToHere(record.targetNodeId, executionResumeOptions(record));
     },
     revealNode,
   });
