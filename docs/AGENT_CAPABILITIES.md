@@ -27,7 +27,7 @@ Agent 的写入继续通过提案卡片确认，执行代码和模型任务通�
 | 运行到这里 | `run_nodes` 的 `run_to` 运行一个步骤和它之前还没有当前结果的步骤，与界面的 Run to here 共用规划和执行代码，记录在 Executions 页签；加 `only_this` 只跑这一步（同 Run this step）；都已是当前结果时重跑这一步 |
 | 整条 Pipeline | `pipeline_action` 只做 Python 项目导出（运行改用 `run_to`，2026-10-16 起） |
 
-以下仍由用户在界面操作：选择并上传本地新文件、配置凭据与 Python、选择 Current Pipeline 路线、
+以下仍由用户在界面操作：选择并上传本地新文件、配置凭据与 Python、选择 Pipeline 路线、
 点击节点文件导出、发布 Gallery。Prompt Version 以横向家族树展示来源，点击节点定位并高亮画布上的 Prompt、点击连线比较版本。
 Agent 的指南会说明实际入口，
 不会伪造已上传文件、凭据或这些操作的完成状态。已有上传文件可以直接通过 Agent 复用或重排。

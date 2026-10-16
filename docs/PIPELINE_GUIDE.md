@@ -1,6 +1,6 @@
-# Current Pipeline
+# Pipeline
 
-The Current Pipeline panel shows the Generate and Process steps that pass data to each other, starting
+The Pipeline panel shows the Generate and Process steps that pass data to each other, starting
 from Datasets. It selects the route to export as a standalone Python project; use Run to here on a
 step to run it and the upstream steps it needs.
 
@@ -27,8 +27,17 @@ does not follow the step it was saved from.
 
 ## Selecting a route
 
-In Current Pipeline, choose any Prompt version or Generate alternative shown by the route. A Process's
-branches are drawn as lanes; a branch nothing reads is an empty lane.
+In Pipeline, choose any Prompt version or Generate alternative shown by the route. A Process's
+branches are drawn as aligned lanes with continuous connections. A branch that feeds the shared
+next step directly is drawn as a continuous bypass line. Outputs with no downstream step are
+omitted from the overview. When only one connected path remains, it is shown as a straight
+continuation; when none remain, the overview ends at the current step. All output ports remain
+available on the canvas, and execution and export still use the complete selected route.
+Long routes scroll horizontally instead of wrapping onto another row.
+
+Click a step, or focus it and press Enter or Space, to locate its nodes on the canvas. Hovering or
+focusing a step highlights its canvas nodes and adjoining connections in the overview. Version
+pickers remain inside their step cards; changing one updates the continuation and the export route.
 
 ## Run
 

@@ -1,4 +1,4 @@
-/* Cards, borders and hover rings come from the Current Pipeline classes in modals.css. */
+/* Cards, borders and hover rings come from the Pipeline classes in modals.css. */
 .prompt-optimization { height: 100%; overflow: auto; padding: 14px 18px; box-sizing: border-box; color: var(--text); }
 .prompt-optimization__empty { margin: 0; color: var(--text-muted); font-size: 13.5px; }
 .prompt-version__graph { width: max-content; min-width: 100%; padding-top: 8px; }

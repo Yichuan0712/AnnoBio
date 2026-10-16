@@ -330,7 +330,7 @@ html.top-bar-web {
   font-size: 11.5px;
 }
 
-/* Current Pipeline / Agent Assistant toggles (workflowCanvas.js's panelToggles), icon-only like
+/* Pipeline / Agent Assistant toggles (workflowCanvas.js's panelToggles), icon-only like
    VS Code's layout controls. On desktop the layout icon itself shows whether its panel is open;
    on web the original icons turn blue instead. */
 .top-bar-panel-toggles {

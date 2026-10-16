@@ -51,7 +51,7 @@ function removeDataEdgesInto(state, toId) {
 
 // ---------- names ----------
 
-/** A Generate is named by its Prompt, as Current Pipeline names it; every Generate is called "Run" by default. */
+/** A Generate is named by its Prompt, as Pipeline names it; every Generate is called "Run" by default. */
 function runLabel(state, run) {
   const edge = (state?.connections || []).find((item) => item?.type === 'prompt-to-run' && String(item.toId) === nodeIdOf(run));
   return String(findNode(state, edge?.fromId)?.name || '').trim() || generateDisplayName(run.runName);

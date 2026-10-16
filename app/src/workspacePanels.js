@@ -9,7 +9,7 @@ const STORAGE_KEY = 'annobio.workspacePanels.v1';
  * container from tabHost(); the right panel is a single dock with its own header.
  */
 export function createWorkspacePanels(root, canvas, onChange, {
-  bottomTabs = [{ id: 'pipeline', label: 'Current Pipeline' }],
+  bottomTabs = [{ id: 'pipeline', label: 'Pipeline' }],
   onCollapse = () => {},
 } = {}) {
   let saved = {};

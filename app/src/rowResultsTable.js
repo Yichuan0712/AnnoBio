@@ -58,9 +58,9 @@ function buildResultsTable(headers, rows) {
 }
 
 /**
- * @param {{ container: HTMLElement, idPrefix: string, buildActions?: (actionsEl: HTMLElement) => void }} opts
+ * @param {{ container: HTMLElement, idPrefix: string, summaryPrefix?: HTMLElement, buildActions?: (actionsEl: HTMLElement) => void }} opts
  */
-export function createRowResultsPanel({ container, idPrefix, buildActions }) {
+export function createRowResultsPanel({ container, idPrefix, summaryPrefix, buildActions }) {
   const state = { headers: [], rows: [], searchQuery: '', rowsPerPage: 25, currentPage: 1 };
 
   function showPlaceholder(text) {
@@ -86,7 +86,14 @@ export function createRowResultsPanel({ container, idPrefix, buildActions }) {
     statusNote.textContent = statusText || '';
     const topRow = document.createElement('div');
     topRow.className = 'run-detail-results-top-row';
-    topRow.appendChild(statusNote);
+    if (summaryPrefix) {
+      const summary = document.createElement('div');
+      summary.className = 'run-detail-results-summary';
+      summary.append(summaryPrefix, statusNote);
+      topRow.appendChild(summary);
+    } else {
+      topRow.appendChild(statusNote);
+    }
     const searchWrap = document.createElement('div');
     searchWrap.className = 'dataset-detail-preview-search-wrap run-detail-results-search-wrap';
     searchWrap.innerHTML = `<label class="dataset-detail-search-label" for="${idPrefix}-results-search">Search</label><input type="text" id="${idPrefix}-results-search" class="dataset-detail-input dataset-detail-preview-search-inp" placeholder="Filter rows by cell content..." aria-label="Search in table" />`;

@@ -56,10 +56,10 @@ Evaluate and Optimize sit beside it for evaluation and are not part of the expor
   that step; a step reading it starts a new pipeline from it.
 - New prompt versions are linked by `prompt-to-prompt` connections; each version gets its own Generate node.
 
-## Current Pipeline and alternatives
+## Pipeline and alternatives
 
-The Current Pipeline tab of the bottom panel (opened with the toolbar button beside Agent Assistant)
-lists each pipeline as one route. Its steps are "Generate" and "Process data"; Datasets are not
+The Pipeline tab of the bottom panel (opened with the toolbar button beside Agent Assistant)
+lists each pipeline as one route. Its steps are "Generate" and "Process"; Datasets are not
 shown. Where a step has alternatives, such as several prompt versions with Generate nodes, several Generate nodes of one
 Prompt (also on different inputs), or several Processes reading the same input, the panel shows a
 picker on that step, and the rest of the route follows the choice. Branches come only from a Process:

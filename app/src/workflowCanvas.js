@@ -5814,7 +5814,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (changed) {
       refreshNodePorts();
       updateEdges(); // the branch ports change the node's height
-      // Not a canvas change (no undo step); the Current Pipeline still redraws its branches.
+      // Not a canvas change (no undo step); the Pipeline still redraws its branches.
       document.dispatchEvent(new CustomEvent('workflow:process-outputs-changed'));
       // A reader of a branch that came or went says so without waiting for History to resolve again.
       nodesLayer.querySelectorAll('.workflow-node[data-waiting-for-upstream="1"]').forEach((node) => {
@@ -6197,7 +6197,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     else optimizationPanel?.clearHighlight();
   }, {
     bottomTabs: [
-      { id: 'pipeline', label: 'Current Pipeline' },
+      { id: 'pipeline', label: 'Pipeline' },
       { id: 'optimization', label: 'Prompt Version' },
       // Not "Runs": Process steps are recorded here too.
       { id: 'executions', label: 'Executions' },

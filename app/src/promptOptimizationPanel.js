@@ -27,7 +27,7 @@ export function mountPromptOptimizationPanel(container, { getCanvasState, focusC
       return;
     }
     const nodeId = action.dataset.promptId;
-    // Keep the same canvas highlight used by Current Pipeline.
+    // Keep the same canvas highlight used by Pipeline.
     highlightCanvasNodes(nodeId ? [nodeId] : [action.dataset.fromId, action.dataset.toId]);
     const related = new Set();
     const matches = (element) => nodeId

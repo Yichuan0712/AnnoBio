@@ -1,5 +1,5 @@
 /**
- * The backend's Pipeline compiler for the Current Pipeline's route, used before Export Python
+ * The backend's Pipeline compiler for the Pipeline's route, used before Export Python
  * Project. Whole-Pipeline runs are no longer started from the app (Run to here replaced them,
  * docs/design/RUN_TO_HERE_PLAN.md step 6); the backend Runner and its endpoints remain.
  */

@@ -1,5 +1,5 @@
 /**
- * Agent access to the Current Pipeline's selected route: Export Python Project, as on its card.
+ * Agent access to the Pipeline's selected route: Export Python Project, as on its card.
  * Running is not a pipeline_action any more: run_nodes run_to runs a step and the steps before it,
  * like the user's Run to here (docs/design/RUN_TO_HERE_PLAN.md step 6).
  */
@@ -47,7 +47,7 @@ export async function previewPipelineAction(args, runtime) {
       ok: true,
       items: [{ kind: 'update', title: `Export Pipeline ${item.index + 1}`, nodeIds: [...routeNodeIds(route)], lines: [
         `Route: ${route.filter((step) => step.type !== 'dataset').length} executable steps.`,
-        `Selection: ${item.source === 'panel' ? 'Current Pipeline panel' : 'default route (panel is not mounted)'}.`,
+        `Selection: ${item.source === 'panel' ? 'Pipeline panel' : 'default route (panel is not mounted)'}.`,
         'A Python project zip will be downloaded. Dataset rows and files are excluded.',
       ] }],
       action, routeKey: pipelineRouteKey(route), runId: '', projectId: '',

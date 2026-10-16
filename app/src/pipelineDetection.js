@@ -242,7 +242,7 @@ export function detectPipelines(canvasState) {
 
   // Output slots. The Generates of one Prompt are alternatives in one slot, so the slot follows whichever
   // Run the route selects. A Process's named branches are separate slots, in the order it returns
-  // them, so the Current Pipeline can draw the fork, an empty lane for a branch nothing reads, and
+  // them, so the Pipeline can draw the fork, an empty lane for a branch nothing reads, and
   // the later merge.
   const outputSlot = (key, producerStepId) => {
     if (!slots.has(key)) slots.set(key, { producerStepId, consumerStepIds: new Set(), outputs: [] });

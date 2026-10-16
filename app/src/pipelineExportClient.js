@@ -12,7 +12,7 @@ function downloadName(response, fallback) {
 }
 
 /**
- * Ask the backend to validate and package one concrete Current Pipeline route.
+ * Ask the backend to validate and package one concrete Pipeline route.
  *
  * The payload contains live canvas configuration but no credentials beyond their opaque ids. The
  * backend writes only non-secret model metadata into the archive and never includes Dataset rows.
