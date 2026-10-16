@@ -9,6 +9,7 @@ import { BACKEND_API_BASE, waitForBackend } from './backendConfig.js';
 import { fetchAgentContext } from './agent/api/agentTurnClient.js';
 import { mountPillSelect } from './pillSelect.js';
 import { attachModelIdAutocomplete } from './modelIdAutocomplete.js';
+import { PER_MODEL_FIELDS, bindModelFields, keepKnownModels } from './perModelSettings.js';
 
 const API_BASE = BACKEND_API_BASE;
 
@@ -145,11 +146,6 @@ async function loadAndRenderCredentials(scope) {
     const tbody = getCredTbody(scope);
     if (tbody) tbody.innerHTML = '<tr class="credentials-table-empty"><td colspan="4">Unable to load (is the backend running?).</td></tr>';
   }
-}
-
-function notifyCredentialsPanelChanged(el) {
-  const panel = el?.closest?.('.credentials-panel-host');
-  panel?._onCredentialsChange?.();
 }
 
 const MASKED_PLACEHOLDER = '••••••••';
@@ -307,13 +303,15 @@ function bindCredDeleteButtons(scope) {
     btn.addEventListener('click', async () => {
       const id = btn.getAttribute('data-id');
       if (!id) return;
+      // Found before the table is drawn again, which takes the button out of the page.
+      const panel = btn.closest('.credentials-panel-host');
       const ok = await showConfirm('Delete this credential?', { title: 'Delete credential', confirmText: 'Delete' });
       if (!ok) return;
       try {
         const res = await fetch(`${API_BASE}/api/credentials/${id}`, { method: 'DELETE' });
         if (!res.ok) throw new Error('Delete failed');
         await loadAndRenderCredentials(scope);
-        notifyCredentialsPanelChanged(btn);
+        panel?._onCredentialsChange?.();
       } catch (e) {
         console.error('Delete credential:', e);
       }
@@ -676,9 +674,9 @@ export function openSettingsModal() {
                   <div class="model-settings-tab-row">
                     <div class="review-detail-view-switch model-settings-view-switch" role="tablist" aria-label="Settings options">
                       <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" aria-controls="settings-panel-credentials" id="settings-tab-credentials" data-tab="credentials">New credential</button>
-                      <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-run" id="settings-tab-run" data-tab="run">Run defaults</button>
-                      <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-review" id="settings-tab-review" data-tab="review">Optimize defaults</button>
-                      <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-agent" id="settings-tab-agent" data-tab="agent">Agent defaults</button>
+                      <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-run" id="settings-tab-run" data-tab="run">Run</button>
+                      <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-review" id="settings-tab-review" data-tab="review">Optimize</button>
+                      <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-agent" id="settings-tab-agent" data-tab="agent">Agent</button>
                     </div>
                   </div>
                   <div class="review-detail-tab-panels model-settings-tab-panels">
@@ -732,10 +730,10 @@ export function openSettingsModal() {
                     </div>
                     <div class="review-detail-tab-panel" id="settings-panel-run" role="tabpanel" aria-labelledby="settings-tab-run" data-panel="run">
                       <div class="defaults-page-scroll">
-                          <p class="settings-tab-intro">These settings apply to every Run, which sends its prompt to a model once per input row. The default model is used when a Run has none of its own. Running more rows at once finishes sooner but can hit the provider's rate limits.</p>
+                          <p class="settings-tab-intro">A Run sends its prompt to a model once per input row. Choose a model to see and change its Max tokens and Concurrency; the model chosen when you save is preselected when you create a Run. With None chosen, they are the values for models that have none of their own. Max retries applies to every model. Running more rows at once finishes sooner but can hit the provider's rate limits.</p>
                           <div class="defaults-row">
                             <div class="defaults-field defaults-field--full">
-                              <label class="dataset-meta-label" for="settings-default-run-credential">Default model</label>
+                              <label class="dataset-meta-label" for="settings-default-run-credential">Model</label>
                               <select id="settings-default-run-credential" class="credentials-select dataset-meta-input" aria-label="Default model for Run">
                                 <option value="">${selectPlaceholderLabel('None (select each time)')}</option>
                               </select>
@@ -757,10 +755,10 @@ export function openSettingsModal() {
                     </div>
                     <div class="review-detail-tab-panel" id="settings-panel-review" role="tabpanel" aria-labelledby="settings-tab-review" data-panel="review">
                       <div class="defaults-page-scroll">
-                          <p class="settings-tab-intro">An Optimize node studies the rows an Evaluate node marked wrong and suggests edits to the prompt. The default model and method apply when an Evaluate node picks none of its own. Larger limits can find better edits but make more model calls. Debug mode adds Reset and Debug buttons to suggestion cards.</p>
+                          <p class="settings-tab-intro">An Optimize node studies the rows an Evaluate node marked wrong and suggests edits to the prompt. Choose a model to see and change its Max tokens; the model chosen when you save is preselected when you start an Optimize. With None chosen, it is the value for models that have none of their own. The other settings, including the method, apply to every Optimize. Larger limits can find better edits but make more model calls. Debug mode adds Reset and Debug buttons to suggestion cards.</p>
                           <div class="defaults-row">
                             <div class="defaults-field defaults-field--full">
-                              <label class="dataset-meta-label" for="settings-default-review-credential">Default model</label>
+                              <label class="dataset-meta-label" for="settings-default-review-credential">Model</label>
                               <select id="settings-default-review-credential" class="credentials-select dataset-meta-input" aria-label="Default model for Optimize">
                                 <option value="">${selectPlaceholderLabel('None (select each time)')}</option>
                               </select>
@@ -820,10 +818,10 @@ export function openSettingsModal() {
                     </div>
                     <div class="review-detail-tab-panel" id="settings-panel-agent" role="tabpanel" aria-labelledby="settings-tab-agent" data-panel="agent">
                       <div class="defaults-page-scroll">
-                          <p class="settings-tab-intro">The Agent Assistant is the chat in the right panel. Its model must support tool calling, so choosing one runs a quick check. Without a default it uses the Optimize model, with replies capped by Optimize's Max tokens, up to 8,192. Context window limits how much of a long chat is sent each time; Auto uses the model's own limit.</p>
+                          <p class="settings-tab-intro">The Agent Assistant is the chat in the right panel. Its model must support tool calling, so choosing one runs a quick check. The model chosen when you save is the one the Agent uses; with None it uses the Optimize model. Replies are capped by that model's Max tokens on the Optimize tab, up to 8,192. Context window limits how much of a long chat is sent each time, and belongs to the chosen model; Auto uses the model's own limit.</p>
                           <div class="defaults-row">
                             <div class="defaults-field defaults-field--full">
-                              <label class="dataset-meta-label" for="settings-default-agent-credential">Default model</label>
+                              <label class="dataset-meta-label" for="settings-default-agent-credential">Model</label>
                               <select id="settings-default-agent-credential" class="credentials-select dataset-meta-input" aria-label="Default model for the Agent window">
                                 <option value="">${selectPlaceholderLabel('None (select each time)')}</option>
                               </select>
@@ -896,6 +894,18 @@ export function openSettingsModal() {
   const panels = overlay.querySelectorAll('.model-settings-tab-panels .review-detail-tab-panel[data-panel]');
   const footerSaveRestore = overlay.querySelector('#model-settings-footer-save-restore');
   const footerAdd = overlay.querySelector('#settings-footer-add');
+
+  /*
+   * The model chosen at the top of the Run, Optimize and Agent tabs is the default model, and these
+   * fields show and edit that model's own values (perModelSettings.js). Saved as model_settings.
+   */
+  const modelState = { shared: {}, modelSettings: {} };
+  let credentialIds = [];
+  const modelFieldBindings = [
+    bindModelFields({ select: runCredSelect, inputs: { run_max_tokens: runMaxTokensInp, run_concurrency: runConcurrencyInp }, state: modelState }),
+    bindModelFields({ select: reviewCredSelect, inputs: { review_max_tokens: reviewMaxTokensInp }, state: modelState }),
+    bindModelFields({ select: agentCredSelect, inputs: { agent_context_tokens: agentContextInp }, state: modelState }),
+  ];
 
   function activateSettingsTab(name) {
     const n = name === 'run' || name === 'review' || name === 'agent' || name === 'credentials' ? name : 'credentials';
@@ -989,6 +999,7 @@ export function openSettingsModal() {
     reviewCredSelect.innerHTML = optNone + optHtml;
     agentCredentials = credentials;
     renderAgentCredentialOptions();
+    credentialIds = credentials.map((c) => c.id);
   }
 
   /*
@@ -1157,6 +1168,12 @@ export function openSettingsModal() {
     runConcurrencyInp.value = String(settings.run_concurrency ?? MODEL_SETTINGS_DEFAULTS.run_concurrency);
     optimizationMaxTrialsInp.value = String(settings.optimization_max_trials ?? MODEL_SETTINGS_DEFAULTS.optimization_max_trials);
     debugModeChk.checked = settings.debug_mode ?? MODEL_SETTINGS_DEFAULTS.debug_mode;
+    // A loaded settings object (not Restore defaults) replaces what the model fields edit.
+    if (settings.model_settings) {
+      modelState.modelSettings = { ...settings.model_settings };
+      modelState.shared = Object.fromEntries(Object.keys(PER_MODEL_FIELDS).map((key) => [key, settings[key] ?? MODEL_SETTINGS_DEFAULTS[key]]));
+      modelFieldBindings.forEach((binding) => binding.load());
+    }
   }
 
   async function init() {
@@ -1169,11 +1186,20 @@ export function openSettingsModal() {
           review: (reviewCredSelect.value || '').trim(),
           agent: (agentCredSelect?.value || '').trim(),
         };
+        modelFieldBindings.forEach((binding) => binding.stash());
         const credentials = await loadCredentials();
         populateCredentialSelects(credentials);
-        runCredSelect.value = ids.run;
-        reviewCredSelect.value = ids.review;
-        if (agentCredSelect) agentCredSelect.value = ids.agent;
+        // A deleted model can no longer be chosen: its tab falls back to None.
+        const choose = (select, id) => {
+          if (!select) return;
+          select.value = id;
+          if (select.selectedIndex < 0) select.value = '';
+        };
+        choose(runCredSelect, ids.run);
+        choose(reviewCredSelect, ids.review);
+        choose(agentCredSelect, ids.agent);
+        renderAgentModelStatus();
+        modelFieldBindings.forEach((binding) => binding.load());
         void loadAgentHints();
       },
     });
@@ -1251,10 +1277,14 @@ export function openSettingsModal() {
       run_concurrency: runConcurrency,
       optimization_max_trials: optimizationMaxTrials,
       debug_mode: debugModeChk.checked,
+      // The model fields on the page show the chosen model's values; the shared ones come from modelState.
+      ...modelState.shared,
+      model_settings: keepKnownModels(modelState.modelSettings, credentialIds),
     };
   }
 
   async function doSave() {
+    modelFieldBindings.forEach((binding) => binding.stash());
     const patch = getPatchFromForm();
     try {
       const res = await fetch(`${API_BASE}/api/settings`, {
@@ -1279,8 +1309,14 @@ export function openSettingsModal() {
   }
 
   overlay.querySelector('.modal-close').addEventListener('click', closeModal);
+  // Puts the factory values in the fields, for the chosen models only once saved; the chosen models stay.
   overlay.querySelector('#settings-restore-defaults')?.addEventListener('click', () => {
-    applySettings(MODEL_SETTINGS_DEFAULTS);
+    applySettings({
+      ...MODEL_SETTINGS_DEFAULTS,
+      default_run_credential_id: runCredSelect.value,
+      default_review_credential_id: reviewCredSelect.value,
+      default_agent_credential_id: agentCredSelect?.value || '',
+    });
   });
   overlay.querySelector('#settings-save')?.addEventListener('click', async () => {
     await doSave();

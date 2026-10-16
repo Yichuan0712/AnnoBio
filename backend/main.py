@@ -68,6 +68,7 @@ from llm import (
     run_structured as llm_run_structured,
     stream_chat_with_tools as llm_stream_chat_with_tools,
 )
+from model_settings import clean_model_settings, settings_for_model, validate_model_settings
 from pipeline_export import PipelineExportError, build_pipeline_archive
 from pipeline_runner import (
     PipelineCompileFailure,
@@ -184,6 +185,8 @@ DEFAULT_SETTINGS = {
     "ncbi_email": "",
     # Python interpreter (system install or a venv) used by Process nodes to run user code.
     "python_path": "",
+    # A model's own values for some of the settings above, by credential id (model_settings.py).
+    "model_settings": {},
 }
 
 
@@ -290,6 +293,13 @@ class SettingsPatch(BaseModel):
     ncbi_api_key: str | None = None
     ncbi_email: str | None = None
     python_path: str | None = None
+    # Replaces every model's own values at once; a model left out has none.
+    model_settings: dict | None = None
+
+    @field_validator("model_settings")
+    @classmethod
+    def check_model_settings(cls, value):
+        return None if value is None else validate_model_settings(value)
 
 
 # Settings a single Run node / Review-capable Score node may override for its own jobs (Run settings /
@@ -516,6 +526,7 @@ def _load_settings() -> dict:
         for k in DEFAULT_SETTINGS:
             if k in data:
                 out[k] = data[k]
+        out["model_settings"] = clean_model_settings(out.get("model_settings"))
         return out
     except (json.JSONDecodeError, OSError):
         return dict(DEFAULT_SETTINGS)
@@ -1173,7 +1184,7 @@ def _resolve_chat_credential(credential_id: str) -> tuple[dict, int]:
             break
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
-    max_tokens = _load_settings().get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
+    max_tokens = settings_for_model(_load_settings(), credential_id).get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
     return cred, max_tokens
 
 
@@ -1262,7 +1273,7 @@ def agent_turn(body: AgentTurnRequest):
             _safe_print(_HL + "[Agent] turn error: " + _R + str(e), flush=True)
             message = (
                 f"The Agent model ({_credential_model(cred)}) does not support tool calling, which the Agent needs. "
-                "Choose another Agent model in Settings → Agent defaults."
+                "Choose another Agent model in Settings → Agent."
                 if is_tools_unsupported_error(e)
                 else str(e)
             )
@@ -1287,10 +1298,10 @@ AGENT_FALLBACK_CONTEXT_TOKENS = 32000
 @app.get("/api/agent/context")
 def agent_context(credential_id: str = ""):
     """What one Agent request can hold, for the renderer to fit the chat history into
-    (app/src/agent/historyBudget.js): the context window (the Agent defaults setting, else the model
+    (app/src/agent/historyBudget.js): the context window (the Agent model's setting in Settings → Agent, else the model
     registries, else AGENT_FALLBACK_CONTEXT_TOKENS), the reply reserve, and the fixed system
     prompt's size in estimated tokens. detected_tokens is what the registries report, for Settings."""
-    settings = _load_settings()
+    settings = settings_for_model(_load_settings(), credential_id)
     cred = next((item for item in _load_credentials() if item.get("id") == credential_id), None)
     detected = _credential_context_tokens(cred) if cred else None
     configured = int(settings.get("agent_context_tokens") or 0)
@@ -1351,6 +1362,16 @@ def delete_credential(credential_id: str):
 
     if not _update_credentials(change):
         raise HTTPException(status_code=404, detail="Credential not found!")
+    # Its own settings go with it, and a tab that had it as its model falls back to none.
+    settings = _load_settings()
+    changed = credential_id in settings["model_settings"]
+    settings["model_settings"] = {k: v for k, v in settings["model_settings"].items() if k != credential_id}
+    for key in ("default_run_credential_id", "default_review_credential_id", "default_agent_credential_id"):
+        if settings.get(key) == credential_id:
+            settings[key] = ""
+            changed = True
+    if changed:
+        _save_settings(settings)
     return {"ok": True}
 
 
@@ -1538,7 +1559,7 @@ def _do_run_work(
             output_fields.append({"display": display, "key": name})
 
         total = len(prompts)
-        run_settings = {**_load_settings(), **(settings_overrides or {})}
+        run_settings = {**settings_for_model(_load_settings(), credential_id), **(settings_overrides or {})}
         run_max_tokens = run_settings.get("run_max_tokens") or DEFAULT_SETTINGS["run_max_tokens"]
         with _run_jobs_lock:
             _run_jobs[run_id]["total"] = total
@@ -3153,7 +3174,7 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
 
         from review_methods import get_review_method
 
-        st = {**_load_settings(), **(body.settings_overrides or {})}
+        st = {**settings_for_model(_load_settings(), body.credential_id), **(body.settings_overrides or {})}
         review_method = get_review_method(_resolve_review_method_id(body.review_method, st))
 
         provider = _credential_provider(cred)
@@ -3237,7 +3258,7 @@ def optimization_segments(body: OptimizationSegmentsRequest):
         raise HTTPException(status_code=400, detail="Missing API key")
     provider = _credential_provider(cred)
     base_url = _credential_base_url(cred)
-    settings = _load_settings()
+    settings = settings_for_model(_load_settings(), body.credential_id)
     max_tokens = settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
     _safe_print(_HL + "[Optimization] POST /segments" + _R + f"  model={model}  new_sentence={body.new_sentence[:80]!r}")
     try:
@@ -3273,7 +3294,7 @@ def optimization_candidates(body: OptimizationCandidatesRequest):
         raise HTTPException(status_code=400, detail="Missing API key")
     provider = _credential_provider(cred)
     base_url = _credential_base_url(cred)
-    settings = _load_settings()
+    settings = settings_for_model(_load_settings(), body.credential_id)
     max_tokens = settings.get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
     _safe_print(_HL + "[Optimization] POST /candidates" + _R + f"  model={model}  segment={body.segment_text[:60]!r}")
     try:

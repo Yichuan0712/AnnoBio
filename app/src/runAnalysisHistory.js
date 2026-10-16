@@ -62,7 +62,8 @@ export async function analysisInputKeys(state, currentRecordIds) {
       scoreSignature: parent.signature,
       exclusions: parsed(scoreNode.scoreRowExcludedFromScoring, {}),
       reviewMethod: String(scoreNode.reviewMethod || ''),
-      reviewCredentialId: String(scoreNode.reviewCredentialId || ''),
+      // An Optimize keeps the model it ran with; the Evaluate's model only seeds the next Optimize.
+      reviewCredentialId: String((node.type === 'promptReview' ? node : scoreNode).reviewCredentialId || ''),
       reviewSettings: scoreNode.reviewSettings || {},
     };
     return { signature: await sha256Signature({ kind: 'review', ...inputs }), inputs };

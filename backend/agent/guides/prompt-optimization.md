@@ -47,7 +47,7 @@ recall and F1 as the table. Compare versions from those numbers rather than esti
 
 ## Optimize methods
 
-Optimize nodes use the review method set in Settings → Optimize defaults:
+Optimize nodes use the review method set in Settings → Optimize:
 - Thompson Prompt Search (the default): issue analysis followed by targeted sentence-level edits.
 - GEPA: reflective evolution of the prompt across candidates.
 - MIPROv2: optimises instructions together with few-shot examples.

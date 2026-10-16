@@ -163,6 +163,20 @@
 - 节点在第一次用到时（Run 窗口首次打开、Score 窗口首次打开或第一次发起 Review）记下当时的 Settings 默认模型，之后沿用。Run 有结果后会继续用同一个模型 Resume。要用另一个模型比较，就先改 Settings 默认值，再新建并打开新的 Run。
 - 旧项目里节点上已存的模型、方法和数值覆盖仍然生效，只是界面上不再显示，也不能修改。
 
+更新（2026-10-15）：新建时可以选模型。Prompt 窗口 Create Run 左边、Evaluate 窗口 Optimize prompt 左边各有一个模型下拉框（`modelPicker.js`），只列 Settings → Credentials 里 Test 通过的模型，默认选中 Settings 的默认模型（Evaluate 优先选它上次用的模型）；一个都没有时下拉框不可用，按钮照旧使用 Settings 默认值。
+
+- 选中的模型写到新建的 Run（`runCredentialId`）上，之后不能再改；想用另一个模型，就再建一个 Run。从输出菜单、拖线或 Agent 新建的 Run 仍然使用 Settings 默认值。
+- Optimize：选中的模型同时写到 Evaluate 和新建的 Optimize 上。每个 Optimize 记住自己用的模型，查找结果、Resume 都用它自己的；Evaluate 上的模型只是下一个 Optimize（包括右键菜单发起的）的默认值，所以换模型不会让已有 Optimize 的结果消失。打开旧项目时，没有自己模型的 Optimize 从它的 Evaluate 复制一份。
+- 方法和数值设置仍然只在 Settings 里设，节点上没有。
+
+更新（2026-10-16）：部分数值按模型保存。三个页签改名为 Run / Optimize / Agent（去掉 defaults）。每页顶上的 Model 选到哪个模型，下面跟模型有关的字段就显示、修改哪个模型的值；点 Save 时选着的模型就是默认模型（新建 Run、发起 Optimize 时预选它，Agent 用它）。
+
+- 跟模型有关的字段：Run 的 Max tokens、Concurrency；Optimize 的 Max tokens；Agent 的 Context window（留空是 Auto）。其余（重试次数、方法、各方法的迭代次数、最多分析几行、调试模式）对所有模型都一样。
+- 切换模型时，在上一个模型上改过的值先记下，Save 时一起保存；只是看一眼、没改过的模型不会存自己的值，继续沿用通用值。Model 选 None 时，这些字段改的就是通用值。
+- 存在 settings 的 `model_settings`（凭据 ID → 自己的值），规则在 `backend/model_settings.py`。生效顺序：通用值 < 模型自己的值 < 旧项目节点上存的数值覆盖。单个 Run、Pipeline（`pipeline_runner.py` 绑定模型时）、Optimize 及其 suggestion 优化、Agent 都按实际用的模型取值；Agent 回复上限取该模型在 Optimize 页的 Max tokens。删除凭据时一并删除它的值。
+- 页脚 Restore defaults 把字段填回出厂值，不改选中的模型；跟模型有关的字段只影响当前选中的模型，其余字段对所有模型生效。都要点 Save 才生效。
+- Agent 还不能在新建 Run 或发起 Optimize 时选模型（`changeSet.js` 的 `add_run` 仍拒绝 `credential_id`），与用户不一致，待定。
+
 本节的问题（Review 的配置存在 Score 上）因此不再处理：用户不再按节点选择配置，配置放在哪个节点已经无关紧要。
 
 ## 5. Run 的"模型"其实是一条凭据

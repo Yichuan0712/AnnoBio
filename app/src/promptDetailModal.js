@@ -1,3 +1,4 @@
+import { fillModelPicker, pickedModel } from './modelPicker.js';
 import { attachModalPaneCycle } from './paneToggleButton.js';
 import { openPromptSchemaEditor } from './promptSchemaUi.js';
 import { extractInputFields, promptPlaceholders } from './promptText.js';
@@ -295,6 +296,7 @@ export function openPromptDetailModal({ name = '', text = '', node: sourceNode =
               <div class="prompt-actions">
                 <div class="prompt-actions__trailing">
                   <button type="button" class="btn btn-secondary prompt-detail-export-local" title="Save prompt as a text file">Save as file</button>
+                  <select class="dataset-meta-input model-picker prompt-detail-run-model" aria-label="Model for the new Run"></select>
                   <button type="button" class="btn btn-primary prompt-detail-sections-btn-run" id="prompt-detail-sections-btn-run">Create Run</button>
                 </div>
               </div>
@@ -436,13 +438,16 @@ export function openPromptDetailModal({ name = '', text = '', node: sourceNode =
   }
 
   const sectionsBtnRun = overlay.querySelector('.prompt-detail-sections-btn-run');
+  const runModelPicker = overlay.querySelector('.prompt-detail-run-model');
   if (sectionsBtnRun && onRunPrompt) {
+    void fillModelPicker(runModelPicker, { defaultSetting: 'default_run_credential_id' });
     sectionsBtnRun.addEventListener('click', () => {
-      onRunPrompt();
+      onRunPrompt(pickedModel(runModelPicker));
       teardownPromptDetailModal();
     });
   } else if (sectionsBtnRun) {
     sectionsBtnRun.style.display = 'none';
+    runModelPicker.hidden = true;
   }
 
   let currentSchemaFields = (outputFormat.fields || []).map((o) => ({

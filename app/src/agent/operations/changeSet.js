@@ -784,7 +784,7 @@ export function planChangeSet(state, operations, ctx) {
     add_run(op) {
       if ('input_dataset' in op) fail('add_run reads input (a dataset, run or process) plus input_branch for a process branch; input_dataset is not used.');
       const prompt = op.prompt ? resolve(op.prompt, 'prompt', ['prompt']) : null;
-      // Like the user, the Agent has no per-Run model or settings: Runs use Settings → Run defaults.
+      // Like the user, the Agent has no per-Run model or settings: Runs use the Run model chosen in Settings → Run.
       if (op.credential_id != null || op.settings != null) fail('A Run uses the default Run model and settings from Settings; credential_id and settings cannot be set per Run.');
       const runsOfPrompt = new Set(next.connections.filter((c) => c.type === 'prompt-to-run' && c.fromId === prompt?.nodeId).map((c) => c.toId));
       const name = uniqueName(clean(op.name) || 'Run', takenNames('run', (n) => runsOfPrompt.has(n.nodeId)));
@@ -801,7 +801,7 @@ export function planChangeSet(state, operations, ctx) {
         lines: [
           prompt ? `Prompt "${nodeTitle(prompt)}"${source ? ` on "${stepSourceLabel(next, source)}"` : '; Data input not connected'}` : 'Prompt input not connected',
           ...(source ? [mappingLine(mapping, source)] : []),
-          'Model and settings: Settings → Run defaults',
+          'Model and settings: Settings → Run',
           'Not started: it runs when you start it.',
         ],
       };
@@ -829,7 +829,7 @@ export function planChangeSet(state, operations, ctx) {
         lines = bundle.lines;
         ruleDiffs = bundle.diffs || [];
       }
-      if (op.review_method != null) fail('An Optimize node uses the review method from Settings → Optimize defaults; review_method cannot be set per Evaluate.');
+      if (op.review_method != null) fail('An Optimize node uses the review method from Settings → Optimize; review_method cannot be set per Evaluate.');
       connect(run.nodeId, node.nodeId, 'run-to-score');
       registerRef(op, node.nodeId);
       return { kind: 'add', type: 'score', title: `New Evaluate "${name}"`, nodeIds: [node.nodeId],

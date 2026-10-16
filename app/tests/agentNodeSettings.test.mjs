@@ -24,12 +24,12 @@ const addRun = (extra = {}) => ({ op: 'add_run', ref: '$run', prompt: 'p', input
 
 // Users have no per-Run model or settings and no per-Score review method (Settings holds them),
 // so neither does the Agent.
-test('a new Run uses Settings → Run defaults', () => {
+test('a new Run uses the model chosen in Settings → Run', () => {
   const result = plan([addRun()]);
   const run = result.state.nodes.find((node) => node.nodeId === result.refs.$run);
   assert.equal(run.runCredentialId, undefined);
   assert.equal(run.runSettings, undefined);
-  assert.ok(result.items[0].lines.includes('Model and settings: Settings → Run defaults'));
+  assert.ok(result.items[0].lines.includes('Model and settings: Settings → Run'));
 });
 
 test('a Run and a Process the Agent adds read their inputs through data connections', () => {

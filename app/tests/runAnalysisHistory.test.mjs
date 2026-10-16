@@ -36,9 +36,20 @@ test('Review key changes with exclusions and model while Score key stays stable'
   const excluded = await analysisInputKeys(base, { run: 'record-1' });
   assert.equal(first.score.get('score').signature, excluded.score.get('score').signature);
   assert.notEqual(first.review.get('review').signature, excluded.review.get('review').signature);
-  base.nodes.find((node) => node.nodeId === 'score').reviewCredentialId = 'model-2';
+  base.nodes.find((node) => node.nodeId === 'review').reviewCredentialId = 'model-2';
   const modelChanged = await analysisInputKeys(base, { run: 'record-1' });
   assert.notEqual(excluded.review.get('review').signature, modelChanged.review.get('review').signature);
+});
+
+test('an Optimize keeps the model it ran with when its Evaluate picks another', async () => {
+  const base = state();
+  base.nodes.find((node) => node.nodeId === 'score').reviewCredentialId = 'model-1';
+  base.nodes.find((node) => node.nodeId === 'review').reviewCredentialId = 'model-1';
+  const before = await analysisInputKeys(base, { run: 'record-1' });
+  base.nodes.find((node) => node.nodeId === 'score').reviewCredentialId = 'model-2';
+  const after = await analysisInputKeys(base, { run: 'record-1' });
+  assert.equal(after.review.get('review').signature, before.review.get('review').signature);
+  assert.equal(after.review.get('review').inputs.reviewCredentialId, 'model-1');
 });
 
 test('Score and Review have no current analysis key without a Run result', async () => {

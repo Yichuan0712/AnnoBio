@@ -1,5 +1,5 @@
 /**
- * A node's model and settings. Run and Review use Settings → Run defaults / Review defaults; there
+ * A node's model and settings. Run and Review use the models chosen in Settings → Run / Optimize; there
  * are no per-node settings controls. The default model (and review method) is written onto the node
  * the first time it is needed, so a Run keeps the model it started with when it resumes.
  *

@@ -32,7 +32,7 @@ export function suggestionOptimizationInputs(suggestion, comparisonRows) {
 
 export async function optimizeReviewSuggestion({ suggestion, suggestions, originalText, comparisonRows, payload,
   signal, onProgress, maxTrials, nodeId, runOptimization = runSuggestionOptimizationCompositional }) {
-  if (!payload?.run_credential_id) throw new Error('No Run model configured. Set Run defaults in Settings.');
+  if (!payload?.run_credential_id) throw new Error('No Run model configured. Choose a Run model in Settings → Run.');
   if (!payload.output_schema) throw new Error('No output schema configured.');
   if (!payload.score_mapping) throw new Error('No Evaluate mapping configured.');
   const { entries, extraIndices } = suggestionOptimizationInputs(suggestion, comparisonRows);

@@ -1126,6 +1126,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     left,
     top,
     ensureUniqueName = false,
+    reviewCredentialId = '',
   } = {}) {
     const normalizedScoreNodeId = String(scoreNodeId || '').trim();
     if (!normalizedScoreNodeId) {
@@ -1150,6 +1151,9 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     });
     if (promptReviewNode?.dataset?.nodeId) {
       promptReviewNode.dataset.promptReviewName = finalName;
+      // The Optimize keeps the model it runs with; the Evaluate's model only seeds the next Optimize.
+      const model = String(reviewCredentialId || scoreNode.dataset.reviewCredentialId || '').trim();
+      if (model) promptReviewNode.dataset.reviewCredentialId = model;
       getConnectionsList().push({
         fromId: normalizedScoreNodeId,
         toId: promptReviewNode.dataset.nodeId,
@@ -1204,6 +1208,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       left,
       top,
       ensureUniqueName,
+      reviewCredentialId: resolvedReviewCredentialId,
     });
     const reviewNodeId = String(created?.reviewNodeId || created?.nodeId || '').trim();
     const createdReviewEl = reviewNodeId ? getNodeById(reviewNodeId) : null;
@@ -1243,9 +1248,10 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     if (!reviewNeedsResume({ result: parseReviewResult(reviewNode), interrupted: reviewNode.dataset.reviewInterrupted === '1',
       streaming: pendingReviews.has(reviewNodeId) || pendingReviewNodeIds.has(reviewNodeId) })) throw new Error('This Optimize has no interrupted task to resume.');
     const { payload } = await buildReviewPayloadForScoreNode(scoreNode);
-    const credentialId = await resolveReviewCredentialId(scoreNode);
+    // Resume with the model this Optimize started with, even if the Evaluate's model changed since.
+    const credentialId = await resolveReviewCredentialId(scoreNode, reviewNode.dataset.reviewCredentialId);
     if (!credentialId) throw new Error('Set a default Optimize model in Settings.');
-    scoreNode.dataset.reviewCredentialId = credentialId;
+    reviewNode.dataset.reviewCredentialId = credentialId;
     await runReviewStart({ reviewNodeId, payload, credentialId, registerPendingReview });
     if (!pendingReviews.has(reviewNodeId) && !pendingReviewNodeIds.has(reviewNodeId)) throw new Error('Optimize request did not start successfully.');
     return { reviewNodeId, started: true, waitRequired: true };

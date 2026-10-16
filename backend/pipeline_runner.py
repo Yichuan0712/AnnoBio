@@ -23,6 +23,7 @@ import uuid
 from typing import Any, Callable
 
 if __package__:
+    from .model_settings import settings_for_model
     from .pipeline_compile import compile_pipeline
     from .pipeline_runtime_adapters import (
         PipelineJobCancelled,
@@ -32,6 +33,7 @@ if __package__:
         normalize_table,
     )
 else:
+    from model_settings import settings_for_model
     from pipeline_compile import compile_pipeline
     from pipeline_runtime_adapters import (
         PipelineJobCancelled,
@@ -93,6 +95,26 @@ class PipelineRunNotFound(KeyError):
 
 class PipelineRunConflict(RuntimeError):
     pass
+
+
+def _apply_model_settings(job: dict, settings: dict, credential_id: str, node_overrides: Any) -> None:
+    """The Run's model's own Max tokens / Concurrency (Settings, "Per model") replace the shared
+    values the compiler used; settings a Run node saved for itself still win."""
+    if isinstance(node_overrides, str):
+        try:
+            node_overrides = json.loads(node_overrides or "{}")
+        except ValueError:
+            node_overrides = {}
+    if not isinstance(node_overrides, dict):
+        node_overrides = {}
+    own = settings_for_model(settings, credential_id)
+    config = job["config"]
+    for key in ("run_max_tokens", "run_concurrency"):
+        if key in node_overrides or own.get(key) is None:
+            continue
+        config.setdefault("settings", {})[key] = own[key]
+        if key in (config.get("unresolved_settings") or []):
+            config["unresolved_settings"] = [item for item in config["unresolved_settings"] if item != key]
 
 
 class PipelineRunner:
@@ -318,7 +340,8 @@ class PipelineRunner:
         input_tables = self._input_tables(canvas_state, spec)
         nodes = {str(node.get("nodeId")): node for node in (canvas_state.get("nodes") or [])
                  if isinstance(node, dict)}
-        default_credential = str(self.settings_loader().get("default_run_credential_id") or "")
+        settings = self.settings_loader()
+        default_credential = str(settings.get("default_run_credential_id") or "")
         bindings: dict[str, str] = {}
         resolved_credentials: dict[str, dict] = {}
         execution_models: dict[str, dict] = {}
@@ -334,6 +357,7 @@ class PipelineRunner:
                 raise ValueError(f'Credential "{credential_id}" was not found.')
             bindings[job["id"]] = credential_id
             resolved_credentials[job["id"]] = credential
+            _apply_model_settings(job, settings, credential_id, (nodes.get(run_node_id) or {}).get("runSettings"))
             execution_models[job["id"]] = {
                 "model": str(credential.get("model") or credential.get("llm") or ""),
                 "provider": str(credential.get("provider") or ""),

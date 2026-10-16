@@ -285,11 +285,13 @@ export function createWorkflowNodeFactories(deps = {}) {
     const locked = !!(await isContentLocked?.(node.dataset.nodeId));
     openPromptDetailModal({
       name: node.dataset.promptName || '', text: node.dataset.promptText || '', node, locked,
-      onRunPrompt: () => {
+      onRunPrompt: (credentialId) => {
         const runNode = createRunNode({
           left: (parseFloat(node.style.left) || 0) + (node.offsetWidth || 280) + NEW_NODE_OFFSET,
           top: parseFloat(node.style.top) || 0, title: 'Run',
         });
+        // The model picked beside Create Run; without one the Run takes the Settings default when opened.
+        if (runNode && credentialId) runNode.dataset.runCredentialId = credentialId;
         if (runNode?.dataset?.nodeId) {
           getConnectionsList().push({ fromId: node.dataset.nodeId, toId: runNode.dataset.nodeId, type: 'prompt-to-run' });
           updateEdges();
