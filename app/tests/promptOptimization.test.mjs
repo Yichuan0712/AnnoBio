@@ -73,7 +73,7 @@ test('malformed imported cycles are displayed once with a stable root', () => {
   assert.equal((renderPromptFamily(family).match(/data-action="compare"/g) || []).length, 2);
 });
 
-test('a branched tree uses Current Pipeline cards and nested branch groups without duplicating versions', () => {
+test('a branched tree uses Pipeline cards and nested branch groups without duplicating versions', () => {
   const state = canvas();
   state.nodes.push({ type: 'prompt', nodeId: 'v2b', name: 'Alternative' }, { type: 'prompt', nodeId: 'v4', name: 'Long branch' });
   state.connections.push({ type: 'prompt-to-prompt', fromId: 'v1', toId: 'v2b' }, { type: 'prompt-to-prompt', fromId: 'v3', toId: 'v4' });

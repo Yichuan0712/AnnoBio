@@ -73,7 +73,7 @@ test('inspect_node does not report per-Generate settings', () => {
   assert.equal('settings' in inspected.details, false);
 });
 
-test('the summary lists pipelines as the Current Pipeline panel shows them', async () => {
+test('the summary lists pipelines as the Pipeline panel shows them', async () => {
   const node = (type, nodeId, extra = {}) => ({ type, nodeId, name: nodeId, ...extra });
   const edge = (fromId, toId, type) => ({ fromId, toId, type });
   const state = {
@@ -86,9 +86,26 @@ test('the summary lists pipelines as the Current Pipeline panel shows them', asy
   const summary = await buildWorkspaceSummary(upgradeCanvasState(state), { extractInputFields });
   const pipelines = summary.split('\n\n')[0];
   assert.doesNotMatch(pipelines, /Dataset/);
-  assert.match(pipelines, /Pipeline 1 \[pipeline-1\] \(default route; Current Pipeline panel is not mounted\):\n {2}1\. Generate, a picker with 2 choices: "p2" \[p2\] by Generate "Run B" \[r2\] on "raw" \(default\); "p" \[p\] by Generate "Run A"/);
-  assert.match(pipelines, /Pipeline 2 \[pipeline-2\].*:\n {2}1\. Process data, a picker with 2 choices: "clean" \[clean\] reading "raw" \(default\); "trim"/);
+  assert.match(pipelines, /Pipeline 1 \[pipeline-1\] \(default route; Pipeline panel is not mounted\):\n {2}1\. Generate, a picker with 2 choices: "p2" \[p2\] by Generate "Run B" \[r2\] on "raw" \(default\); "p" \[p\] by Generate "Run A"/);
+  assert.match(pipelines, /Pipeline 2 \[pipeline-2\].*:\n {2}1\. Process, a picker with 2 choices: "clean" \[clean\] reading "raw" \(default\); "trim"/);
   assert.match(summary, /"p2" \[p2\]: .*; new version of "p"/);
+});
+
+test('the summary distinguishes a branch directly feeding the shared Process from an unused branch', async () => {
+  const state = {
+    nodes: [{ type: 'dataset', nodeId: 'raw', name: 'Raw' },
+      { type: 'process', nodeId: 'split', name: 'Split', processOutputPorts: JSON.stringify({ ports: ['direct', 'rewrite'], dynamic: false, error: '', codeHash: 'h' }) },
+      { type: 'prompt', nodeId: 'p', name: 'Rewrite' }, { type: 'run', nodeId: 'r' }, { type: 'process', nodeId: 'join', name: 'Combine' }],
+    connections: [{ type: 'data', fromId: 'raw', toId: 'split', fromPort: 'result', alias: 'df' },
+      { type: 'data', fromId: 'split', toId: 'join', fromPort: 'direct', alias: 'df' },
+      { type: 'data', fromId: 'split', toId: 'r', fromPort: 'rewrite' },
+      { type: 'prompt-to-run', fromId: 'p', toId: 'r' },
+      { type: 'data', fromId: 'r', toId: 'join', fromPort: 'result', alias: 'df_rewritten' }],
+  };
+  const summary = (await buildWorkspaceSummary(state, { extractInputFields })).split('\n\n')[0];
+  assert.match(summary, /Branch 1:\n\s+1\. Direct connection to the next step/);
+  assert.doesNotMatch(summary, /\(nothing\)/);
+  assert.equal((summary.match(/Process: "Combine"/g) || []).length, 1);
 });
 
 test('the summary uses the panel selection and identifies Pipeline result provenance', async () => {
@@ -164,5 +181,5 @@ test('the summary names a step input by the step it reads', async () => {
     connections: [{ fromId: 'p', toId: 'r', type: 'prompt-to-run' }, data('raw', 'r'), data('r', 'clean', 'df')],
   };
   const pipelines = (await buildWorkspaceSummary(state, { extractInputFields })).split('\n\n')[0];
-  assert.match(pipelines, /1\. Generate: "Extract" \[p\] by Generate "Generate" \[r\] on "Raw"\n {2}2\. Process data: "Clean" \[clean\] reading the output of "Extract"/);
+  assert.match(pipelines, /1\. Generate: "Extract" \[p\] by Generate "Generate" \[r\] on "Raw"\n {2}2\. Process: "Clean" \[clean\] reading the output of "Extract"/);
 });

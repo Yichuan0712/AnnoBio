@@ -1,6 +1,6 @@
 /**
  * Compact plain-text description of the canvas for the Agent's system prompt: pipelines as the
- * Current Pipeline panel shows them (Generate and Process data steps, pickers, branches; the
+ * Pipeline panel shows them (Generate and Process steps, pickers, branches; the
  * panel's choices when mounted, otherwise the defaults), then every node with the few
  * facts needed to decide what to inspect next. Details (prompt text, code, rows) are left to the
  * read tools.
@@ -41,7 +41,7 @@ function sourceRef(linked, missing) {
   return `the output of ${nodeTypeLabel(linked.type)} ${linkRef(linked)}${branch}`;
 }
 
-const STEP_LABELS = { prompt: 'Generate', process: 'Process data' };
+const STEP_LABELS = { prompt: 'Generate', process: 'Process' };
 
 /** An input as the summary names it: a Dataset by its name, another step's output by that step. */
 function describeInput(source, lookup, canvasState) {
@@ -59,7 +59,7 @@ function describeRouteOption(option, lookup, canvasState) {
   return `${quote(option.label)} [${option.processNodeId}]${inputs ? ` reading ${inputs}` : ''}`;
 }
 
-/** One step as the Current Pipeline panel shows it: the default choice first, then the alternatives. */
+/** One step as the Pipeline panel shows it: the default choice first, then the alternatives. */
 function describeRouteStep(step, lookup, selectionSource, canvasState) {
   const options = [step.selectedOption, ...step.options.filter((option) => option.value !== step.selectedValue)];
   const label = STEP_LABELS[step.kind];
@@ -71,8 +71,8 @@ function describeRouteStep(step, lookup, selectionSource, canvasState) {
 function routeLines(route, lookup, indent, selectionSource, canvasState) {
   const lines = [];
   route.forEach((step, i) => {
-    if (step.kind === 'empty') {
-      lines.push(`${indent}${i + 1}. (nothing)`);
+    if (step.kind === 'passthrough') {
+      lines.push(`${indent}${i + 1}. Direct connection to the next step`);
     } else if (step.kind === 'branch') {
       lines.push(`${indent}${i + 1}. Branches:`);
       step.lanes.forEach((lane, laneIndex) => {
@@ -93,7 +93,7 @@ function pipelineLines(canvasState, lookup, selections = []) {
   pipelines.forEach((pipeline, index) => {
     const selection = selections.find((item) => item.id === String(pipeline?.id || `pipeline-index-${index}`));
     const source = selection?.source === 'panel' ? 'panel' : 'default';
-    lines.push(`Pipeline ${index + 1} [${String(pipeline?.id || `pipeline-index-${index}`)}] (${source === 'panel' ? 'current panel selection' : 'default route; Current Pipeline panel is not mounted'}):`);
+    lines.push(`Pipeline ${index + 1} [${String(pipeline?.id || `pipeline-index-${index}`)}] (${source === 'panel' ? 'current panel selection' : 'default route; Pipeline panel is not mounted'}):`);
     lines.push(...routeLines(getVisibleRoute(selection?.route || buildSelectedRoute(pipeline, new Map())), lookup, '  ', source, canvasState));
   });
   return lines;

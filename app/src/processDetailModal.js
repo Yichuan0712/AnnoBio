@@ -130,7 +130,6 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
         <div class="run-detail-preview-wrap">
           <div class="run-detail-preview-header">
             <h3 class="run-detail-preview-title">Results</h3>
-            <div class="process-branch-picker" hidden></div>
           </div>
           <div class="run-detail-preview-content process-results-content"></div>
         </div>
@@ -140,7 +139,9 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
 
   const editorHost = overlay.querySelector('.process-editor-host');
   const resultsContent = overlay.querySelector('.process-results-content');
-  const branchPicker = overlay.querySelector('.process-branch-picker');
+  const branchPicker = document.createElement('div');
+  branchPicker.className = 'process-branch-picker';
+  branchPicker.hidden = true;
   const runBtn = overlay.querySelector('.process-run-btn');
   const waitingBannerEl = overlay.querySelector('.run-detail-waiting-banner');
   const editable = new Compartment();
@@ -220,6 +221,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
   const resultsPanel = createRowResultsPanel({
     container: resultsContent,
     idPrefix: 'process',
+    summaryPrefix: branchPicker,
     buildActions: (actions) => {
       saveBtnEl = document.createElement('button');
       saveBtnEl.type = 'button';

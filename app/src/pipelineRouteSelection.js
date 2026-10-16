@@ -1,5 +1,5 @@
 import { generateDisplayName } from './nodeLabels.js';
-/** Pure Current Pipeline route selection. No DOM, network or canvas mutation. */
+/** Pure Pipeline route selection. No DOM, network or canvas mutation. */
 
 function promptRunOptions(step) {
   const options = [];
@@ -137,7 +137,11 @@ export function buildSelectedRoute(pipeline, selectedByChoiceId) {
 
     const datasetCandidates = candidateSteps.filter((step) => step.kind === 'dataset').length;
     if (candidateSteps.length > 1 && (datasetCandidates === 0 || datasetCandidates === candidateSteps.length)) {
-      const joinId = findMergingProcess(candidateSteps.map((step) => step.id));
+      // An unused output is still part of the selected route, but cannot prevent the connected
+      // outputs from finding their shared Process (including a direct-to-merge output).
+      const mergingSteps = candidateSteps.filter(step => step.kind !== 'dataset'
+        || !step.producerStepId || outgoing.get(step.id)?.length);
+      const joinId = mergingSteps.length > 1 ? findMergingProcess(mergingSteps.map(step => step.id)) : '';
       if (joinId || (datasetCandidates && isProcessFork(candidateSteps))) {
         const lanes = candidateSteps.map((step) => {
           const lane = [];
@@ -233,16 +237,31 @@ export function buildSelectedRoute(pipeline, selectedByChoiceId) {
 }
 
 /**
- * The route without its Datasets: a Generate or Process data chip stands for the Datasets it reads.
+ * The route without its Datasets: a Generate or Process chip stands for the Datasets it reads.
+ * Unused outputs are omitted and single remaining lanes become a straight continuation.
  * A branch whose lanes hold only Datasets says nothing the merging Process does not, so it is dropped.
  */
-export function getVisibleRoute(route) {
-  return route.flatMap((step) => {
-    if (step.kind === 'dataset') return [];
+export function getVisibleRoute(route, continuationStepId = '') {
+  return route.flatMap((step, index) => {
+    if (step.kind === 'dataset' || step.kind === 'empty') return [];
     if (step.kind !== 'branch') return [step];
-    const lanes = (step.lanes || []).map(getVisibleRoute);
-    if (lanes.every((lane) => lane.length === 0)) return [];
-    return [{ ...step, lanes: lanes.map((lane) => (lane.length ? lane : [{ kind: 'empty' }])) }];
+    // A lane may contain only a hidden output slot because it feeds the shared continuation
+    // directly. That is different from an unused output. Nested branches inherit the outer join.
+    const nextStepId = route.slice(index + 1).find(next => next.selectedOption?.kind)
+      ?.selectedOption?.stepId || continuationStepId;
+    const lanes = (step.lanes || []).map((sourceLane) => {
+      const lane = getVisibleRoute(sourceLane, nextStepId);
+      if (lane.length) return lane;
+      const connectsDirectly = nextStepId && sourceLane.some(hidden => {
+        const selected = hidden.selectedOption;
+        return (selected?.output?.consumerStepIds || selected?.dataset?.consumerStepIds || []).includes(nextStepId);
+      });
+      return connectsDirectly ? [{ kind: 'passthrough' }] : [];
+    }).filter(lane => lane.length);
+    // Several direct outputs need no intermediate step or branch box in the overview.
+    if (lanes.every(lane => lane.length === 1 && lane[0].kind === 'passthrough')) return [];
+    if (lanes.length === 1) return lanes[0];
+    return [{ ...step, lanes }];
   });
 }
 

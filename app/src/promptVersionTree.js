@@ -2,7 +2,7 @@ const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
 })[character]);
 
-/** Use the same cards, arrows and branch groups as Current Pipeline. */
+/** Use the same cards, arrows and branch groups as Pipeline. */
 export function renderPromptFamily(family) {
   const byId = new Map(family.versions.map((version) => [version.promptId, version]));
   const children = new Map();

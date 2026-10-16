@@ -216,7 +216,7 @@ function layoutIcon(region, open, size = 12) {
   return svg;
 }
 
-/** The bottom panel (Current Pipeline, Prompt Optimization; plus Log on desktop). */
+/** The bottom panel (Pipeline, Prompt Optimization; plus Log on desktop). */
 export const iconLayoutPanel = (open, size) => layoutIcon('bottom', open, size);
 
 /** The right panel (Agent Assistant). */

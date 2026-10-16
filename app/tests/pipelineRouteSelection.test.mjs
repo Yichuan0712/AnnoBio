@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { detectPipelines } from '../src/pipelineDetection.js';
-import { buildSelectedRoute, exportRoutePayload } from '../src/pipelineRouteSelection.js';
+import { buildSelectedRoute, exportRoutePayload, getVisibleRoute } from '../src/pipelineRouteSelection.js';
 import { buildRunResultsTable } from '../src/runResultsExport.js';
 
 const node = (type, nodeId, extra = {}) => ({ type, nodeId, name: nodeId, ...extra });
@@ -106,6 +106,48 @@ test('named branches preserve both lanes and merge once', () => {
   ]);
 });
 
+for (const ports of [['direct', 'rewrite'], ['rewrite', 'direct']]) {
+  test(`a branch directly feeding the shared Process is a bypass, in output order ${ports.join(', ')}`, () => {
+    const state = {
+      nodes: [node('dataset', 'raw'), node('process', 'split', { processOutputPorts: JSON.stringify({ ports, dynamic: false, error: '', codeHash: 'h' }) }),
+        node('prompt', 'rewrite'), node('run', 'r'), node('process', 'search'), node('process', 'merge')],
+      connections: [data('raw', 'split', 'df'), data('split', 'merge', 'df', 'direct'),
+        edge('rewrite', 'r', 'prompt-to-run'), data('split', 'r', undefined, 'rewrite'), data('r', 'search', 'df'), data('search', 'merge', 'df_search')],
+    };
+    const route = buildSelectedRoute(detectPipelines(state)[0], new Map());
+    const before = structuredClone(route);
+    const visible = getVisibleRoute(route);
+    const lanes = visible.find(item => item.kind === 'branch').lanes;
+    assert.deepEqual(lanes[ports.indexOf('direct')], [{ kind: 'passthrough' }]);
+    assert.deepEqual(lanes[ports.indexOf('rewrite')].map(item => item.kind), ['prompt', 'process']);
+    assert.equal(visible.filter(item => item.selectedOption?.processNodeId === 'merge').length, 1);
+    assert.deepEqual(route, before);
+    assert.deepEqual(exportRoutePayload(route).filter(item => item.type !== 'dataset'), [
+      { type: 'process', process_node_id: 'split' },
+      { type: 'prompt', prompt_node_id: 'rewrite', run_node_id: 'r' },
+      { type: 'process', process_node_id: 'search' },
+      { type: 'process', process_node_id: 'merge' },
+    ]);
+  });
+}
+
+test('a nested branch can connect directly to the outer continuation', () => {
+  const ports = values => JSON.stringify({ ports: values, dynamic: false, error: '', codeHash: 'h' });
+  const state = {
+    nodes: [node('dataset', 'raw'), node('process', 'split', { processOutputPorts: ports(['left', 'right']) }),
+      node('process', 'inner', { processOutputPorts: ports(['direct', 'rewrite']) }), node('prompt', 'rewrite'), node('run', 'r'), node('process', 'merge')],
+    connections: [data('raw', 'split', 'df'), data('split', 'inner', 'df', 'left'), data('split', 'merge', 'df', 'right'),
+      data('inner', 'merge', 'df_inner', 'direct'), data('inner', 'r', undefined, 'rewrite'), edge('rewrite', 'r', 'prompt-to-run'), data('r', 'merge', 'df_rewritten')],
+  };
+  const route = getVisibleRoute(buildSelectedRoute(detectPipelines(state)[0], new Map()));
+  const outer = route.find(item => item.kind === 'branch');
+  assert.deepEqual(outer.lanes[1], [{ kind: 'passthrough' }]);
+  const inner = outer.lanes[0].find(item => item.kind === 'branch');
+  assert.deepEqual(inner.lanes[0], [{ kind: 'passthrough' }]);
+  assert.deepEqual(inner.lanes[1].map(item => item.kind), ['prompt']);
+  assert.equal(route.filter(item => item.selectedOption?.processNodeId === 'merge').length, 1);
+});
+
 test('a Dataset saved from a step starts a new pipeline instead of chaining to it', () => {
   const state = {
     nodes: [node('dataset', 'raw'), node('prompt', 'p'), node('run', 'r'),
@@ -167,14 +209,75 @@ test('Prompts whose paths first meet at another Prompt stay alternatives', () =>
   assert.deepEqual(route.find((step) => step.kind === 'prompt').options.map((option) => option.value), ['r1', 'r2']);
 });
 
-test('every branch of a Process is a lane in its order, one nothing reads shown empty', async () => {
-  const { getVisibleRoute } = await import('../src/pipelineRouteSelection.js');
+test('unused outputs remain in the selected route but a single connected path is linear in the overview', () => {
   const ports = JSON.stringify({ ports: ['ready', 'rewrite', 'rest'], dynamic: false, error: '', codeHash: 'h' });
   const state = {
     nodes: [node('dataset', 'raw'), node('process', 'check', { processOutputPorts: ports }), node('prompt', 'p'), node('run', 'r')],
     connections: [data('raw', 'check', 'df'), edge('p', 'r', 'prompt-to-run'), data('check', 'r', undefined, 'rewrite')],
   };
-  const route = getVisibleRoute(buildSelectedRoute(detectPipelines(state)[0], new Map()));
-  const branch = route.find((step) => step.kind === 'branch');
-  assert.deepEqual(branch.lanes.map((lane) => lane.map((step) => step.kind)), [['empty'], ['prompt'], ['empty']]);
+  const route = buildSelectedRoute(detectPipelines(state)[0], new Map());
+  const before = structuredClone(route);
+  const visible = getVisibleRoute(route);
+  assert.deepEqual(visible.map(step => step.kind), ['process', 'prompt']);
+  assert.equal(visible[1].selectedOption.runNodeId, 'r');
+  assert.deepEqual(route, before);
+  assert.deepEqual(route.find(step => step.kind === 'branch').lanes.map(lane => lane[0].selectedOption.output.port), ['ready', 'rewrite', 'rest']);
+  assert.deepEqual(exportRoutePayload(route), [
+    { type: 'dataset', dataset_node_id: 'raw' }, { type: 'process', process_node_id: 'check' },
+    { type: 'prompt', prompt_node_id: 'p', run_node_id: 'r' },
+  ]);
+});
+
+test('when every output is unused the overview ends at its Process', () => {
+  const state = {
+    nodes: [node('dataset', 'raw'), node('process', 'split', {
+      processOutputPorts: JSON.stringify({ ports: ['left', 'right'], dynamic: false, error: '', codeHash: 'h' }),
+    })],
+    connections: [data('raw', 'split', 'df')],
+  };
+  const visible = getVisibleRoute(buildSelectedRoute(detectPipelines(state)[0], new Map()));
+  assert.deepEqual(visible.map(step => step.selectedOption.processNodeId), ['split']);
+});
+
+test('two connected paths stay parallel after an unused output is hidden', () => {
+  const state = {
+    nodes: [node('dataset', 'raw'), node('process', 'split', {
+      processOutputPorts: JSON.stringify({ ports: ['left', 'unused', 'right'], dynamic: false, error: '', codeHash: 'h' }),
+    }), node('process', 'left'), node('process', 'right')],
+    connections: [data('raw', 'split', 'df'), data('split', 'left', 'df', 'left'), data('split', 'right', 'df', 'right')],
+  };
+  const visible = getVisibleRoute(buildSelectedRoute(detectPipelines(state)[0], new Map()));
+  const branches = visible.find(step => step.kind === 'branch');
+  assert.equal(branches.lanes.length, 2);
+  assert.deepEqual(branches.lanes.map(lane => lane[0].selectedOption.processNodeId), ['left', 'right']);
+});
+
+test('an unused output does not hide or move the merge shared by a direct path and a processed path', () => {
+  const state = {
+    nodes: [node('dataset', 'raw'), node('process', 'split', {
+      processOutputPorts: JSON.stringify({ ports: ['direct', 'unused', 'rewrite'], dynamic: false, error: '', codeHash: 'h' }),
+    }), node('prompt', 'p'), node('run', 'r'), node('process', 'merge')],
+    connections: [data('raw', 'split', 'df'), data('split', 'merge', 'df', 'direct'),
+      data('split', 'r', undefined, 'rewrite'), edge('p', 'r', 'prompt-to-run'), data('r', 'merge', 'df_rewritten')],
+  };
+  const route = buildSelectedRoute(detectPipelines(state)[0], new Map());
+  assert.equal(route.find(step => step.kind === 'branch').lanes.length, 3);
+  const visible = getVisibleRoute(route);
+  assert.deepEqual(visible.map(step => step.kind), ['process', 'branch', 'process']);
+  assert.deepEqual(visible[1].lanes[0], [{ kind: 'passthrough' }]);
+  assert.deepEqual(visible[1].lanes[1].map(step => step.kind), ['prompt']);
+  assert.equal(visible[2].selectedOption.processNodeId, 'merge');
+  assert.equal(exportRoutePayload(route).filter(step => step.process_node_id === 'merge').length, 1);
+});
+
+test('nested forks with only one connected path flatten without leaving empty branch groups', () => {
+  const ports = values => JSON.stringify({ ports: values, dynamic: false, error: '', codeHash: 'h' });
+  const state = {
+    nodes: [node('dataset', 'raw'), node('process', 'split', { processOutputPorts: ports(['used', 'unused']) }),
+      node('process', 'inner', { processOutputPorts: ports(['unused', 'used']) }), node('prompt', 'p'), node('run', 'r')],
+    connections: [data('raw', 'split', 'df'), data('split', 'inner', 'df', 'used'), data('inner', 'r', undefined, 'used'), edge('p', 'r', 'prompt-to-run')],
+  };
+  const visible = getVisibleRoute(buildSelectedRoute(detectPipelines(state)[0], new Map()));
+  assert.deepEqual(visible.map(step => step.kind), ['process', 'process', 'prompt']);
+  assert.deepEqual(visible.map(step => step.selectedOption.processNodeId || step.selectedOption.runNodeId), ['split', 'inner', 'r']);
 });
