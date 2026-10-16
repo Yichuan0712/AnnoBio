@@ -75,12 +75,15 @@ The workspace summary describes the route currently selected in the panel, or la
 route when the panel has not been mounted. Only the user can change a picker; after a change, refresh
 the workspace before acting.
 
-**Run to here** runs a step together with every step before it that has no current result, and
+**Execute to here** runs a step together with every step before it that has no current result, and
 reuses the steps that have one. The user starts it from a step's Run button (when an input has no
 result yet) or its right-click menu, and sees a plan first: what it reads, what it reuses, what runs.
-To run a whole pipeline, run to its last step. Each such run is listed in the **Executions** tab, where
+**Execute this step** (same menu) runs only that step; the steps it reads must be current. When
+everything up to the step is current, either one runs the step again.
+To run a whole pipeline, execute to its last step. Each such run is listed in the **Executions** tab, where
 it can be stopped or resumed. Every step's result goes into that step's History. The Agent requests
-the same with a `run_nodes` job of kind `run_to`, which the user confirms on a card.
+the same with a `run_nodes` job of kind `run_to` (add `only_this: true` for one step), which the user
+confirms on a card.
 Use `run_nodes` for a single Run or Process when testing or iterating on one stage.
 Use kind `stop` with a node id to request cancellation of a running Run, Process, code Evaluate,
 Optimize or suggestion optimization, including tasks started in the UI. Refresh the workspace to

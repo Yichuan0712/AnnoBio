@@ -72,13 +72,31 @@ function doneRows(run) {
 }
 
 /**
+ * The first step `nodeId` reads that has no current result, by name; null when every one has one.
+ * Execute this step needs them all (the canvas menu disables it otherwise).
+ */
+export function upstreamWithoutResult(state, nodeId) {
+  const node = findNode(state, nodeId);
+  if (!node || !STEP_TYPES.has(node.type)) return null;
+  for (const source of stepSources(state, node)) {
+    if (!isStepSource(source) || !findNode(state, source.nodeId)) continue;
+    const waiting = stepOutputTable(state, source).waiting;
+    if (waiting && waiting !== 'missing-port') return stepSourceLabel(state, { ...source, port: RESULT_PORT });
+  }
+  return null;
+}
+
+/**
  * @param {object} state canvas state from getCanvasState()
  * @param {string} targetId a Run or Process node
  * @param {{ settings?: object, credentialIds?: Set<string> }} context Settings (default Run model,
  *   Python path) and the credentials that exist
+ * @param {{ onlyThis?: boolean, rerun?: boolean }} [options] onlyThis: Execute this step, without the
+ *   steps before it, which then must have current results; rerun: run the target again although its
+ *   result is current (what Execute does when everything up to it is current)
  * @returns {{
- *   targetId: string,
- *   steps: Array<{ nodeId: string, kind: 'run'|'process', name: string, action: 'reuse'|'run'|'resume',
+ *   targetId: string, scope: 'to-here'|'this',
+ *   steps: Array<{ nodeId: string, kind: 'run'|'process', name: string, action: 'reuse'|'run'|'resume'|'rerun',
  *     inputRows: number|null, calls: number|null, credentialId?: string }>,
  *   inputs: Array<{ nodeId: string, name: string, rows: number|null, readBy: string[] }>,
  *   problems: Array<{ nodeId: string, message: string }>,
@@ -87,15 +105,15 @@ function doneRows(run) {
  * }} steps upstream first; `calls` is model calls, null when some count is unknown; nothing may
  *   start while `problems` is not empty
  */
-export function planRunTo(state, targetId, { settings = {}, credentialIds = new Set() } = {}) {
+export function planRunTo(state, targetId, { settings = {}, credentialIds = new Set() } = {}, { onlyThis = false, rerun = false } = {}) {
   const id = String(targetId || '').trim();
   const target = findNode(state, id);
-  const plan = { targetId: id, steps: [], inputs: [], problems: [], toRun: 0, calls: 0 };
+  const plan = { targetId: id, scope: onlyThis ? 'this' : 'to-here', steps: [], inputs: [], problems: [], toRun: 0, calls: 0 };
   const problem = (nodeId, message) => {
     if (!plan.problems.some((item) => item.nodeId === nodeId && item.message === message)) plan.problems.push({ nodeId, message });
   };
   if (!target || !STEP_TYPES.has(target.type)) {
-    problem(id, 'Run to here works on Run and Process steps.');
+    problem(id, 'Execute works on Run and Process steps.');
     plan.calls = null;
     return plan;
   }
@@ -112,7 +130,8 @@ export function planRunTo(state, targetId, { settings = {}, credentialIds = new 
     const sources = stepSources(state, node);
     sourcesOf.set(nodeId, sources);
     for (const source of sources) {
-      if (isStepSource(source) && findNode(state, source.nodeId)) visit(source.nodeId);
+      // Execute this step: the steps before it are not part of the plan.
+      if (isStepSource(source) && findNode(state, source.nodeId)) { if (!onlyThis) visit(source.nodeId); }
       else if (!isStepSource(source)) {
         if (!inputs.has(source.nodeId)) inputs.set(source.nodeId, []);
         if (!inputs.get(source.nodeId).includes(nodeId)) inputs.get(source.nodeId).push(nodeId);
@@ -135,7 +154,7 @@ export function planRunTo(state, targetId, { settings = {}, credentialIds = new 
   for (const nodeId of order) {
     const node = findNode(state, nodeId);
     const status = stepState(node);
-    const action = ACTIONS[status];
+    const action = rerun && nodeId === id && status === 'ready' ? 'rerun' : ACTIONS[status];
     actionOf.set(nodeId, action);
     const name = stepSourceLabel(state, { nodeId, port: RESULT_PORT, kind: node.type });
     const sources = sourcesOf.get(nodeId);
@@ -152,7 +171,15 @@ export function planRunTo(state, targetId, { settings = {}, credentialIds = new 
         problem(nodeId, `"${name}" reads a step that is no longer on the canvas.`);
         continue;
       }
-      if (actionOf.get(source.nodeId) === 'reuse') {
+      if (!actionOf.has(source.nodeId)) {
+        // Outside the plan (Execute this step): it must have a current result already.
+        const waiting = stepOutputTable(state, source).waiting;
+        if (waiting === 'missing-port') problem(nodeId, stepInputWaitingMessage(state, source, waiting));
+        else if (waiting) {
+          const upstreamName = stepSourceLabel(state, { ...source, port: RESULT_PORT });
+          problem(nodeId, `"${upstreamName}" has no current result. Use Execute to here to run it first.`);
+        }
+      } else if (actionOf.get(source.nodeId) === 'reuse') {
         if (stepOutputTable(state, source).waiting === 'missing-port') problem(nodeId, stepInputWaitingMessage(state, source, 'missing-port'));
       } else if (source.kind === 'process') {
         const known = effectiveProcessOutputs({ detected: upstream.processOutputPorts });

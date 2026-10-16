@@ -185,7 +185,7 @@ Operations ("op" plus the fields listed):
 
 Jobs ("kind" plus):
 - run: node (a Run). Runs the rows it has not processed yet.
-- run_to: node (a Run or Process). Runs everything up to it that has no current result, upstream steps first, reusing every step that already has one; the same as the user's Run to here. Fails when something on the way cannot run (no model, unmapped input, missing branch).
+- run_to: node (a Run or Process), only_this?. Runs everything up to it that has no current result, upstream steps first, reusing every step that already has one; the same as the user's Execute to here. With only_this: true it runs just that step, like the user's Execute this step, and fails when a step before it has no current result. When the step and everything before it are already current, it runs the step again. Fails when something on the way cannot run (no model, unmapped input, missing branch).
 - process: node (a Process). Runs its saved code and stores its output branches on the node.
 - score: node (an Evaluate node using custom match code). Runs its Python matcher against the Run results and ground truth, stores its result and reports progress. Rule-based Evaluate nodes compute automatically and need no job.
 - review: score, name?. Adds an Optimize node to that score and runs it.
@@ -208,6 +208,7 @@ Jobs ("kind" plus):
             suggestion_ids: { type: 'array', items: { type: 'string' } },
             suggestion_id: { type: 'string' },
             name: { type: 'string' },
+            only_this: { type: 'boolean', description: 'run_to only: run just this step (its upstream steps must be current).' },
           },
           required: ['kind'],
           additionalProperties: false,

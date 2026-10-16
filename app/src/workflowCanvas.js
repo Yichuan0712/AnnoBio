@@ -101,7 +101,7 @@ import { getCurrentProjectId } from './currentProject.js';
 import { analysisInputKeys, analysisKeyForSave } from './runAnalysisHistory.js';
 import { contentLocks } from './contentLocks.js';
 import { isTaskLocked, taskLockedIds } from './runTaskLocks.js';
-import { planRunTo } from './runPlan.js';
+import { planRunTo, upstreamWithoutResult } from './runPlan.js';
 import { runTo } from './runTo.js';
 import { openRunPlanDialog } from './runPlanDialog.js';
 import { endInterruptedRecords, loadExecutionRecords, newExecutionRecord, saveExecutionRecords, updateExecutionRecord } from './executionRecords.js';
@@ -3513,7 +3513,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const menuState = getCanvasState();
     const outputItems = inputPort !== undefined ? inputMenuItems(menuState, node.dataset.nodeId, inputPort)
       : outputMenuItems(menuState, node.dataset.nodeId, port !== undefined ? { port } : {});
-    const stepItemsHtml = outputItems.map((item) => `<button type="button" class="workflow-node-context-item" data-action="${item.action}" data-port="${escapeHtml(item.source.port)}" data-create-type="${item.createType || ''}" title="${escapeHtml(item.disabledReason || '')}" role="menuitem" ${item.disabled ? 'disabled' : ''}>${escapeHtml(item.label)}</button>`).join('');
+    const stepItemsHtml = outputItems.map((item) => `<button type="button" class="workflow-node-context-item" data-action="${item.action}" data-port="${escapeHtml(item.source.port)}" data-create-type="${item.createType || ''}" title="${escapeAttr(item.disabledReason || '')}" role="menuitem" ${item.disabled ? 'disabled' : ''}>${escapeHtml(item.label)}</button>`).join('');
     if (isPortMenu && !outputItems.length) {
       onClose?.();
       return null;
@@ -3553,12 +3553,17 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (!isPortMenu) {
       manageItems += '<button type="button" class="workflow-node-context-item" data-action="copy-name" role="menuitem">Copy name</button>';
     }
-    // Run to here (runToHere): this step and every step before it that has no current result.
-    const held = isTaskLocked(node.dataset.nodeId);
-    const runItems = !isPortMenu && (isRun || isProcess)
-      ? `<button type="button" class="workflow-node-context-item" data-action="run-to-here" role="menuitem"${held ? ' disabled title="This step is part of a run in progress."' : ''}>Run to here</button>`
-      : '';
-    menu.innerHTML = menuGroup('Run', runItems) + menuGroup(inputPort !== undefined ? 'Create input' : 'Next steps', nextStepItems) + menuGroup('Manage node', manageItems);
+    // Execute (runToHere): to here also runs every step before it that has no current result; this
+    // step runs it alone, so what it reads must be current. Either runs it again when it is current.
+    let runItems = '';
+    if (!isPortMenu && (isRun || isProcess)) {
+      const held = isTaskLocked(node.dataset.nodeId) ? 'This step is part of a run in progress.' : '';
+      const waitingFor = held ? null : upstreamWithoutResult(getCanvasState(), node.dataset.nodeId);
+      const thisBlocked = held || (waitingFor ? `"${waitingFor}" has no current result yet. Use Execute to here.` : '');
+      const item = (action, label, blocked) => `<button type="button" class="workflow-node-context-item" data-action="${action}" role="menuitem"${blocked ? ` disabled title="${escapeAttr(blocked)}"` : ''}>${label}</button>`;
+      runItems = item('run-to-here', 'Execute to here', held) + item('run-this-step', 'Execute this step', thisBlocked);
+    }
+    menu.innerHTML = menuGroup('Execute', runItems) + menuGroup(inputPort !== undefined ? 'Create input' : 'Next steps', nextStepItems) + menuGroup('Manage node', manageItems);
     /** The output an output item starts from. */
     const outputSource = (button) => ({ nodeId: node.dataset.nodeId, port: button.dataset.port || RESULT_PORT, kind: isRun ? 'run' : isProcess ? 'process' : 'dataset' });
 
@@ -3777,6 +3782,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       'run-this-prompt': () => newRunNode({ promptNode: node, at }),
       'run-prompt-on-output': (button) => newRunNode({ inputSource: outputSource(button), at }),
       'run-to-here': () => { void runToHere(node.dataset.nodeId); },
+      'run-this-step': () => { void runToHere(node.dataset.nodeId, { onlyThis: true }); },
       'process-output': (button) => newProcessNode({ inputSource: outputSource(button), at }),
       // A duplicate is a standalone node: no connections are copied (same for Datasets and Processes).
       duplicate: () => {
@@ -4073,6 +4079,11 @@ export function buildWorkflowCanvas(root, options = {}) {
     const div = document.createElement('div');
     div.textContent = normalizeUnicodeDashesForDisplay(String(str ?? ''));
     return div.innerHTML;
+  }
+
+  /** escapeHtml for an attribute value, which ends at a double quote. */
+  function escapeAttr(str) {
+    return escapeHtml(str).replace(/"/g, '&quot;');
   }
 
   /**
@@ -5921,24 +5932,28 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
 
   /**
-   * Run to here: plans the steps up to `nodeId`, shows the plan when steps before it would run or
-   * something keeps it from running, and runs it once confirmed. Each step runs as it does from its
-   * own window, so its window shows its progress and its Stop stops the whole run.
-   * @param {{ single?: 'run'|'skip', onShowNode?: () => void }} options single: when only this step
-   *   needs running, 'run' runs it here and 'skip' returns { status: 'single' } so the window that
-   *   asked runs it its own way. onShowNode: called before the plan shows a node on the canvas, so
-   *   the window that asked can close instead of covering it
+   * Execute to here: plans the steps up to `nodeId`, shows the plan when steps before it would run
+   * or something keeps it from running, and runs it once confirmed. Each step runs as it does from its
+   * own window, so its window shows its progress and its Stop stops the whole run. When everything up
+   * to it is current, it runs `nodeId` again.
+   * @param {{ single?: 'run'|'skip', onShowNode?: () => void, onlyThis?: boolean }} options single:
+   *   when only this step needs running, 'run' runs it here and 'skip' returns { status: 'single' } so
+   *   the window that asked runs it its own way. onShowNode: called before the plan shows a node on the
+   *   canvas, so the window that asked can close instead of covering it. onlyThis: Execute this step,
+   *   which runs none of the steps before it
    */
-  async function runToHere(nodeId, { single = 'run', onShowNode } = {}) {
+  async function runToHere(nodeId, { single = 'run', onShowNode, onlyThis = false } = {}) {
+    const title = onlyThis ? 'Execute this step' : 'Execute to here';
     const context = await loadRunPlanContext();
-    const plan = planRunTo(getCanvasState(), nodeId, context);
+    let planOptions = { onlyThis };
+    let plan = planRunTo(getCanvasState(), nodeId, context, planOptions);
     if (!plan.problems.length && plan.toRun === 0) {
-      showAlert('Everything up to here already has current results.', { title: 'Run to here' });
-      return { status: 'up-to-date' };
+      planOptions = { onlyThis, rerun: true };
+      plan = planRunTo(getCanvasState(), nodeId, context, planOptions);
     }
-    const onlyThis = !plan.problems.length && plan.toRun === 1 && plan.steps.at(-1)?.action !== 'reuse';
-    if (onlyThis && single === 'skip') return { status: 'single' };
-    if (!onlyThis) {
+    const lone = !plan.problems.length && plan.toRun === 1 && plan.steps.at(-1)?.action !== 'reuse';
+    if (lone && single === 'skip') return { status: 'single' };
+    if (!lone) {
       const start = await openRunPlanDialog({
         plan,
         modelLabel: (id) => context.modelLabels.get(id) || id,
@@ -5946,10 +5961,10 @@ export function buildWorkflowCanvas(root, options = {}) {
       });
       if (!start) return { status: 'cancelled' };
     }
-    const task = await runPlanned(nodeId, { context, approvedPlan: plan });
+    const task = await runPlanned(nodeId, { context, approvedPlan: plan, planOptions });
     if (task.status === 'failed') {
       const failed = task.steps.find((step) => step.status === 'failed');
-      showAlert(task.error || failed?.message || `"${failed?.name}" failed.`, { title: 'Run to here' });
+      showAlert(task.error || failed?.message || `"${failed?.name}" failed.`, { title });
     }
     return task;
   }
@@ -6008,14 +6023,15 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   /**
    * Runs the plan up to `nodeId` (runTo.js) and keeps its record in Executions from its first step.
-   * A run refused before any step starts leaves no record. Used by Run to here and the Agent's run_to.
-   * @param {{ context: object, approvedPlan?: object, signal?: AbortSignal, source?: 'user'|'agent',
-   *   onStep?: (step: object, task: object) => void }} options
+   * A run refused before any step starts leaves no record. Used by Execute and the Agent's run_to.
+   * @param {{ context: object, planOptions?: object, approvedPlan?: object, signal?: AbortSignal,
+   *   source?: 'user'|'agent', onStep?: (step: object, task: object) => void }} options planOptions:
+   *   as for planRunTo (Execute this step, run again)
    */
-  async function runPlanned(nodeId, { context, approvedPlan, signal, source = 'user', onStep } = {}) {
+  async function runPlanned(nodeId, { context, planOptions = {}, approvedPlan, signal, source = 'user', onStep } = {}) {
     await ensureExecutionRecords();
     const key = executionRecordsKey;
-    let record = newExecutionRecord(planRunTo(getCanvasState(), nodeId, context), {
+    let record = newExecutionRecord(planRunTo(getCanvasState(), nodeId, context, planOptions), {
       id: globalThis.crypto.randomUUID(), now: Date.now(), source,
     });
     const controller = new AbortController();
@@ -6031,7 +6047,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const env = { getCanvasState, startRunNode, stopRunNode, runProcessNode, inspectNode };
     try {
       const task = await runTo(nodeId, env, {
-        context, approvedPlan, signal: controller.signal,
+        context, planOptions, approvedPlan, signal: controller.signal,
         onStep: (step, current) => {
           update(current, false);
           onStep?.(step, current);

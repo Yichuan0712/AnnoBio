@@ -29,13 +29,14 @@ export function runPlanView(plan, { modelLabel = (id) => id } = {}) {
         detail = `${step.credentialId ? `${modelLabel(step.credentialId)} · ` : ''}${calls}`;
       }
       if (step.action === 'resume') detail += step.kind === 'run' ? ' · continues where it stopped' : ' · runs again from the start';
+      if (step.action === 'rerun') detail += ' · runs again: it already has a current result';
     }
     return { nodeId: step.nodeId, kind: step.kind, name: step.name, detail, problems: problemsOf(step.nodeId) };
   };
   const stepIds = new Set(plan.steps.map((step) => step.nodeId));
   const target = plan.steps.at(-1);
   return {
-    title: `Run to "${target?.name || 'this step'}"`,
+    title: `${plan.scope === 'this' ? 'Execute' : 'Execute to'} "${target?.name || 'this step'}"`,
     inputs: plan.inputs.map((input) => ({
       nodeId: input.nodeId,
       text: `${input.name} · ${input.rows == null ? 'unknown rows' : plural(input.rows, 'row')} · read by ${input.readBy.map((id) => names.get(id) || id).join(', ')}`,
