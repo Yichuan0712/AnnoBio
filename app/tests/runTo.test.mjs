@@ -185,7 +185,7 @@ test('the Agent run_to card shows the plan the user confirms', async () => {
     const env = { getCanvasState: () => state, credentialsById: new Map([['cred', { id: 'cred', model: 'some/model' }]]) };
     const preview = await previewRunRequest({ jobs: [{ kind: 'run_to', node: 'score' }] }, env);
     assert.equal(preview.ok, true, preview.error);
-    assert.equal(preview.items[0].title, 'Run to "Score"');
+    assert.equal(preview.items[0].title, 'Execute to "Score"');
     assert.deepEqual(preview.items[0].planSteps, [
       { nodeId: 'extract', action: 'reuse' }, { nodeId: 'tidy', action: 'run' }, { nodeId: 'score', action: 'run' },
     ]);
@@ -197,7 +197,39 @@ test('the Agent run_to card shows the plan the user confirms', async () => {
     ]);
     const refused = await previewRunRequest({ jobs: [{ kind: 'run_to', node: 'p-score' }] }, env);
     assert.match(refused.error, /run_to works on a Run or a Process/);
+
+    // only_this: just that step, which needs current results before it.
+    const lone = await previewRunRequest({ jobs: [{ kind: 'run_to', node: 'tidy', only_this: true }] }, env);
+    assert.equal(lone.ok, true, lone.error);
+    assert.equal(lone.items[0].title, 'Execute "Tidy"');
+    assert.deepEqual(lone.items[0].planSteps, [{ nodeId: 'tidy', action: 'run' }]);
+    const early = await previewRunRequest({ jobs: [{ kind: 'run_to', node: 'score', only_this: true }] }, env);
+    assert.match(early.error, /"Tidy" has no current result/);
+
+    // Everything current: it runs the step again.
+    const again = await previewRunRequest({ jobs: [{ kind: 'run_to', node: 'extract' }] }, env);
+    assert.equal(again.ok, true, again.error);
+    assert.deepEqual(again.items[0].planSteps, [{ nodeId: 'extract', action: 'rerun' }]);
+    assert.match(again.items[0].lines.at(-2), /Extract \(again; its result is current\)/);
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('running again executes a current step once more, through its normal single-step run', async () => {
+  const state = chain();
+  await runTo('tidy', fakeEnv(state), { context });
+  const env = fakeEnv(state);
+  const task = await runTo('tidy', env, { context, planOptions: { rerun: true } });
+  assert.equal(task.status, 'completed');
+  assert.deepEqual(env.calls, ['tidy']);
+  assert.deepEqual(statuses(task), [['extract', 'reused'], ['tidy', 'completed']]);
+});
+
+test('Execute this step refuses while a step before it has no result', async () => {
+  const env = fakeEnv(chain());
+  const task = await runTo('tidy', env, { context, planOptions: { onlyThis: true } });
+  assert.equal(task.status, 'failed');
+  assert.match(task.error, /Use Execute to here/);
+  assert.deepEqual(env.calls, []);
 });

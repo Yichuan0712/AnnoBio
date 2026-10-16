@@ -47,6 +47,7 @@ export function newExecutionRecord(plan, { id, now, source = 'user' }) {
     source,
     targetNodeId: plan.targetId,
     targetName: plan.steps.at(-1)?.name || '',
+    scope: plan.scope || 'to-here',
     status: 'running',
     inputs: plan.inputs.map(({ nodeId, name, rows }) => ({ nodeId, name, rows })),
     steps: plan.steps.map(({ nodeId, name, kind, action }) => ({

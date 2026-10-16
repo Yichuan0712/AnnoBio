@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { planRunTo } from '../src/runPlan.js';
+import { planRunTo, upstreamWithoutResult } from '../src/runPlan.js';
 
 const table = (count, header = 'text') => ({ headers: [header], rows: Array.from({ length: count }, (_, i) => [`row ${i}`]) });
 const data = (fromId, toId, alias, fromPort = 'result') => ({ type: 'data', fromId, fromPort, toId, ...(alias ? { alias } : {}) });
@@ -174,7 +174,7 @@ test('the target must be a Run or a Process', () => {
   state.nodes.push({ type: 'score', nodeId: 'eval' });
   for (const id of ['eval', 'docs', 'p-extract', 'missing']) {
     const plan = planRunTo(state, id, context);
-    assert.deepEqual(plan.problems, [{ nodeId: id, message: 'Run to here works on Run and Process steps.' }]);
+    assert.deepEqual(plan.problems, [{ nodeId: id, message: 'Execute works on Run and Process steps.' }]);
     assert.deepEqual(plan.steps, []);
   }
 });
@@ -192,4 +192,34 @@ test('a step that needs updating runs, and its downstream says why it waits', ()
   const plan = planRunTo(state, 'tidy', context);
   assert.deepEqual(actions(plan), [['extract', 'run'], ['tidy', 'run']]);
   assert.deepEqual(plan.problems, []);
+});
+
+test('Execute this step plans only the step, and needs current results before it', () => {
+  const state = chain();
+  const waiting = planRunTo(state, 'tidy', context, { onlyThis: true });
+  assert.equal(waiting.scope, 'this');
+  assert.deepEqual(actions(waiting), [['tidy', 'run']]);
+  assert.deepEqual(waiting.problems.map((item) => item.message), ['"Extract" has no current result. Use Execute to here to run it first.']);
+  assert.equal(upstreamWithoutResult(state, 'tidy'), 'Extract');
+  assert.equal(upstreamWithoutResult(state, 'extract'), null);
+
+  Object.assign(node(state, 'extract'), runDone(1000));
+  const ready = planRunTo(state, 'tidy', context, { onlyThis: true });
+  assert.deepEqual(actions(ready), [['tidy', 'run']]);
+  assert.deepEqual(ready.problems, []);
+  assert.equal(upstreamWithoutResult(state, 'tidy'), null);
+  assert.equal(ready.steps[0].inputRows, 1000);
+});
+
+test('when everything is current, rerun runs the target again and reuses the rest', () => {
+  const state = chain();
+  Object.assign(node(state, 'extract'), runDone(1000));
+  Object.assign(node(state, 'tidy'), processDone(1000));
+  assert.equal(planRunTo(state, 'tidy', context).toRun, 0);
+  const again = planRunTo(state, 'tidy', context, { rerun: true });
+  assert.deepEqual(actions(again), [['extract', 'reuse'], ['tidy', 'rerun']]);
+  assert.equal(again.toRun, 1);
+  const run = planRunTo(state, 'extract', context, { rerun: true, onlyThis: true });
+  assert.deepEqual(actions(run), [['extract', 'rerun']]);
+  assert.equal(run.steps[0].calls, 1000);
 });

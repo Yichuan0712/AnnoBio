@@ -245,35 +245,44 @@ function previewStop(job, ctx) {
 
 const formatRows = (rows) => (rows == null ? 'unknown rows' : `${rows.toLocaleString('en-US')} row${rows === 1 ? '' : 's'}`);
 
-/** run_to: the plan for a Run or Process, as the user's Run to here shows it (runPlan.js). */
+/**
+ * run_to: the plan for a Run or Process, as the user's Execute to here (or, with only_this, Execute
+ * this step) shows it (runPlan.js). When everything up to it is current, it runs the step again.
+ */
 function previewRunTo(job, ctx) {
   const target = ctx.state.nodes.find((n) => n.nodeId === String(job.node || '').trim());
   if (!target) fail(`node "${job.node}" is not a node on the canvas.`);
   if (!['run', 'process'].includes(target.type)) fail(`node "${job.node}" is a ${target.type}; run_to works on a Run or a Process.`);
-  const plan = planRunTo(ctx.state, target.nodeId, { settings: ctx.settings, credentialIds: new Set(ctx.credentialsById.keys()) });
+  const context = { settings: ctx.settings, credentialIds: new Set(ctx.credentialsById.keys()) };
+  let planOptions = { onlyThis: job.only_this === true };
+  let plan = planRunTo(ctx.state, target.nodeId, context, planOptions);
+  if (!plan.problems.length && !plan.toRun) {
+    planOptions = { ...planOptions, rerun: true };
+    plan = planRunTo(ctx.state, target.nodeId, context, planOptions);
+  }
   if (plan.problems.length) fail(plan.problems.map((problem) => problem.message).join(' '));
   const name = plan.steps.at(-1)?.name || nodeTitle(target);
-  if (!plan.toRun) fail(`Everything up to "${name}" already has current results; nothing to run.`);
   const reused = plan.steps.filter((step) => step.action === 'reuse');
   const running = plan.steps.filter((step) => step.action !== 'reuse');
   const lines = [
     `Inputs: ${plan.inputs.map((input) => `${input.name} (${formatRows(input.rows)})`).join(', ') || 'none'}`,
     ...(reused.length ? [`Uses existing results: ${reused.map((step) => step.name).join(', ')}`] : []),
-    `Runs, in order: ${running.map((step) => `${step.name}${step.action === 'resume' ? ' (continues)' : ''}`).join(' → ')}`,
+    `Runs, in order: ${running.map((step) => `${step.name}${step.action === 'resume' ? ' (continues)' : step.action === 'rerun' ? ' (again; its result is current)' : ''}`).join(' → ')}`,
     plan.calls == null ? 'Model calls: unknown until the steps before them have run.' : `Model calls: ${plan.calls.toLocaleString('en-US')}`,
   ];
-  return { kind: 'run_to', title: `Run to "${name}"`, nodeIds: running.map((step) => step.nodeId), lines, usd: null, calls: plan.calls,
-    priced: false, targetId: target.nodeId, planSteps: plan.steps.map(({ nodeId, action }) => ({ nodeId, action })) };
+  return { kind: 'run_to', title: `${planOptions.onlyThis ? 'Execute' : 'Execute to'} "${name}"`, nodeIds: running.map((step) => step.nodeId), lines, usd: null, calls: plan.calls,
+    priced: false, targetId: target.nodeId, planOptions, planSteps: plan.steps.map(({ nodeId, action }) => ({ nodeId, action })) };
 }
 
 async function executeRunTo(item, env, ctx, { signal, onStatus, approvedSteps }) {
   const options = {
     context: { settings: ctx.settings, credentialIds: new Set(ctx.credentialsById.keys()) },
+    planOptions: item.planOptions || {},
     signal,
     approvedPlan: { steps: approvedSteps || item.planSteps },
     onStep: (step) => onStatus(`${step.name}: ${step.status}`),
   };
-  // The canvas keeps a record of it in Executions, as for the user's Run to here.
+  // The canvas keeps a record of it in Executions, as for the user's Execute.
   const task = env.runPlanned ? await env.runPlanned(item.targetId, options) : await runTo(item.targetId, env, options);
   const lines = task.steps.filter((step) => step.status !== 'reused').map((step) => `${step.name}: ${step.status}${step.errorRows ? `, ${step.errorRows} rows with errors` : ''}${step.message && step.status !== 'completed' ? ` (${step.message})` : ''}`);
   return { status: task.status, lines: task.error ? [`${item.title}: ${task.error}`, ...lines] : lines };

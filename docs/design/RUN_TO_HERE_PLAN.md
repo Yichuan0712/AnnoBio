@@ -14,6 +14,7 @@
 | 4 | 运行记录页签（Executions） | ✅ 已完成（2026-10-16，未提交） |
 | 5 | "需要更新"的显示 | ✅ 已完成（2026-10-16，未提交） |
 | 6 | 删除整条运行的旧入口 | ✅ 已完成（2026-10-16，未提交） |
+| 7 | 改名 Execute，加"只跑这一步"，都已是当前结果时重跑 | ✅ 已完成（2026-10-16，未提交） |
 
 本文写给接手实现的人。每一步写了：要先读的代码、要改的文件和函数、具体做法、测试和验收标准。行号是 2026-10-16 的，代码改过以后以函数名为准。
 
@@ -471,6 +472,51 @@ export async function runTo(targetId, env, options) {}
   - 底部页签是 Current Pipeline | Prompt Version | Executions；
   - 控制台没有错误。
 - **已知问题**：示例项目 `examples/Kinase–Substrate Evidence Curation - direct connections.yc` 里存着一段旧的 Agent 对话，说 Agent 能运行、停止整条 Pipeline，现在已经过时。这是项目文件里的聊天内容，不是界面文字，没有改。
+
+## 第 7 步：改名 Execute，加"只跑这一步"，都已是当前结果时重跑 ✅
+
+用户在第 6 步之后提的（2026-10-16）：
+
+- 界面上的 "Run to here" 改叫 **Execute to here**。
+- 右键菜单加 **Execute this step**，只跑这一步。
+- 如果这一步和它前面都已经是当前结果，原来会提示"都已是当前结果"、什么也不跑。现在改成重跑这一步。
+
+**实现记录（2026-10-16）**
+
+- **规划（`runPlan.js`）**：
+  - `planRunTo(state, targetId, context, { onlyThis, rerun })` 多了第四个参数，返回值多了 `scope`（`'to-here'` 或 `'this'`）。
+  - `onlyThis` 时不把上游步骤放进计划。上游没有当前结果就报问题：`"X" has no current result. Use Execute to here to run it first.`
+  - `rerun` 时，目标步骤如果有当前结果，动作是 `'rerun'`（会跑），上游照常复用。
+  - 新增 `upstreamWithoutResult(state, nodeId)`，返回这一步读的步骤里第一个没有当前结果的名字。菜单用它决定 Execute this step 能不能点。
+- **执行（`runTo.js`）**：
+  - `runTo` 多了 `planOptions`，用同样的选项规划。
+  - 每一步开始前检查"能不能跑"，改用 `onlyThis` 的子计划，不用再单独判断上游。
+  - 重跑走原来的单步执行：Run 节点在 `startRunNode` 里本来就会把已完成的结果重跑（`rerunCompleted`）。
+- **画布（`workflowCanvas.js`）**：
+  - 右键菜单的组名从 Run 改为 **Execute**，里面有两项：
+    - **Execute to here**：这一步在运行中时禁用。
+    - **Execute this step**：运行中，或它读的步骤没有当前结果时禁用，提示框写原因。
+  - `runToHere(nodeId, { onlyThis })`：规划结果是零步要跑时，用 `rerun: true` 再规划一次。只有一步要跑时照旧不弹计划窗口。
+  - 提示框标题改为 Execute to here / Execute this step。
+  - `runPlanned` 多了 `planOptions`，用它建 Executions 记录、传给 `runTo`。
+  - 节点窗口里的 Run / Run code 按钮不变。它们只在输入没有结果时调用 `runToHere`。
+- **记录和窗口**：
+  - Executions 记录多了 `scope`。
+  - 记录和计划窗口的标题写成 `Execute to "X"` 或 `Execute "X"`。
+  - 重跑的步骤在计划里注明 "runs again: it already has a current result"。
+- **Agent**：
+  - `run_nodes` 的 `run_to` 多了 `only_this`。都已是当前结果时也重跑，卡片标题和用户的一样，重跑的步骤注明 "(again; its result is current)"。
+  - 已同步：`agentTools.js`、`backend/agent/system_prompt.py`、`pipeline-building.md`。
+- **文档**：`docs/PIPELINE_GUIDE.md` 的 "Run to here" 一节改写为 "Execute"，`docs/AGENT_CAPABILITIES.md` 同步更新。
+- **测试**：新增和更新的测试在 `runPlan.test.mjs`、`runTo.test.mjs`、`runPlanDialog.test.mjs`、`executionRecords.test.mjs`。前端 391 项、后端 148 项全过，构建通过。
+- **顺带修的问题**：画布的 `escapeHtml` 不转义双引号，放进 `title="…"` 时，遇到带引号的提示（如 `"UniProt search" has no …`）会被截断成空。新增了 `escapeAttr`，右键菜单的提示都改用它。
+- **界面实测（网页版，示例项目）**：
+  - 右键菜单的 Execute 组有两项。上游有当前结果时两项都能点；"Combine UniProt candidates" 的上游需要更新时，Execute this step 是灰的，提示写 `"UniProt search" has no current result yet. Use Execute to here.`
+  - 在都已是当前结果的 Tidy 上点 Execute this step：不弹窗，直接重跑。Executions 记录为 `Execute "Tidy extracted pairs"`。
+  - 在 Check UniProt availability 上点 Execute to here：复用前两步，跑这一步。它有当前结果后再点一次，会重跑，也不弹窗。
+  - Run 步骤在没有可用模型时，重跑会弹出计划窗口，显示 "runs again" 和缺模型的问题，Start 是灰的。
+  - 控制台没有错误。
+- **要知道的行为**：重跑一步之后，它下游的步骤都会变成 Needs update，即使输出一模一样。这是因为下游的 History 签名里记的是上游那条记录的 id，不是内容。
 
 ## 以后再做
 

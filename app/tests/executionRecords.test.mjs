@@ -18,7 +18,7 @@ const plan = {
 test('a new record lists the plan, reused steps marked as such', () => {
   const record = newExecutionRecord(plan, { id: 'r1', now: 5, source: 'agent' });
   assert.deepEqual(record, {
-    id: 'r1', createdAt: 5, updatedAt: 5, source: 'agent', targetNodeId: 'score', targetName: 'Score', status: 'running',
+    id: 'r1', createdAt: 5, updatedAt: 5, source: 'agent', targetNodeId: 'score', targetName: 'Score', scope: 'to-here', status: 'running',
     inputs: [{ nodeId: 'docs', name: 'Docs', rows: 10 }],
     steps: [
       { nodeId: 'extract', name: 'Extract', kind: 'run', action: 'reuse', status: 'reused' },

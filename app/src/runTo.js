@@ -31,16 +31,17 @@ export function samePlanSteps(a, b) {
 /**
  * @param {string} targetId
  * @param {object} env the canvas workspace (stepExecution.js)
- * @param {{ context: { settings?: object, credentialIds?: Set<string> }, signal?: AbortSignal,
- *   approvedPlan?: object, onStep?: (step: object, task: object) => void }} options
+ * @param {{ context: { settings?: object, credentialIds?: Set<string> }, planOptions?: object, signal?: AbortSignal,
+ *   approvedPlan?: object, onStep?: (step: object, task: object) => void }} options planOptions: as for
+ *   planRunTo (Execute this step, run again)
  *   approvedPlan: the plan the user confirmed; the run is refused when the canvas now plans otherwise
  * @returns {Promise<{ status: 'completed'|'failed'|'stopped', error?: string, plan: object,
  *   steps: Array<{ nodeId, name, kind, action, status: 'reused'|'pending'|'running'|'completed'|'failed'|'stopped'|'not-started',
  *     recordId?: string, errorRows?: number, message?: string }> }>}
  */
-export async function runTo(targetId, env, { context = {}, signal, approvedPlan, onStep = () => {} } = {}) {
+export async function runTo(targetId, env, { context = {}, planOptions = {}, signal, approvedPlan, onStep = () => {} } = {}) {
   const state = env.getCanvasState();
-  const plan = planRunTo(state, targetId, context);
+  const plan = planRunTo(state, targetId, context, planOptions);
   const task = {
     status: 'completed',
     plan,
@@ -64,9 +65,8 @@ export async function runTo(targetId, env, { context = {}, signal, approvedPlan,
         break;
       }
       // What the step reads must be there now: its upstream steps in this plan have finished.
-      const ready = planRunTo(env.getCanvasState(), step.nodeId, context);
-      const blocker = ready.problems[0]?.message
-        || (ready.steps.some((other) => other.nodeId !== step.nodeId && other.action !== 'reuse') ? 'Its upstream steps have no current result.' : '');
+      const ready = planRunTo(env.getCanvasState(), step.nodeId, context, { onlyThis: true });
+      const blocker = ready.problems[0]?.message || '';
       if (blocker) {
         Object.assign(step, { status: 'failed', message: blocker });
         task.status = 'failed';

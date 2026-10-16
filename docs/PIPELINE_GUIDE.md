@@ -29,13 +29,20 @@ does not follow the step it was saved from.
 In Current Pipeline, choose any Prompt version or Run alternative shown by the route. A Process's
 branches are drawn as lanes; a branch nothing reads is an empty lane.
 
-## Run to here
+## Execute
 
-**Run to here** (a step's right-click menu, or its Run button when an input has no result yet) runs
-that step and every step before it that has no current result, reusing the steps that have one. A
-plan shows first: the Datasets it reads, the results it reuses and the steps it runs, in order. To
-run a whole pipeline, run to its last step. The **Executions** tab lists these runs; a running one
-can be stopped, and a stopped or failed one resumed. Each step's result goes into its History.
+A Run or Process step's right-click menu has two ways to run it:
+
+- **Execute to here** (also what its Run button does when an input has no result yet) runs that step
+  and every step before it that has no current result, reusing the steps that have one. A plan shows
+  first: the Datasets it reads, the results it reuses and the steps it runs, in order. To run a whole
+  pipeline, execute to its last step.
+- **Execute this step** runs only that step. It is unavailable while a step it reads has no current
+  result; use Execute to here then.
+
+When the step and everything before it already have current results, either one runs the step again.
+The **Executions** tab lists these runs; a running one can be stopped, and a stopped or failed one
+resumed. Each step's result goes into its History.
 
 A step whose inputs changed since its last run shows **Needs update**; its window still shows the
 earlier result. Running it, or changing its inputs back, clears the mark.
