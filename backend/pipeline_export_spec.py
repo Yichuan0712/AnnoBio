@@ -34,17 +34,8 @@ def compile_and_export(*, canvas_state, route, name, credentials=None, default_c
         errors = [f'{d["node_name"] or "Pipeline"}: {d["message"]}'
                   for d in result["diagnostics"] if d["severity"] == "error"]
         raise render.PipelineExportError("\n".join(errors))
-    # Only model binding needs the original nodes. Renderers receive the spec, not canvas data.
-    nodes = {n.get("nodeId"): n for n in canvas_state["nodes"] if isinstance(n, dict)}
-    by_id = {c.get("id"): c for c in credentials or [] if isinstance(c, dict)}
-    models = {}
-    for job in result["spec"]["jobs"]:
-        if job["type"] == "llm":
-            rid = job["config"]["model_binding"]["run_node_id"]
-            models[job["id"]] = render._credential_config(
-                nodes[rid], by_id, default_credential_id, job["config"]["settings"]["run_max_tokens"])
-            models[job["id"]]["max_retries"] = job["config"]["settings"]["run_max_retries"]
-    return export_compiled_pipeline(spec=result["spec"], models=models, name=name,
+    # Credential arguments remain accepted for existing callers; exports use placeholders only.
+    return export_compiled_pipeline(spec=result["spec"], name=name,
                                     author_name=author_name, generated_at=generated_at, force_graph=force_graph)
 
 
@@ -74,11 +65,11 @@ def _multi_input_data_markdown(inputs):
     return "\n".join(lines)
 
 
-def export_compiled_pipeline(*, spec, models, name, author_name="", generated_at=None, force_graph=False):
-    """Consume compiler output and non-secret resolved models; no canvas is needed.
+def export_compiled_pipeline(*, spec, name, models=None, author_name="", generated_at=None, force_graph=False):
+    """Consume compiler output and use example model settings; no canvas is needed.
 
     This is an internal API for trusted compiler output, not an arbitrary spec upload endpoint.
-    Capability restrictions here do not change compiler validity (e.g. multi-input graphs).
+    The legacy models argument is ignored so saved model details never enter generated settings.
     """
     if spec.get("format") != "annobio.pipeline-spec" or spec.get("format_version") != 2:
         raise render.PipelineExportError("Unsupported compiled PipelineSpec version.")
@@ -136,10 +127,10 @@ def export_compiled_pipeline(*, spec, models, name, author_name="", generated_at
                 "primary_input": data_id[job["inputs"]["df"]],
                 "input_aliases": {data_id[aid]: alias for alias, aid in job["inputs"].items()}, "outputs": outputs})
         else:
-            if cfg["unresolved_settings"] or jid not in models:
-                raise render.PipelineExportError(f'Prompt "{title}" needs resolved model configuration and Run settings.')
-            # A whitelist protects the archive even if an internal caller hands us credentials.
-            model = {key: models[jid].get(key) for key in ("engine", "provider", "model", "base_url", "max_tokens", "max_retries")}
+            if cfg["unresolved_settings"]:
+                raise render.PipelineExportError(f'Prompt "{title}" needs resolved Run settings.')
+            model = render._example_model_config(cfg["settings"]["run_max_tokens"],
+                                                 cfg["settings"]["run_max_retries"])
             title, prompt_config, module_source = render._prompt_module(title, cfg, model, metadata)
             module = f"prompt_{number:02d}_{render._identifier(title, 'prompt')}"
             step = {"type": "prompt", "id": source[jid]["node_ids"][0], "run_id": source[jid]["node_ids"][1],
@@ -187,7 +178,7 @@ def export_compiled_pipeline(*, spec, models, name, author_name="", generated_at
     if uses_llm:
         files.extend([
             render.ExportedFile("README.md", render._readme(root, engine, metadata)),
-            render.ExportedFile(".env.example", render._env_example(engine, first_model["model"], first_model["base_url"])),
+            render.ExportedFile(".env.example", render._env_example()),
             render.ExportedFile("prompt/__init__.py", render._package_init("User-authored Prompt modules.", metadata)),
             render.ExportedFile("engine/__init__.py", render._engine_init_module(engine, metadata)),
             render.ExportedFile("engine/base.py", render._engine_base_module(metadata)),

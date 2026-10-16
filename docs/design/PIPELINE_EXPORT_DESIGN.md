@@ -4,7 +4,8 @@ Implementation update (2026-10-01): export now compiles the selected route with
 `pipeline_compile.py`, then renders PipelineSpec through `pipeline_export_spec.py`.
 Linear and DAG code layouts share the compiler. The archive retains `route`/`graph`
 and adds a code-only `execution` spec to `pipeline.json`. Multi-input and Process-only
-export remain explicit capability limitations. See [PipelineSpec v1](PIPELINE_SPEC_V1.md).
+routes are supported. Model configuration is an editable placeholder example throughout
+the archive; saved app models and custom API URLs are not exported. See [PipelineSpec v1](PIPELINE_SPEC_V1.md).
 
 ## Goal
 
@@ -107,8 +108,8 @@ can continue to consume an older archive by checking `format_version`.
         "fields": [{"key": "site", "type": "str"}]
       },
       "model": {
-        "provider": "openai",
-        "model": "gpt-4.1-mini",
+        "provider": "",
+        "model": "YOUR_PROVIDER/YOUR_MODEL",
         "base_url": ""
       }
     }
@@ -170,7 +171,8 @@ A selected Prompt version and its selected Run become one executable Prompt step
 - Legacy Runs with no saved mapping may infer `{field} -> field` only when exactly one Dataset
   column has that name (case-insensitive); ambiguous matches still require an explicit mapping.
 - The structured output schema and `single`/`table` return shape are preserved.
-- Provider, model, and optional base URL may be exported as non-secret defaults.
+- Model configuration uses `YOUR_PROVIDER/YOUR_MODEL`, an empty provider and base URL, and the
+  `litellm` example engine. Saved model names, providers, and custom API URLs are not copied.
 - API keys and credential IDs are never exported. The README and `.env.example` describe the
   environment variables the user must set.
 - Per-Run max tokens, retries and concurrency are resolved during compilation. `--concurrency`

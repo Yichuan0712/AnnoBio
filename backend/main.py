@@ -669,8 +669,6 @@ def export_python_pipeline(request: Request, body: PipelineExportRequest):
             route=body.route,
             input_dataset_ids=body.input_dataset_ids,
             name=body.name,
-            credentials=_load_credentials(),
-            default_credential_id=str(settings.get("default_run_credential_id") or ""),
             run_max_tokens=int(settings.get("run_max_tokens") or DEFAULT_SETTINGS["run_max_tokens"]),
             run_concurrency=int(settings.get("run_concurrency") or DEFAULT_SETTINGS["run_concurrency"]),
             run_max_retries=int(settings.get("run_max_retries", DEFAULT_SETTINGS["run_max_retries"])),

@@ -17,7 +17,7 @@ class PipelineExportApiTests(unittest.TestCase):
             route=[{"type": "dataset", "dataset_node_id": "start"}], input_dataset_ids=["start"])
         request = Request({"type": "http", "headers": []})
         with patch.object(main, "_load_settings", return_value={"run_max_retries": 0}), \
-             patch.object(main, "_load_credentials", return_value=[]), \
+             patch.object(main, "_load_credentials", side_effect=AssertionError("Export must not read saved credentials")), \
              patch.object(main, "build_pipeline_archive", return_value=("example.zip", b"zip")) as build:
             response = main.export_python_pipeline(request, body)
         self.assertEqual(response.body, b"zip")
