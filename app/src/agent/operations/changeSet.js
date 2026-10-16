@@ -23,6 +23,7 @@ import { stepOutputTable } from '../../stepOutputs.js';
 import { parseScoreMappingBundle, serializeScoreMappingBundle } from '../../scoreMappingBundle.js';
 import { nodeTitle, processOutputsOf, runResultsOf } from '../canvas/workflowNodeInspector.js';
 import { contentLocks } from '../../contentLocks.js';
+import { validateAgentScoreTree } from './scoreRules.js';
 
 export class ChangeSetError extends Error {
   constructor(message, index = null) {
@@ -450,6 +451,14 @@ export function planChangeSet(state, operations, ctx) {
     const inputColumns = runInput ? (sourceColumns(runInput) || []).map((c) => c.name) : [];
     const outputKeys = (prompt?.outputFormat?.fields || []).map((f) => f.key);
     const gtColumns = datasetColumns(groundTruth).map((c) => c.name);
+    if (op.rule_tree !== undefined) {
+      if (['pairing', 'comparison', 'combine'].some((key) => op[key] !== undefined) || clean(op.match_code)) fail('Use rule_tree alone, without flat rules or match_code.');
+      let mapping;
+      try { mapping = validateAgentScoreTree(op.rule_tree, { inputColumns, outputKeys, gtColumns }); }
+      catch (error) { fail(error.message); }
+      return { mapping, lines: ['Replace the complete Evaluate rule tree, preserving its AND/OR groups.'],
+        diffs: [{ label: 'Evaluate rule tree', before: '', after: JSON.stringify(mapping, null, 2) }] };
+    }
     const gtList = (value, where) => {
       const cols = (Array.isArray(value) ? value : [value]).map(clean).filter(Boolean);
       if (!cols.length) fail(`${where} needs ground_truth_columns.`);
@@ -799,6 +808,7 @@ export function planChangeSet(state, operations, ctx) {
     },
 
     add_score(op) {
+      if (op.rule_tree !== undefined && clean(op.match_code)) fail('Use rule_tree or match_code, not both.');
       const run = resolve(op.run, 'run', ['run']);
       const groundTruth = resolve(op.ground_truth, 'ground_truth', ['dataset']);
       const name = uniqueName(clean(op.name) || 'Evaluate', takenNames('score'));
@@ -807,6 +817,7 @@ export function planChangeSet(state, operations, ctx) {
         scoreGroundTruthId: groundTruth.nodeId, nodeOrigin: 'agent',
       });
       let lines;
+      let ruleDiffs = [];
       if (clean(op.match_code)) {
         if (!/^\s*def\s+match\s*\(/m.test(op.match_code)) fail('match_code must define match(input_row, output_row, gt_row).');
         node.scoreActiveMatchMode = 'code';
@@ -816,13 +827,14 @@ export function planChangeSet(state, operations, ctx) {
         const bundle = scoreBundle(op, run, groundTruth);
         node.scoreMapping = bundle.mapping;
         lines = bundle.lines;
+        ruleDiffs = bundle.diffs || [];
       }
       if (op.review_method != null) fail('An Optimize node uses the review method from Settings → Optimize defaults; review_method cannot be set per Evaluate.');
       connect(run.nodeId, node.nodeId, 'run-to-score');
       registerRef(op, node.nodeId);
       return { kind: 'add', type: 'score', title: `New Evaluate "${name}"`, nodeIds: [node.nodeId],
         lines: [`Run "${nodeTitle(run)}" vs ground truth "${nodeTitle(groundTruth)}"`, ...lines],
-        diffs: node.scoreMatchCode ? [{ label: 'Match code', before: '', after: node.scoreMatchCode }] : [] };
+        diffs: node.scoreMatchCode ? [{ label: 'Match code', before: '', after: node.scoreMatchCode }] : ruleDiffs };
     },
 
     // Change what one input reads, as dragging a line onto that input on the canvas does.
@@ -891,7 +903,7 @@ export function planChangeSet(state, operations, ctx) {
         dataset: ['name', 'note', 'columns', 'rows', 'row_ids'],
         process: ['name', 'code', 'primary_input', 'primary_branch'],
         run: ['name', 'prompt', 'input', 'input_branch', 'input_mapping'],
-        score: ['name', 'ground_truth', 'pairing', 'comparison', 'combine', 'match_code'],
+        score: ['name', 'ground_truth', 'pairing', 'comparison', 'combine', 'rule_tree', 'match_code', 'exclude_row_keys', 'include_row_keys'],
         sampler: ['name', 'sampling', 'size', 'size_unit', 'rows'],
         promptReview: ['name'],
       }[node.type] || [];
@@ -1002,6 +1014,34 @@ export function planChangeSet(state, operations, ctx) {
       }
 
       if (node.type === 'score') {
+        if (['exclude_row_keys', 'include_row_keys'].some((key) => key in set)) {
+          if (keys.some((key) => !['name', 'exclude_row_keys', 'include_row_keys'].includes(key))) fail('Change row inclusion separately from Evaluate inputs or rules.');
+          const excluded = { ...parseJson(node.scoreRowExcludedFromScoring, {}) };
+          const run = next.nodes.find((item) => next.connections.some((edge) => edge.type === 'run-to-score' && edge.fromId === item.nodeId && edge.toId === node.nodeId));
+          const gt = next.nodes.find((item) => item.nodeId === node.scoreGroundTruthId);
+          const validKeys = new Set([
+            ...(gt ? normalizeDatasetContent(gt.datasetContent || {}).rows.map((_, index) => String(index)) : []),
+            ...runResultsOf(run).map((row) => `run:${row.row_index}`),
+          ]);
+          for (const key of ['exclude_row_keys', 'include_row_keys']) {
+            if (!(key in set)) continue;
+            if (!Array.isArray(set[key]) || set[key].some((value) => !validKeys.has(String(value)))) fail(`${key} must contain existing GT indices ("0", "1", ...) or Run row keys ("run:0", ...).`);
+          }
+          const exclude = (set.exclude_row_keys || []).map(String);
+          const include = (set.include_row_keys || []).map(String);
+          if (exclude.some((key) => include.includes(key))) fail('The same row cannot be included and excluded.');
+          for (const key of exclude) excluded[key] = true;
+          for (const key of include) delete excluded[key];
+          node.scoreRowExcludedFromScoring = excluded;
+          const describeKey = (key) => key.startsWith('run:') ? `Run result row ${Number(key.slice(4)) + 1}` : `GT row ${Number(key) + 1}`;
+          if (exclude.length) lines.push(`Exclude from scoring and future Optimize inputs: ${exclude.map(describeKey).join(', ')}.`);
+          if (include.length) lines.push(`Re-include in scoring and future Optimize inputs: ${include.map(describeKey).join(', ')}.`);
+          if (node.reviewResult) {
+            const saved = parseJson(node.reviewResult, {});
+            delete saved.comparison_rows;
+            node.reviewResult = JSON.stringify(saved);
+          }
+        }
         if ('ground_truth' in set) {
           const gt = resolve(set.ground_truth, 'ground_truth', ['dataset']);
           // As connecting a ground truth on the canvas: rules on columns it lacks are dropped.
@@ -1020,22 +1060,30 @@ export function planChangeSet(state, operations, ctx) {
             lines.push('Match with rules instead of code');
           }
         }
-        if ('pairing' in set || 'comparison' in set || 'combine' in set) {
-          if (!('comparison' in set)) fail('Changing score rules needs the full comparison list.');
+        if ('rule_tree' in set || 'pairing' in set || 'comparison' in set || 'combine' in set) {
+          if (!('comparison' in set) && !('rule_tree' in set)) fail('Changing score rules needs the full comparison list or rule_tree.');
+          const previous = parseScoreMappingBundle(node.scoreMapping);
+          if (!('rule_tree' in set) && [previous.inputRoot, previous.outputRoot].some((root) => root.children.some((child) => child.type === 'group'))) {
+            fail('This Evaluate has nested groups. Read rules.ruleTree and edit it with rule_tree to preserve its logic.');
+          }
           const run = resolve(next.connections.find((c) => c.type === 'run-to-score' && c.toId === node.nodeId)?.fromId, 'the score\'s run', ['run']);
           const gt = resolve(node.scoreGroundTruthId, 'the score\'s ground truth', ['dataset']);
           const bundle = scoreBundle(set, run, gt);
+          if (!('rule_tree' in set) && !('pairing' in set)) {
+            bundle.mapping.input = previous.inputRoot;
+          }
+          diffs.push({ label: 'Evaluate rules', before: JSON.stringify(node.scoreMapping || {}, null, 2), after: JSON.stringify(bundle.mapping, null, 2) });
           node.scoreMapping = bundle.mapping;
           delete node.scoreActiveMatchMode;
           lines.push(...bundle.lines);
         }
-        if (['ground_truth', 'match_code', 'pairing', 'comparison', 'combine'].some((k) => k in set) && node.reviewResult) {
+        if (['ground_truth', 'match_code', 'pairing', 'comparison', 'combine', 'rule_tree'].some((k) => k in set) && node.reviewResult) {
           lines.push('Its saved comparison is recomputed from the new settings.');
           const saved = parseJson(node.reviewResult, {});
           delete saved.comparison_rows;
           node.reviewResult = JSON.stringify(saved);
         }
-        if (['ground_truth', 'match_code', 'pairing', 'comparison', 'combine'].some((key) => key in set)) {
+        if (['ground_truth', 'match_code', 'pairing', 'comparison', 'combine', 'rule_tree'].some((key) => key in set)) {
           delete node.scoreMatchResult;
           delete node.scoreMatchError;
           delete node.scoreMatchInterrupted;

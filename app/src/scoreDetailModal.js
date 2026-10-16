@@ -60,6 +60,7 @@ export {
   medicalConceptSource,
 };
 import { BACKEND_API_BASE } from './backendConfig.js';
+import { hasNodeExecution, registerNodeJob } from './nodeExecutionControl.js';
 import { prepareReviewBody, prepareAssets } from './runClient.js';
 import { getCurrentProjectId } from './currentProject.js';
 import { displayCell, isAssetCell } from './datasetContent.js';
@@ -1565,9 +1566,16 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
   let codeRunning = false;
   let codeCancelled = false;
   let codeCurrentJobId = null;
+  let codeJobControl = null;
   let lastCodeMatchError = String(node?.dataset?.scoreMatchError || '');
 
   function setCodeRunningUi(isRunning) {
+    if (isRunning && !codeJobControl) codeJobControl = registerNodeJob(node.dataset.nodeId, async (jobId) => {
+      codeCancelled = true;
+      const res = await fetch(`${API_BASE}/api/score/match/run/cancel/${jobId}`, { method: 'POST' });
+      if (!res.ok) throw new Error('Could not stop Evaluate matching.');
+    });
+    if (!isRunning) { codeJobControl?.release(); codeJobControl = null; }
     codeRunning = isRunning;
     if (node?.dataset) {
       if (isRunning) node.dataset.scoreMatchUiRunning = '1';
@@ -1721,7 +1729,7 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
   }
 
   async function startCodeMatchRun() {
-    if (node?.dataset?.scoreMatchAgentRunning === '1') {
+    if (node?.dataset?.scoreMatchAgentRunning === '1' || hasNodeExecution(node?.dataset?.nodeId)) {
       setCodeMatchError('Evaluate matching is already running from Agent Assistant.');
       return;
     }
@@ -1782,6 +1790,7 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
         return;
       }
       codeCurrentJobId = data.job_id;
+      await codeJobControl?.started(codeCurrentJobId);
       if (node?.dataset) node.dataset.scoreMatchInterrupted = '1';
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     } catch (e) {

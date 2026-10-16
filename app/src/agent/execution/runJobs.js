@@ -10,6 +10,8 @@ import { processPrimarySource, runInputSource, stepInputWaitingMessage, stepSour
 import { stepOutputTable } from '../../stepOutputs.js';
 import { buildCodeMatchInputs } from '../../scoreCodeRunClient.js';
 import { formatScoreMetrics } from '../canvas/scoreComparisonPrf.js';
+import { hasNodeExecution, nodeExecutionIdentity } from '../../nodeExecutionControl.js';
+import { reviewNeedsResume } from '../../executionResumeState.js';
 import {
   datasetContentOf,
   inspectWorkflowNode,
@@ -108,7 +110,7 @@ function previewRun(job, ctx) {
   if (problem) fail(`Run "${nodeTitle(run)}": ${problem}`);
   const credentialId = String(run.runCredentialId || ctx.settings.default_run_credential_id || '').trim();
   const credential = ctx.credentialsById.get(credentialId);
-  if (!credential) fail(`Run "${nodeTitle(run)}" has no usable model credential: choose one on the run or set a default Run model in Settings.`);
+  if (!credential) fail(`Run "${nodeTitle(run)}" has no usable model credential: set a default Run model in Settings.`);
 
   const input = runInputTable(ctx.state, run);
   const done = new Set(runResultsOf(run).map((r) => r?.input_row_index).filter((i) => typeof i === 'number'));
@@ -145,6 +147,7 @@ function previewRun(job, ctx) {
 
 function previewProcess(job, ctx) {
   const processNode = findNode(ctx.state, job.node, 'process', 'node');
+  if (processNode.processPending) fail(`Process "${nodeTitle(processNode)}" is already running.`);
   if (!/^\s*def\s+process\s*\(\s*df\b/m.test(String(processNode.dfCode || ''))) fail(`Process "${nodeTitle(processNode)}" does not define process(df).`);
   if (!String(ctx.settings.python_path || '').trim()) fail('No Python interpreter is set; the user has to choose one in Settings → Python first.');
   const inspection = inspectWorkflowNode(ctx.state, processNode.nodeId, {});
@@ -187,7 +190,11 @@ function previewScore(job, ctx) {
 }
 
 async function previewReview(job, ctx) {
-  const score = findNode(ctx.state, job.score, 'score', 'score');
+  const existing = job.kind === 'resume_review' ? findNode(ctx.state, job.review, 'promptReview', 'review') : null;
+  if (existing && (hasNodeExecution(existing.nodeId) || !reviewNeedsResume({ result: JSON.parse(existing.reviewResult || '{}'),
+    interrupted: existing.reviewInterrupted === true, streaming: existing.reviewPending === true }))) fail('This Optimize has no interrupted task to resume.');
+  const score = existing ? upstream(ctx.state, existing.nodeId, 'score-to-prompt-review') : findNode(ctx.state, job.score, 'score', 'score');
+  if (!score) fail('Optimize is not connected to an Evaluate node.');
   const run = upstream(ctx.state, score.nodeId, 'run-to-score');
   if (!run || !runResultsOf(run).length) fail(`Evaluate "${nodeTitle(score)}" has no run results to review.`);
   if (!score.scoreGroundTruthId) fail(`Evaluate "${nodeTitle(score)}" has no ground-truth dataset.`);
@@ -196,13 +203,13 @@ async function previewReview(job, ctx) {
   }
   const credentialId = String(score.reviewCredentialId || ctx.settings.default_review_credential_id || '').trim();
   const credential = ctx.credentialsById.get(credentialId);
-  if (!credential) fail('No usable Optimize model: the user has to set a default Optimize model in Settings (or on the score).');
+  if (!credential) fail('No usable Optimize model: set a default Optimize model in Settings.');
   const rows = await ctx.getScoreComparisonRows(score.nodeId);
   const failingInputs = new Set(rows.filter((r) => r?.matched !== true).map((r) => r?.input_row_index ?? r?.row_index)).size;
   const cap = Number(ctx.settings.review_max_failed_rows) || 30;
   const analysed = Math.min(failingInputs, cap);
   const lines = [
-    `Adds an Optimize node to Evaluate "${nodeTitle(score)}" and runs it (method: ${score.reviewMethod || ctx.settings.default_review_method || 'default'})`,
+    `${existing ? 'Resumes the existing Optimize' : 'Adds an Optimize node'} on Evaluate "${nodeTitle(score)}" (method: ${score.reviewMethod || ctx.settings.default_review_method || 'default'})`,
     `Model: ${credentialLabel(credential)}`,
     !rows.length
       ? 'The Evaluate node has no comparison rows yet (its Run or ground truth may be incomplete), so the Optimize may find nothing to fix.'
@@ -210,12 +217,52 @@ async function previewReview(job, ctx) {
       ? `Analyses ${analysed} failing input${analysed === 1 ? '' : 's'}${failingInputs > cap ? ` (of ${failingInputs}, capped in Settings)` : ''}: about one model call each plus a few to group issues and draft edits; the exact number depends on the method.`
       : 'Every row currently matches, so the review has little to work with.',
   ];
-  return { kind: 'review', title: `Optimize prompt using "${nodeTitle(score)}"`, nodeIds: [score.nodeId], lines, usd: null, calls: analysed, priced: false };
+  return { kind: existing ? 'resume_review' : 'review', title: `${existing ? 'Resume Optimize' : 'Optimize prompt'} using "${nodeTitle(score)}"`, nodeIds: [existing?.nodeId || score.nodeId], lines, usd: null, calls: analysed, priced: false };
+}
+
+function previewSuggestionOptimization(job, ctx) {
+  const review = findNode(ctx.state, job.review, 'promptReview', 'review');
+  if (review.reviewPending || hasNodeExecution(review.nodeId)) fail('This Optimize already has an active task.');
+  const result = JSON.parse(review.reviewResult || '{}');
+  if (result.supports_segment_optimization === false) fail('This method does not support suggestion-level optimization.');
+  const id = String(job.suggestion_id || '');
+  const suggestion = (result.suggestions || []).find((entry) => String(entry.suggestion_id) === id);
+  if (!suggestion || String(suggestion.source).toLowerCase() === 'assistant') fail('Choose an existing generated suggestion_id.');
+  if (result.verify_states?.[id] !== 'optimization') fail('Verify the suggestion first; it must have a completed verification that did not fully pass.');
+  const trials = Math.min(200, Math.max(4, Number(ctx.settings.optimization_max_trials) || 40));
+  return { kind: 'optimize_suggestion', title: `Optimize suggestion ${id} of "${nodeTitle(review)}"`, nodeIds: [review.nodeId],
+    lines: [`Searches wording variants for up to ${trials} trials, using target inputs and up to two regression inputs.`,
+      'Uses model calls. Appends a new unapplied suggestion; its quality must be verified separately.'],
+    trials, suggestionId: id, usd: null, calls: null, priced: false };
+}
+
+function previewStop(job, ctx) {
+  const node = ctx.state.nodes.find((entry) => entry.nodeId === job.node);
+  if (!node || !['run', 'process', 'score', 'promptReview'].includes(node.type)) fail('Stop needs a Run, Process, Evaluate or Optimize node.');
+  if (!hasNodeExecution(node.nodeId) && !node.runPending && !node.processPending && !node.scoreMatchPending && !node.reviewPending) fail('That node has no active task to stop.');
+  const taskId = ctx.getNodeTaskIdentity?.(node.nodeId) || nodeExecutionIdentity(node.nodeId);
+  if (!taskId) fail('This task is still starting. Refresh the workspace and prepare the stop request again when its job is registered.');
+  return { kind: 'stop', title: `Stop "${nodeTitle(node)}"`, nodeIds: [node.nodeId],
+    taskId,
+    lines: ['Requests cancellation of the active node task. Already issued model requests may finish first.'], usd: 0, calls: 0, priced: true };
+}
+
+function previewJob(job, ctx) {
+  switch (job?.kind) {
+    case 'run': return previewRun(job, ctx);
+    case 'process': return previewProcess(job, ctx);
+    case 'score': return previewScore(job, ctx);
+    case 'review': case 'resume_review': return previewReview(job, ctx);
+    case 'verify': return previewVerify(job, ctx);
+    case 'optimize_suggestion': return previewSuggestionOptimization(job, ctx);
+    case 'stop': return previewStop(job, ctx);
+    default: fail('Unknown job kind. Use run, process, score, review, resume_review, verify, optimize_suggestion or stop.');
+  }
 }
 
 function previewVerify(job, ctx) {
   const review = findNode(ctx.state, job.review, 'promptReview', 'review');
-  if (review.reviewPending) fail(`Optimize "${nodeTitle(review)}" is still running.`);
+  if (review.reviewPending || hasNodeExecution(review.nodeId)) fail(`Optimize "${nodeTitle(review)}" is still running.`);
   const result = JSON.parse(review.reviewResult || '{}');
   const suggestions = (result.suggestions || []).filter((s) => String(s?.source || '').toLowerCase() !== 'assistant');
   const wanted = (Array.isArray(job.suggestion_ids) ? job.suggestion_ids : []).map(String);
@@ -255,18 +302,13 @@ export async function previewRunRequest(request, env) {
   try {
     const jobs = Array.isArray(request?.jobs) ? request.jobs : [];
     if (!jobs.length) fail('jobs must list at least one job.');
-    const [settings, catalog] = await Promise.all([loadSettings(), loadCatalog()]);
+    const stopOnly = jobs.every((job) => job.kind === 'stop');
+    const [settings, catalog] = stopOnly ? [{}, new Map()] : await Promise.all([loadSettings(), loadCatalog()]);
     const ctx = { ...env, state: env.getCanvasState(), settings, catalog };
     const items = [];
     for (const [index, job] of jobs.entries()) {
       try {
-        const kind = String(job?.kind || '');
-        if (kind === 'run') items.push(previewRun(job, ctx));
-        else if (kind === 'process') items.push(previewProcess(job, ctx));
-        else if (kind === 'score') items.push(previewScore(job, ctx));
-        else if (kind === 'review') items.push(await previewReview(job, ctx));
-        else if (kind === 'verify') items.push(previewVerify(job, ctx));
-        else fail(`kind must be run, process, score, review or verify, not "${kind}".`);
+        items.push(await previewJob(job, ctx));
       } catch (error) {
         if (error instanceof RunRequestError) throw new RunRequestError(`Job ${index + 1}: ${error.message}`);
         throw error;
@@ -279,7 +321,9 @@ export async function previewRunRequest(request, env) {
       : priced
       ? `Estimated cost: about ${formatUsd(usd)}`
       : `Estimated cost: ${usd > 0 ? `at least ${formatUsd(usd)}; ` : ''}the rest cannot be priced in advance (reviews, verification, or models without OpenRouter pricing)`;
-    return { ok: true, items: items.map(({ kind, title, lines, nodeIds }) => ({ kind, title, lines, nodeIds })), total };
+    return { ok: true, items: items.map(({ kind, title, lines, nodeIds }) => ({ kind, title, lines, nodeIds })), total,
+      stopGuards: items.filter((item) => item.kind === 'stop').map((item) => ({ nodeId: item.nodeIds[0], taskId: item.taskId })),
+      projectIdentity: env.getAssetProjectId?.() ?? null };
   } catch (error) {
     if (error instanceof RunRequestError) return { ok: false, error: error.message };
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
@@ -372,7 +416,8 @@ async function executeProcess(item, env, { signal, onStatus }) {
 
 async function executeReview(item, env, { signal, onStatus, job }) {
   onStatus('Starting prompt optimization...');
-  const created = await env.createAndRunReviewNode({ scoreNodeId: item.nodeIds[0], name: job.name || '' });
+  const created = item.kind === 'resume_review' ? await env.resumeReviewNode(item.nodeIds[0])
+    : await env.createAndRunReviewNode({ scoreNodeId: item.nodeIds[0], name: job.name || '' });
   const reviewId = created.reviewNodeId;
   const outcome = await waitWhile(() => currentNode(env, reviewId)?.reviewPending === true, {
     signal,
@@ -384,11 +429,14 @@ async function executeReview(item, env, { signal, onStatus, job }) {
   });
   const inspection = await env.inspectNode(reviewId);
   const suggestions = inspection?.details?.suggestions || [];
+  const suggestionCount = inspection?.details?.suggestionCount ?? suggestions.length;
+  const complete = inspection?.found !== false && inspection?.details?.status === 'finished';
+  const status = outcome === 'stopped' ? 'stopped' : complete ? 'completed' : 'failed';
   return {
-    status: outcome === 'stopped' ? 'stopped' : 'completed',
+    status,
     reviewNodeId: reviewId,
     lines: [
-      `${item.title}: ${outcome === 'stopped' ? 'stopped by the user' : 'finished'}; Optimize node "${inspection?.title}" [${reviewId}] has ${suggestions.length} suggestion${suggestions.length === 1 ? '' : 's'}`,
+      `${item.title}: ${status === 'stopped' ? 'stopped by the user' : complete ? 'finished' : `did not complete (${inspection?.details?.status || 'node unavailable'})`}; Optimize node "${inspection?.title}" [${reviewId}] has ${suggestionCount} suggestion${suggestionCount === 1 ? '' : 's'}`,
       ...suggestions.slice(0, 8).map((s) => `  ${s.id}. ${s.name || 'Prompt edit'}: ${s.reason.slice(0, 160)}`),
     ],
   };
@@ -433,31 +481,42 @@ async function executeVerify(item, env, { onStatus }) {
  * Run the confirmed jobs in order. Stops at the first failure or when the user stops.
  * @returns {Promise<{status: 'completed' | 'failed' | 'stopped', results: string[]}>} the tool result
  */
-export async function executeRunRequest(request, env, { signal, onStatus = () => {} } = {}) {
+export async function executeRunRequest(request, env, { signal, onStatus = () => {}, approvedPreview } = {}) {
   // Re-validate against the canvas as it is now, which may have changed since the card was shown.
   const preview = await previewRunRequest(request, env);
   if (!preview.ok) return { status: 'failed', error: preview.error, results: [] };
-  const [settings, catalog] = await Promise.all([loadSettings(), loadCatalog()]);
+  if (approvedPreview && ((approvedPreview.projectIdentity ?? null) !== preview.projectIdentity
+    || JSON.stringify(approvedPreview.stopGuards || []) !== JSON.stringify(preview.stopGuards))) {
+    return { status: 'failed', error: 'The project or task to stop changed after the card was prepared. Prepare the request again.', results: [] };
+  }
+  const stopOnly = request.jobs.every((job) => job.kind === 'stop');
+  const [settings, catalog] = stopOnly ? [{}, new Map()] : await Promise.all([loadSettings(), loadCatalog()]);
   const ctx = { ...env, state: env.getCanvasState(), settings, catalog };
   const results = [];
   let status = 'completed';
   let finished = 0;
   for (const job of request.jobs) {
     let item;
-    if (job.kind === 'run') item = previewRun(job, ctx);
-    else if (job.kind === 'process') item = previewProcess(job, ctx);
-    else if (job.kind === 'score') item = previewScore(job, ctx);
-    else if (job.kind === 'review') item = await previewReview(job, ctx);
-    else item = previewVerify(job, ctx);
     let outcome;
     try {
+      if (signal?.aborted) { status = 'stopped'; break; }
+      item = await previewJob(job, ctx);
       if (item.kind === 'run') outcome = await executeRun(item, env, { signal, onStatus });
       else if (item.kind === 'process') outcome = await executeProcess(item, env, { signal, onStatus });
       else if (item.kind === 'score') outcome = await executeScore(item, env, { signal, onStatus });
-      else if (item.kind === 'review') outcome = await executeReview(item, env, { signal, onStatus, job });
-      else outcome = await executeVerify(item, env, { onStatus });
+      else if (item.kind === 'review' || item.kind === 'resume_review') outcome = await executeReview(item, env, { signal, onStatus, job });
+      else if (item.kind === 'stop') {
+        const guard = preview.stopGuards.find((entry) => entry.nodeId === item.nodeIds[0]);
+        if (guard?.taskId !== item.taskId) throw new Error('The task changed. Prepare the stop request again.');
+        await env.stopNodeTask(item.nodeIds[0]);
+        outcome = { status: 'completed', lines: [`${item.title}: cancellation requested; refresh the workspace to check when it stops.`] };
+      } else if (item.kind === 'optimize_suggestion') {
+        const result = await env.optimizeSuggestion({ reviewNodeId: item.nodeIds[0], suggestionId: item.suggestionId,
+          signal, maxTrials: item.trials, onProgress: ({ trial, trials }) => onStatus(`Optimizing suggestion: ${trial}/${trials} trials...`) });
+        outcome = { status: 'completed', lines: [`${item.title}: created suggestion ${result.suggestionId} after ${result.trials} trials. Verify the new suggestion before applying it.`] };
+      } else outcome = await executeVerify(item, env, { onStatus });
     } catch (error) {
-      outcome = { status: 'failed', lines: [`${item.title} failed: ${error instanceof Error ? error.message : String(error)}`] };
+      outcome = { status: signal?.aborted || error?.name === 'AbortError' ? 'stopped' : 'failed', lines: [`${item?.title || job.kind}: ${error instanceof Error ? error.message : String(error)}`] };
     }
     results.push(...outcome.lines);
     finished += 1;

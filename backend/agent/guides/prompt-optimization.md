@@ -16,6 +16,21 @@ Prompts are improved from evidence, not by rewriting them blind:
    reason names a real failure and the verification rows show the direction was right.
 7. Run and score the new version on the same Dataset, and compare with the previous version.
 
+Read an existing Optimize before starting another. If its status is interrupted, request `run_nodes`
+with kind `resume_review` and its `review` id; this resumes the existing node. An interrupted run is
+not a successful optimization, even when it has already produced some suggestions.
+
+`inspect_node` exposes paged `rowDiagnostics`, `dataRefinement`, `stages` and `suggestions`. Use its
+section, start_row and max_rows arguments to read more; the verification section also needs
+suggestion_id and returns per-row evidence. Read these results before explaining why an edit helps
+or whether the ground truth may be wrong.
+
+When a suggestion's verification did not fully pass (verifyState `optimization`) and the method
+supports it, request kind `optimize_suggestion` with review and suggestion_id. It uses the same
+wording search and sample selection as the card's Click to Optimize action, including up to two
+regression inputs. It appends a new unapplied suggestion; verify that candidate in a separate stage
+before applying it. Methods with supportsSuggestionOptimization false do not offer this action.
+
 Always compare versions on the same input Dataset and the same Evaluate rules; otherwise the difference is
 not attributable to the prompt.
 

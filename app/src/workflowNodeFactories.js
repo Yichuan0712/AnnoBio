@@ -72,6 +72,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     openPromptDetailModal,
     openRunDetailModal,
     startRunNode,
+    resumeReviewNode,
     openSamplerDetailModal,
     openDatasetDetailModal,
     openScoreDetailModal,
@@ -1019,21 +1020,8 @@ export function createWorkflowNodeFactories(deps = {}) {
       }
       async function onResumeReview() {
         try {
-          if (!scoreNode) throw new Error('This Optimize is no longer connected to an Evaluate node.');
-          const payload = await getPayload();
-          if (!payload?.prompt?.trim()) {
-            throw new Error('Could not rebuild the Optimize input. Check the upstream Prompt, Run, Evaluate, and ground truth.');
-          }
-          const credentialId = await resolveReviewCredentialId(scoreNode);
-          if (!credentialId) throw new Error('No Optimize model: set a default Optimize model in Settings.');
-          scoreNode.dataset.reviewCredentialId = credentialId;
-          await runReviewStart({
-            reviewNodeId: node.dataset.nodeId,
-            payload,
-            credentialId,
-            registerPendingReview,
-          });
-          return pendingReviews.has(node.dataset.nodeId) || pendingReviewNodeIds.has(node.dataset.nodeId);
+          await resumeReviewNode(node.dataset.nodeId);
+          return true;
         } catch (error) {
           showAlert(String(error?.message || error), { title: 'Optimize' });
           return false;

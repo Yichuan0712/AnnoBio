@@ -30,6 +30,18 @@ Run this job before requesting an Optimize node of an Evaluate node that uses co
 Choose the loosest comparison that still reflects correctness for the task. Too strict and formatting
 noise looks like model error; too loose and real errors pass.
 
+## Grouped rules and excluding rows
+
+For nested AND/OR rules, inspect `details.rules.ruleTree` and pass the complete edited `{v: 2, input,
+output}` as `rule_tree` to add_score or update. Keep every group, its `children`, its `ops` and the leaf
+`matchFlags`. Flat comparison/all/any is only for flat rules; it cannot represent grouped conditions.
+Inspecting the rule tree preserves the exact stored structure instead of just listing its leaves.
+
+To exclude a known invalid row, propose update with `exclude_row_keys`; use `include_row_keys` to bring
+it back. Use the exact `rowKey` from read_rows: zero-based GT keys such as "0", or unpaired Run keys such
+as "run:0". Change inclusion separately from rules or inputs. This updates metrics and the inputs of
+future Optimize runs; existing Optimize nodes retain the evidence they were created with.
+
 ## Reading results
 
 The Evaluate reports matched and unmatched rows, ground-truth rows with no Run row (gt_only), the pass rate

@@ -75,7 +75,11 @@ export const AGENT_TOOL_DEFINITIONS = [
   tool(
     'inspect_node',
     'Full configuration of one node: prompt text, inputs and output schema; dataset columns, a preview and where it came from (producedBy); process code, inputs (a dataset or a step output, with branch and alias), every input it could read under its df_<alias> (availableInputs), its branches and which steps read them; run input (a dataset or a step output), mapping, model and progress; what a run or process waits for (waitingFor); score rules and metrics; review suggestions with verification results; plus its connections, its ports (the dots on its edges: inputs with what each reads and why one cannot be changed, outputs with who reads them; connect and disconnect use these input ids) and any configuration problems. Run and Process nodes also include saved History records with readable input/output descriptions and currentHistoryRecordId.',
-    { node_id: NODE_ID },
+    { node_id: NODE_ID,
+      section: { type: 'string', enum: ['overview', 'diagnostics', 'data_refinement', 'stages', 'suggestions', 'verification'], description: 'Optimize details to read. Lists are paged; use verification with suggestion_id for per-row verification evidence.' },
+      suggestion_id: { type: 'string', description: 'For an Optimize verification section, the exact suggestion id.' },
+      start_row: START_ROW, max_rows: MAX_ROWS,
+    },
     ['node_id'],
   ),
   tool(
@@ -146,11 +150,12 @@ Operations ("op" plus the fields listed):
 - add_prompt: ref, name, note?, text (the prompt, with a {variable} for each input; {{ and }} write literal braces), input_types? {variable: text | image | pdf}, output {return_shape: single | table, fields [{key, type: str | float | list_str | list_float, description, examples?, allow_none? (boolean)}]}. Numeric examples are numbers; each list example is an array. allow_none corresponds to Allow None in the field editor. Field names must be unique (case-insensitive).
 - add_prompt_version: ref, prompt (source), name?, and what to change: text_edits [{old, new}] (each old is text that appears exactly once in the prompt; replaced in order) or text (the complete new prompt), input_types, output (only what changes: {return_shape} alone keeps the fields), note. Everything else is copied. Prefer this over editing a prompt that already has runs.
 - add_run: ref, prompt?, input? (a dataset, a run whose results it reads, or a process), input_branch (only for a process with several branches), input_mapping {prompt input: column of what it reads}, name?. Omit prompt/input to create an unconnected Run and connect its inputs later; input_mapping needs both inputs. Steps connect directly: read another step's output instead of saving it as a dataset first. A run or process without a result yet has no known columns: leave out input_mapping, run it, then set input_mapping with update. A process's branches are known once its code has been checked or it has run, so read a process added or rewritten in this proposal in a later one. It uses the model and settings in Settings → Run defaults. Not started until the user starts it.
-- add_score: ref, run, ground_truth (dataset), comparison [{field (prompt output key), ground_truth_columns, match?}], pairing? [{run_input_column (or "#" for row number), ground_truth_columns, match?}] to decide which ground-truth row belongs to which run row, combine? (all | any); or match_code defining match(input_row, output_row, gt_row) instead of rules. match: {ignore_case, ignore_symbols, ignore_whitespace, contains, semantic, embedding, rxnorm, mesh: booleans; numeric: exact | abs | rel | decimals, tolerance, decimals}.
+- add_score: ref, run, ground_truth (dataset), comparison [{field (prompt output key), ground_truth_columns, match?}], pairing? [{run_input_column (or "#" for row number), ground_truth_columns, match?}] to decide which ground-truth row belongs to which run row, combine? (all | any); or rule_tree for complete nested rules; or match_code defining match(input_row, output_row, gt_row) instead of rules. match: {ignore_case, ignore_symbols, ignore_whitespace, contains, semantic, embedding, rxnorm, mesh: booleans; numeric: exact | abs | rel | decimals, tolerance, decimals}.
+- rule_tree: the complete {v: 2, input, output} from inspect_node.details.rules.ruleTree. Each root/group is {type: "group", children: [rules or groups], ops: ["AND" | "OR", ...]}, one operator per adjacent child. A rule is {type: "rule", outputKey, gtColumns, matchType: "exact", matchFlags}. Input keys are [column], # or [#]; output keys are Prompt output fields. Preserve grouping and matchFlags when editing. Supply rule_tree instead of pairing/comparison/combine/match_code; never flatten a grouped tree to edit it.
 - save_run_results: ref, run, name?. Saves a run's results (input columns plus output fields), the same table its readers get, as a plain dataset that records the run and its current History record it came from. Only to freeze or hand-edit results: a dataset does not follow the run, and a step reading it starts a new pipeline. Fails if the run has no History record.
 - save_process_output: ref, process, branch? (needed when it has several), name?. Saves one output branch as a plain dataset that records the process, branch and current History record it came from. Only to freeze or hand-edit an output. Fails if the process has no History record.
 - apply_review: ref, review, suggestion_ids, name?. Creates a new prompt from the review's prompt with those suggestions applied.
-- update: node, set {field: value}. prompt: name, note, text_edits or text, input_types, output. dataset: name, note, columns, rows (including existing image/PDF cells), row_ids? (parallel to rows; existing IDs from read_rows, null for new rows). Omitted columns retain their types. process: name, code, primary_input, primary_branch. run: name, prompt, input, input_branch, input_mapping (with History enabled, changing these inputs selects a different result or a new run). score: name, ground_truth, comparison (+ pairing, combine), match_code. sampler: name, sampling, size, size_unit, rows (settings only before its first output). review: name. A Prompt or Dataset used in saved results is content-locked; a Sample output also locks its source Dataset. Only name and note can change; use add_prompt_version or duplicate_dataset instead. inspect_node includes contentLock. A Process's code stays editable; History keeps each run.
+- update: node, set {field: value}. prompt: name, note, text_edits or text, input_types, output. dataset: name, note, columns, rows (including existing image/PDF cells), row_ids? (parallel to rows; existing IDs from read_rows, null for new rows). Omitted columns retain their types. process: name, code, primary_input, primary_branch. run: name, prompt, input, input_branch, input_mapping (with History enabled, changing these inputs selects a different result or a new run). score: name, ground_truth, comparison (+ pairing, combine), rule_tree, match_code; or exclude_row_keys/include_row_keys (arrays of zero-based GT keys "0", "1", ... or Run-result keys "run:0", "run:1", ...; change inclusion separately from rules/inputs, and use read_rows.rowKey). Exclusions affect scoring and future Optimize inputs, not existing Optimize evidence. sampler: name, sampling, size, size_unit, rows (settings only before its first output). review: name. A Prompt or Dataset used in saved results is content-locked; a Sample output also locks its source Dataset. Only name and note can change; use add_prompt_version or duplicate_dataset instead. inspect_node includes contentLock. A Process's code stays editable; History keeps each run.
 - connect: node, input, source, branch?. Changes what one input of an existing node reads, as dragging a line onto that input on the canvas does. input is an input id from inspect_node's ports: a run's prompt (source: a prompt) or input; a process's df, one of its df_<name> parameters, or + (adds the source as a new input under its own alias and adds that parameter to process()); a score's ground_truth (source: a dataset). Otherwise source is a dataset, run or process, with branch for a process with several branches. It replaces what the input read; the same rules as on the canvas apply (no loops, not while the step runs, a process's df first, one input per source in a process). A score's run, a review's score and a sampler's source are fixed when the node is made.
 - disconnect: node, input. Leaves that input empty, as dragging its line off on the canvas does. A process's df can be disconnected only when nothing else is connected; disconnecting a df_<name> also removes that parameter, unless the code uses it.
 - select_history: record_id. Restore that Run or Process record together with the matching upstream and downstream History lineage, including the inputs it read. Use it alone in a proposal; the user sees and approves the affected nodes.
@@ -175,14 +180,15 @@ Operations ("op" plus the fields listed):
   ),
   tool(
     'try_process',
-    'Run Process code on the canvas data without changing anything, to check it before proposing it. df is what primary_input gives (only its first max_rows rows): a dataset, a run\'s results or a process branch, each as it is now; a step without a result cannot be read yet. Each other input the code declares as a parameter named after its df_<alias> (a dataset or a step output) is passed in full. Returns each output branch with its row count, columns and first rows, or the Python error. No model calls, nothing to confirm.',
+    'Try Process code before proposing it. For an existing Process, always pass process_node_id: its actual connections and fixed aliases are preserved even after inputs are renamed. For a new Process, pass primary_input and optional primary_branch; aliases are inferred as for a new node. Only the first max_rows df rows are used; secondary inputs are complete. Returns branches, columns and sample rows or the Python error. No model calls; does not change the canvas.',
     {
       code: { type: 'string', description: 'Python source defining process(df, ...), one parameter per other input.' },
-      primary_input: { type: 'string', description: 'Exact id of the dataset, run or process used as df.' },
+      process_node_id: { type: 'string', description: 'When editing an existing Process, pass its id to preserve its connected inputs and saved aliases. Omit primary_input and primary_branch in that case.' },
+      primary_input: { type: 'string', description: 'For a new Process: exact id of the dataset, run or process used as df. Not needed with process_node_id.' },
       primary_branch: { type: 'string', description: 'The branch to read when primary_input is a process with several branches.' },
       max_rows: { type: 'integer', minimum: 1, maximum: 1000, description: 'Rows of the primary dataset to use. Default 50.' },
     },
-    ['code', 'primary_input'],
+    ['code'],
   ),
   tool(
     RUN_NODES_TOOL,
@@ -193,7 +199,10 @@ Jobs ("kind" plus):
 - process: node (a Process). Runs its saved code and stores its output branches on the node.
 - score: node (an Evaluate node using custom match code). Runs its Python matcher against the Run results and ground truth, stores its result and reports progress. Rule-based Evaluate nodes compute automatically and need no job.
 - review: score, name?. Adds an Optimize node to that score and runs it.
-- verify: review, suggestion_ids? (default: all not yet verified). Re-runs the prompt with each suggestion on the rows it targets.`,
+- resume_review: review. Resumes that existing interrupted Optimize node; does not create another node.
+- verify: review, suggestion_ids? (default: all not yet verified). Re-runs the prompt with each suggestion on the rows it targets.
+- optimize_suggestion: review, suggestion_id. For a generated suggestion whose verification did not fully pass (verifyState optimization), run the same wording search as Click to Optimize. Only available when supportsSuggestionOptimization is true. Appends a new unapplied candidate; request verification separately before applying it.
+- stop: node. Requests cancellation of an active Run, Process, code Evaluate, Optimize or suggestion optimization, including tasks the user started in the UI. This is a stop request, not a guarantee that already issued model calls have finished.`,
     {
       summary: { type: 'string', description: 'One sentence for the user: what will run and why.' },
       jobs: {
@@ -202,11 +211,12 @@ Jobs ("kind" plus):
         items: {
           type: 'object',
           properties: {
-            kind: { type: 'string', enum: ['run', 'process', 'score', 'review', 'verify'] },
+            kind: { type: 'string', enum: ['run', 'process', 'score', 'review', 'resume_review', 'verify', 'optimize_suggestion', 'stop'] },
             node: { type: 'string' },
             score: { type: 'string' },
             review: { type: 'string' },
             suggestion_ids: { type: 'array', items: { type: 'string' } },
+            suggestion_id: { type: 'string' },
             name: { type: 'string' },
           },
           required: ['kind'],
@@ -290,7 +300,7 @@ async function tryProcess(args, runtime) {
   if (!/^\s*def\s+process\s*\(\s*df\b/m.test(code)) return { error: 'The code must define process(df).' };
   let inputs;
   try {
-    inputs = processTrialInputs(runtime.getCanvasState(), code, args.primary_input, args.primary_branch);
+    inputs = processTrialInputs(runtime.getCanvasState(), code, args.primary_input, args.primary_branch, args.process_node_id);
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   }
@@ -338,7 +348,7 @@ export function describeToolCall(name, args, runtime) {
     case 'list_models': return `Searched models${args.query ? ` for "${args.query}"` : ''}`;
     case 'read_guide': return `Read the ${args.topic} guide`;
     case 'search_source': return `Searched ${args.source} for "${args.query}"`;
-    case 'try_process': return `Tried process code on ${titleOf(runtime, args.primary_input)}`;
+    case 'try_process': return `Tried process code on ${titleOf(runtime, args.process_node_id || args.primary_input)}`;
     default: return name;
   }
 }
@@ -365,7 +375,8 @@ async function runTool(name, args, runtime) {
     case 'get_pipeline_runs':
       return readPipelineRuns(args, runtime);
     case 'inspect_node':
-      return runtime.inspectNode(String(args.node_id || ''));
+      return runtime.inspectNode(String(args.node_id || ''), { section: args.section, suggestionId: args.suggestion_id,
+        startRow: args.start_row, maxRows: args.max_rows });
     case 'read_rows': {
       const state = runtime.getCanvasState();
       const node = state.nodes.find((n) => n.nodeId === args.node_id);

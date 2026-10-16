@@ -6,7 +6,7 @@
  */
 import { referencedDatasetAliasNames } from '../../processDatasetBindings.js';
 import { effectiveProcessOutputs } from '../../processOutputPorts.js';
-import { processInputBindings, processRequiredInputs, stepInputWaitingMessage, stepSourceLabel } from '../../stepInputs.js';
+import { processInputBindings, processPrimarySource, processRequiredInputs, stepInputWaitingMessage, stepSourceLabel } from '../../stepInputs.js';
 import { stepOutputTable } from '../../stepOutputs.js';
 
 const TRIAL_ID = '__try_process__';
@@ -15,7 +15,19 @@ const TRIAL_ID = '__try_process__';
  * @returns {Array<{ key: string, nodeId: string, port: string, kind: string, label: string, alias: string, primary: boolean, content: object }>}
  * @throws {Error} naming what is wrong, as the Process window would show it
  */
-export function processTrialInputs(state, code, primaryId, primaryBranch = '') {
+export function processTrialInputs(state, code, primaryId, primaryBranch = '', processId = '') {
+  const existing = processId ? state.nodes.find((node) => node.nodeId === processId && node.type === 'process') : null;
+  if (processId && !existing) throw new Error('process_node_id must identify an existing Process.');
+  if (existing) {
+    const primary = processPrimarySource(state, processId);
+    if (!primary) throw new Error('The Process has no df input. Connect it before trying its code.');
+    if ((primaryId && primaryId !== primary.nodeId) || (primaryBranch && primaryBranch !== primary.port)) {
+      throw new Error('The trial must use this Process\'s connected inputs. Change its connections first, or omit process_node_id to try a new Process.');
+    }
+  }
+  const existingPrimary = existing && processPrimarySource(state, processId);
+  primaryId = existingPrimary?.nodeId || primaryId;
+  primaryBranch = existingPrimary?.port || primaryBranch;
   const source = (state?.nodes || []).find((node) => node.nodeId === String(primaryId || '').trim());
   if (!source || !['dataset', 'run', 'process'].includes(source.type)) {
     throw new Error('primary_input must be the id of a dataset, run or process on the canvas.');
@@ -31,18 +43,19 @@ export function processTrialInputs(state, code, primaryId, primaryBranch = '') {
   } else if (branch && branch !== 'result') {
     throw new Error(`primary_input is a ${source.type} with one output; it has no branch "${branch}".`);
   }
-  const trial = {
+  const trial = existing ? state : {
     ...state,
     nodes: [...state.nodes, { type: 'process', nodeId: TRIAL_ID, name: 'Process', dfCode: code }],
     connections: [...state.connections, { type: 'data', fromId: source.nodeId, fromPort: port, toId: TRIAL_ID, alias: 'df' }],
   };
-  const candidates = processInputBindings(trial, TRIAL_ID, { code });
+  const trialId = existing ? processId : TRIAL_ID;
+  const candidates = processInputBindings(trial, trialId, { code });
   const unknown = [...referencedDatasetAliasNames(code)].filter((alias) => !candidates.some((binding) => binding.alias === alias));
   if (unknown.length) {
     const available = candidates.filter((binding) => !binding.primary).map((binding) => `${binding.alias} ("${binding.label}")`);
     throw new Error(`Unknown input alias ${unknown.join(', ')}. Available: ${available.join(', ') || '(none)'}`);
   }
-  return processRequiredInputs(trial, TRIAL_ID, { code }).bindings.map((binding) => {
+  return processRequiredInputs(trial, trialId, { code }).bindings.map((binding) => {
     const output = stepOutputTable(trial, binding);
     if (output.waiting) throw new Error(stepInputWaitingMessage(trial, binding, output.waiting));
     return { ...binding, label: stepSourceLabel(trial, binding), content: output.table };
