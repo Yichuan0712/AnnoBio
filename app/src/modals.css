@@ -181,7 +181,8 @@
   color: var(--diff-added-text, #15803d);
   background: var(--diff-added-bg, rgba(22, 163, 74, .12));
 }
-.modal-history-popup__current {
+.modal-history-popup__current,
+.modal-history-popup__optimization {
   color: var(--accent, #4677d5);
   background: color-mix(in srgb, var(--accent, #4677d5) 12%, transparent);
 }

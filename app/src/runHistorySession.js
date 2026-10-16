@@ -170,6 +170,13 @@ export class RunHistorySession {
       }
     }
     const byId = new Map(records.map((record) => [record.id, record]));
+    const optimizationsByEvaluation = new Map();
+    for (const node of canvasState?.nodes || []) {
+      if (node.type !== 'promptReview' || !node.evaluateRecordId) continue;
+      const optimizations = optimizationsByEvaluation.get(node.evaluateRecordId) || [];
+      optimizations.push({ nodeId: node.nodeId, name: String(node.promptReviewName || '').trim() || 'Optimize' });
+      optimizationsByEvaluation.set(node.evaluateRecordId, optimizations);
+    }
     const currentIds = new Set(Object.values(currentRecordIds).filter(Boolean));
     const analysis = await analysisInputKeys(canvasState, currentRecordIds);
     for (const [kind, keys] of [['score', analysis.score], ['review', analysis.review]]) {
@@ -190,6 +197,7 @@ export class RunHistorySession {
       const downstream = directHistoryDownstreamIds(records, record.id).map(summarize).sort(byCurrentThenDate);
       return {
         ...entry,
+        optimizations: record.kind === 'score' ? optimizationsByEvaluation.get(record.id) || [] : [],
         restorable: record.kind !== 'score' || (record.evaluationVersion === 1 && record.status === 'completed'),
         error: record.error || '',
         relationships: { upstream, downstream },
