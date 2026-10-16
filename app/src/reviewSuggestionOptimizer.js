@@ -54,7 +54,7 @@ export async function optimizeReviewSuggestion({ suggestion, suggestions, origin
       maxSegments: 5, candidatesPerSegment: 4, maxTrials,
       allSuggestions: suggestions, sugIdx: suggestions.indexOf(suggestion), originalText,
       inputEntries: entries, outputSchema: payload.output_schema, outputFields: payload.output_fields || [],
-      scoreMapping: payload.score_mapping,
+      scoreMapping: payload.score_mapping, scoreMatchCode: payload.score_match_code || '', runSettings: payload.run_settings || {},
       runWs: payload.runWs || payload.getRunWorkingSetContent?.() || { headers: [], rows: [] },
       gtContent: payload.gtContent || payload.getGroundTruthContent?.() || { headers: [], rows: [] },
       abortController: controller, onProgress,

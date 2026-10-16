@@ -11,7 +11,9 @@ import {
   prefetchConceptIdMap,
   medicalConceptSource,
   isValidRunOutputForScoreRow,
+  buildCodeMatchRunToGt,
 } from './scoreDetailModal.js';
+import { runScoreCode } from './scoreCodeRunClient.js';
 import { computeGreedyRunToGtPairing, evaluateScoreTree, flattenScoreRules } from './scoreRunGtPairing.js';
 import { emptyScoreRuleGroup, parseScoreMappingBundle } from './scoreMappingBundle.js';
 import { displayCell } from './datasetContent.js';
@@ -219,6 +221,8 @@ function makeRuleMatchesRow({ embeddingCosineMap, conceptIdMap, originalInputRow
 export async function evaluateScoreOutputGt({
   apiBase = BACKEND_API_BASE,
   scoreMapping,
+  scoreMatchCode = '',
+  signal,
   results,
   inputEntries,
   outputFields = [],
@@ -227,7 +231,7 @@ export async function evaluateScoreOutputGt({
 }) {
   const { outputRoot } = parseScoreMappingBundle(scoreMapping || '{}');
   const outputLeaves = flattenScoreRules(outputRoot || emptyScoreRuleGroup());
-  if (outputLeaves.length === 0) {
+  if (!scoreMatchCode && outputLeaves.length === 0) {
     throw new Error('No Evaluate output->gt rules configured.');
   }
 
@@ -250,7 +254,7 @@ export async function evaluateScoreOutputGt({
   });
   const { originalInputRowByPromptIndex } = buildPromptIndexMaps(enrichedInputEntries);
   const validResults = (results || []).filter((row) => isValidRunOutputForScoreRow(row, outputFields));
-  const embeddingCosineMap = await buildEmbeddingCosineMap({
+  const embeddingCosineMap = scoreMatchCode ? new Map() : await buildEmbeddingCosineMap({
     apiBase,
     outputRoot,
     results: validResults,
@@ -259,7 +263,7 @@ export async function evaluateScoreOutputGt({
     gtSubset,
     originalInputRowByPromptIndex,
   });
-  const conceptIdMap = await buildConceptIdMap({
+  const conceptIdMap = scoreMatchCode ? new Map() : await buildConceptIdMap({
     apiBase,
     outputRoot,
     results: validResults,
@@ -291,7 +295,16 @@ export async function evaluateScoreOutputGt({
       rows: allowedLocalGtIndices.map((idx) => gtSubset.rows[idx]),
       sourceRowIndices: allowedLocalGtIndices.map((idx) => gtSubset.sourceRowIndices[idx]),
     };
-    const { runToGt } = computeGreedyRunToGtPairing({
+    let codePairing;
+    if (scoreMatchCode && outputs.length && localGtSubset.rows.length) {
+      const originalIndex = originalInputRowByPromptIndex.get(promptIdx);
+      const match = await runScoreCode({ code: scoreMatchCode, signal, outputFields,
+        results: outputs.map(row => ({ ...row, input_row_index: 0 })),
+        input: { headers: runWs.headers, rows: [runWs.rows[originalIndex] || []] }, groundTruth: localGtSubset });
+      if (match.wasCancelled) throw new DOMException('Aborted', 'AbortError');
+      codePairing = buildCodeMatchRunToGt(match, localGtSubset.rows.length);
+    }
+    const { runToGt } = scoreMatchCode ? { runToGt: codePairing || [] } : computeGreedyRunToGtPairing({
       inputRoot: emptyScoreRuleGroup(),
       outputRoot,
       results: outputs,
@@ -314,7 +327,7 @@ export async function evaluateScoreOutputGt({
        * AND/OR structure holding. Re-check that structure for the real matched verdict, same as Score
        * detail's `isPairMatchForRow`/`evaluateNode` does after its own greedy pairing. */
       const paired = Number.isInteger(pairedLocalGt) && pairedLocalGt >= 0;
-      const matched = paired && evaluateScoreTree(
+      const matched = paired && (!!scoreMatchCode || evaluateScoreTree(
         outputRoot,
         outputRow.row_index,
         pairedLocalGt,
@@ -323,7 +336,7 @@ export async function evaluateScoreOutputGt({
         outputFields,
         localGtSubset,
         ruleMatchesRow,
-      );
+      ));
       const globalLocalGtIndex = paired ? allowedLocalGtIndices[pairedLocalGt] : null;
       if (paired) {
         const remainingIdx = remainingLocalGtIndices.indexOf(globalLocalGtIndex);
@@ -351,7 +364,7 @@ export async function evaluateScoreOutputGt({
       verifyRows.push({
         output: assignment.out?.output ?? null,
         error: assignment.out?.error ?? null,
-        gt: Number.isInteger(localGtIndex) ? buildDisplayGtObject(gtSubset, localGtIndex, outputLeaves) : null,
+        gt: Number.isInteger(localGtIndex) ? (scoreMatchCode ? Object.fromEntries(gtSubset.headers.map((h, i) => [h, gtSubset.rows[localGtIndex][i]])) : buildDisplayGtObject(gtSubset, localGtIndex, outputLeaves)) : null,
         gtNum,
         matched: assignment.matched,
       });
@@ -364,7 +377,7 @@ export async function evaluateScoreOutputGt({
       verifyRows.push({
         output: null,
         error: null,
-        gt: buildDisplayGtObject(gtSubset, localGtIndex, outputLeaves),
+        gt: scoreMatchCode ? Object.fromEntries(gtSubset.headers.map((h, i) => [h, gtSubset.rows[localGtIndex][i]])) : buildDisplayGtObject(gtSubset, localGtIndex, outputLeaves),
         gtNum: gtSubset.sourceRowIndices[localGtIndex] + 1,
         matched: false,
       });

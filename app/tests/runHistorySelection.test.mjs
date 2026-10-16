@@ -172,3 +172,30 @@ test('completed inputs create a new attempt and History can select either identi
   assert.equal(records.size, 4);
   await assert.rejects(session.reserve(changed, 'run'), /already have a running job/);
 });
+
+test('fresh execution preserves stopped Generate and Process attempts instead of resuming or rewriting them', async () => {
+  for (const nodeId of ['run', 'process']) {
+    const migrated = await recordGraph(graph);
+    const records = new Map(migrated.records.map(record => [record.id, structuredClone(record)]));
+    const original = [...records.values()].find(record => record.nodeId === nodeId);
+    original.status = 'stopped';
+    const before = structuredClone(original);
+    const state = structuredClone(migrated.state);
+    state.nodes.find(node => node.nodeId === nodeId).historyRecordId = original.id;
+    const session = new RunHistorySession({
+      loadIndex: async () => ({ version: 1, records: [...records.values()].map(({ id, nodeId, kind, signature, status }) => ({ id, nodeId, kind, signature, status })) }),
+      loadRecord: async (_project, id) => records.get(id),
+      saveRecord: async (_project, record) => records.set(record.id, record),
+      saveCanvas: async () => {},
+      createId: () => '99999999999999999999999999999999',
+    });
+    const resolved = await session.open('project', state);
+    const fresh = await session.reserve(resolved.state, nodeId, { fresh: true });
+    assert.notEqual(fresh.record.id, original.id);
+    assert.equal(fresh.record.signature, original.signature);
+    assert.deepEqual(records.get(original.id), before);
+    if (nodeId === 'run') assert.deepEqual(fresh.record.results.runResults, []);
+    else assert.equal(fresh.record.results.dfResults, null);
+    await assert.rejects(session.reserve(resolved.state, nodeId, { fresh: true }), /already have a running job/);
+  }
+});

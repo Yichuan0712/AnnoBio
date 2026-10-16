@@ -473,6 +473,8 @@ function inspectScore(node, ctx) {
       run,
       groundTruth: linkedNode(groundTruth),
       matching: usesCode ? 'custom match code' : `${ruleCount} mapping rule${ruleCount === 1 ? '' : 's'}`,
+      resultsFromEarlierSetup: !!node.historyStaleRecordId,
+      evaluationRecordId: node.historyRecordId || null,
       rules: usesCode ? undefined : { pairing: rules.pairing, comparison: rules.comparison, ruleTree: rules.ruleTree },
       matchCode: usesCode ? String(node.scoreMatchCode || '') : undefined,
       executionStatus: node.scoreMatchPending === true ? 'running'
@@ -522,10 +524,13 @@ function inspectReview(node, ctx, options = {}) {
   const verification = options.section === 'verification' ? reviewResult.verify_results?.[options.suggestionId] : null;
   if (options.section === 'verification' && !verification) diagnostics.push('No verification result for that suggestion_id.');
   if (!score) diagnostics.push('The Optimize is not connected to an Evaluate node.');
+  if (ctx.canvasState.historyVersion === 1 && !node.evaluateRecordId) diagnostics.push('This legacy Optimize has no fixed evaluation snapshot. Run Evaluate and create a new Optimize before Verify or Resume.');
   if (!suggestions.length && !reviewResult.summary && node.reviewPending !== true) diagnostics.push('The review has no result yet.');
   return {
     details: {
       score,
+      evaluationRecordId: node.evaluateRecordId || null,
+      sourceIsEarlierEvaluation: node.reviewSourceEarlier === true,
       status: node.reviewPending === true ? `running (${Number(node.reviewProgress) || 0}%)`
         : node.reviewInterrupted === true || reviewResult.streamComplete === false ? 'interrupted; ready to resume'
           : (reviewResult.streamComplete === true || suggestions.length || reviewResult.summary ? 'finished' : 'not run yet'),
@@ -687,12 +692,13 @@ export function readNodeRows(canvasState, nodeId, options = {}) {
 
   if (node.type === 'score') {
     const saved = safeArray(parseJsonObject(node.reviewResult, {}).comparison_rows);
-    const all = (saved.length ? saved : safeArray(options.comparisonRows)).map(summarizeComparisonRow);
+    const all = (Array.isArray(options.comparisonRows) ? options.comparisonRows : saved).map(summarizeComparisonRow);
     const rows = options.onlyUnmatched ? all.filter((r) => !r.matched) : all;
     const w = rowWindow(rows, options);
     return {
       title: nodeTitle(node),
       filter: options.onlyUnmatched ? 'unmatched only' : 'all rows',
+      resultsFromEarlierSetup: !!node.historyStaleRecordId,
       rows: w.items,
       ...w.window,
     };
@@ -723,7 +729,7 @@ export function traceRunRow(canvasState, runNodeId, inputRow, comparisonRowsBySc
     .filter(Boolean)
     .map((score) => {
       const saved = safeArray(parseJsonObject(score.reviewResult, {}).comparison_rows);
-      const rows = saved.length ? saved : safeArray(comparisonRowsByScoreId.get(normalizeNodeId(score.nodeId)));
+      const rows = comparisonRowsByScoreId.has(normalizeNodeId(score.nodeId)) ? safeArray(comparisonRowsByScoreId.get(normalizeNodeId(score.nodeId))) : saved;
       return {
         score: linkedNode(score),
         comparisons: rows

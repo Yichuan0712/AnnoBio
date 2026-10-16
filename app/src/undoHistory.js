@@ -22,8 +22,8 @@ const MAX_HISTORY = 50;
 
 const VOLATILE_FIELDS_BY_TYPE = {
   run: ['runResults', 'runCompleted', 'runPending', 'runResumable', 'runProgress', 'runInputContent', 'runOutputBracketCollapsed', 'historyRecordId', 'historyStaleRecordId'],
-  score: ['reviewResult', 'scoreMatchResult', 'scoreMatchError', 'scoreMatchInterrupted', 'scoreOutputBracketCollapsed', 'scoreGtBracketCollapsed', 'scoreTableRulesColumnFilter'],
-  promptReview: ['reviewResult', 'reviewProgress', 'reviewPending', 'reviewInterrupted'],
+  score: ['reviewResult', 'scoreMatchResult', 'scoreMatchError', 'scoreMatchInterrupted', 'scoreOutputBracketCollapsed', 'scoreGtBracketCollapsed', 'scoreTableRulesColumnFilter', 'historyRecordId', 'historyStaleRecordId'],
+  promptReview: ['reviewResult', 'reviewProgress', 'reviewPending', 'reviewInterrupted', 'reviewSourceEarlier'],
   // processOutputPorts is detected from the code after each edit (workflowCanvas.js); kept out of
   // snapshots so a detection never becomes an undo step of its own.
   process: ['results', 'dfResults', 'processPending', 'processResumable', 'historyRecordId', 'historyStaleRecordId', 'processOutputPorts'],

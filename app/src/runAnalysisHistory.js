@@ -49,11 +49,17 @@ export async function analysisInputKeys(state, currentRecordIds) {
       mapping: parsed(node.scoreMapping, {}),
       matchCode: String(node.scoreMatchCode || ''),
       activeMatchMode: String(node.scoreActiveMatchMode || 'rules'),
+      exclusions: parsed(node.scoreRowExcludedFromScoring, {}),
     };
     score.set(id, { signature: await sha256Signature({ kind: 'score', ...inputs }), inputs });
   }
 
   async function reviewKey(node, scoreId) {
+    if (node.type === 'promptReview' && node.evaluateRecordId) {
+      // One Optimize node is one experiment; backend method metadata must not change its cache identity.
+      const inputs = { scoreNodeId: node.evaluateNodeId || scoreId, scoreRecordId: node.evaluateRecordId };
+      return { signature: await sha256Signature({ kind: 'review', ...inputs }), inputs };
+    }
     const parent = score.get(scoreId);
     const scoreNode = nodes.get(scoreId);
     if (!parent || !scoreNode) return null;

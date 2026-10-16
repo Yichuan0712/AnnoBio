@@ -1,5 +1,6 @@
 import { datasetSignature, processInputSignature, runInputSignature, stepOutputSignature } from './runHistorySignature.js';
 import { processRequiredInputs, runInputSource, sourceKey } from './stepInputs.js';
+import { analysisInputKeys } from './runAnalysisHistory.js';
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const nodeId = (node) => String(node?.nodeId || node?.id || '');
@@ -186,6 +187,28 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
 
   for (const node of next.nodes) {
     if (node.type === 'run' || node.type === 'process') await resolveNode(nodeId(node));
+  }
+  const analyses = await analysisInputKeys(next, currentRecordIds);
+  for (const node of next.nodes.filter(item => item.type === 'score')) {
+    const id = nodeId(node), signature = analyses.score.get(id)?.signature;
+    const eligible = indexEntries.filter(entry => entry.kind === 'score' && entry.nodeId === id && entry.status === 'completed');
+    const preferredId = node.historyRecordId || node.historyStaleRecordId;
+    const preferred = eligible.find(entry => entry.id === preferredId);
+    const matching = eligible.filter(entry => entry.signature === signature);
+    let current = null;
+    for (const entry of [preferred?.signature === signature ? preferred : null, ...matching.slice().reverse()].filter(Boolean)) {
+      const record = await loadRecord(entry.id);
+      if (record?.evaluationVersion === 1 && record.id === entry.id && record.nodeId === id && record.signature === signature) { current = record; break; }
+    }
+    if (current) {
+      node.historyRecordId = current.id;
+      delete node.historyStaleRecordId;
+      currentRecordIds[id] = current.id;
+    } else {
+      delete node.historyRecordId;
+      // Keep the last snapshot visible even while an upstream Generate needs updating.
+      if (preferred) node.historyStaleRecordId = preferred.id;
+    }
   }
   return { state: next, currentRecordIds, missingResultNodeIds };
 }

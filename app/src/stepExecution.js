@@ -39,9 +39,9 @@ export function currentNode(env, id) {
  * @returns {Promise<{ status: 'completed'|'stopped', lines: string[], inspected?: true, errorRows?: number }>}
  *   `inspected` once it ran to the end (completed, or stopped by itself), with its error row count
  */
-export async function executeRunStep(item, env, { signal, onStatus = () => {} } = {}) {
+export async function executeRunStep(item, env, { signal, onStatus = () => {}, fresh = false } = {}) {
   const id = item.nodeIds[0];
-  const started = await env.startRunNode({ runNodeId: id });
+  const started = await env.startRunNode({ runNodeId: id, ...(fresh ? { fresh: true } : {}) });
   if (started.waitRequired) {
     const outcome = await waitWhile(() => currentNode(env, id)?.runPending === true, {
       signal,
@@ -82,11 +82,11 @@ export async function executeRunStep(item, env, { signal, onStatus = () => {} } 
  * Runs a Process and waits for it. `item` is { title, nodeIds: [processId] }.
  * @returns {Promise<{ status: 'completed'|'stopped'|'failed', lines: string[] }>}
  */
-export async function executeProcessStep(item, env, { signal, onStatus = () => {} } = {}) {
+export async function executeProcessStep(item, env, { signal, onStatus = () => {}, fresh = false } = {}) {
   onStatus(`Running ${item.title}...`);
   const id = item.nodeIds[0];
   try {
-    const { outputs, cancelled } = await env.runProcessNode(id, { signal });
+    const { outputs, cancelled } = await env.runProcessNode(id, { signal, ...(fresh ? { fresh: true } : {}) });
     const branches = Object.entries(outputs).map(([name, branch]) => `${name}: ${branch.rows.length} rows`);
     return { status: cancelled ? 'stopped' : 'completed', lines: [`${item.title}: ${branches.join('; ') || 'returned nothing'}`] };
   } catch (error) {

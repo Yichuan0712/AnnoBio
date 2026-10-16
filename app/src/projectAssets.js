@@ -355,10 +355,10 @@ export class ProjectAssets {
         for (const key of ['id', 'nodeId', 'kind', 'signature', 'inputs']) {
           if (JSON.stringify(existing[key]) !== JSON.stringify(record[key])) throw new Error('History record inputs cannot change.');
         }
-        if (existing.status === 'completed' && ['run', 'process'].includes(existing.kind) && JSON.stringify(existing) !== JSON.stringify(record)) {
+        if (existing.status === 'completed' && (['run', 'process'].includes(existing.kind) || existing.evaluationVersion === 1) && JSON.stringify(existing) !== JSON.stringify(record)) {
           throw new Error('Completed history records cannot change.');
         }
-      } else if (!['run', 'process'].includes(record.kind)
+      } else if (!['run', 'process'].includes(record.kind) && record.evaluationVersion !== 1
         && history.index.records.some((entry) => entry.nodeId === record.nodeId && entry.signature === record.signature)) {
         throw new Error('This input already has a history record.');
       }

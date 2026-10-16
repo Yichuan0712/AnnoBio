@@ -4,7 +4,7 @@
  * Result is saved on the Score node and persisted with the project.
  */
 
-import { showConfirm } from './alertModal.js';
+import { showAlert, showConfirm } from './alertModal.js';
 import {
   hasActiveOptimizationSessions,
 } from './reviewSuggestionOptimization.js';
@@ -850,6 +850,8 @@ function buildReviewResultUI(overlay, options) {
     saved = {},
     onReviewResultChange,
     onExportNewPrompt,
+    getApplyBlockReason,
+    onApplied,
     getIsReviewStreaming,
     getPayload,
     getReviewResult,
@@ -1662,7 +1664,7 @@ function buildReviewResultUI(overlay, options) {
         const samples = compileReviewInputs(templateText, inputEntries);
 
         // 6. Submit run job
-        const runRes = await postRun({ credential_id: credentialId, samples, output_schema: outputSchema }, undefined, undefined, getCurrentProjectId());
+        const runRes = await postRun({ credential_id: credentialId, samples, output_schema: outputSchema, settings_overrides: payload.run_settings || {} }, undefined, undefined, getCurrentProjectId());
         if (!runRes.ok) {
           const errText = await runRes.text().catch(() => String(runRes.status));
           throw new Error(`Run API error ${runRes.status}: ${errText}`);
@@ -1688,6 +1690,7 @@ function buildReviewResultUI(overlay, options) {
         const { verifyRows } = await evaluateScoreOutputGt({
           apiBase: API_BASE,
           scoreMapping,
+          scoreMatchCode: payload.score_match_code || '',
           results: rawResults,
           inputEntries,
           outputFields: Array.isArray(finalData?.output_fields) ? finalData.output_fields : outputFields,
@@ -1985,16 +1988,32 @@ function buildReviewResultUI(overlay, options) {
     exportBtn.type = 'button';
     exportBtn.className = 'btn btn-primary review-detail-export-btn';
     exportBtn.textContent = 'Apply';
-    const isComplete =
-      saved.streamComplete === true || (saved.streamComplete !== false && !reviewStillGenerating);
-    exportBtn.disabled = !isComplete;
-    exportBtn.addEventListener('click', () => {
+    let applying = false;
+    function syncApply() {
+      const reason = getApplyBlockReason?.() || '';
+      const isComplete = saved.streamComplete === true || (saved.streamComplete !== false && !reviewStillGenerating);
+      exportBtn.disabled = applying || !isComplete || !!reason;
+      exportBtn.title = reason;
+    }
+    overlay._reviewDetailSyncApply = syncApply;
+    syncApply();
+    exportBtn.addEventListener('click', async () => {
+      syncApply();
+      if (exportBtn.disabled) return;
       const text = working;
       if (!text.trim()) return;
       if (typeof onExportNewPrompt === 'function') {
-        onExportNewPrompt(text);
-        overlay.remove();
-        document.body.style.overflow = '';
+        applying = true;
+        syncApply();
+        try {
+          await onExportNewPrompt(text);
+          onApplied();
+        } catch (error) {
+          showAlert(String(error?.message || error), { title: 'Optimize' });
+        } finally {
+          applying = false;
+          syncApply();
+        }
       } else {
         navigator.clipboard.writeText(text).then(() => {
           exportBtn.textContent = 'Copied';
@@ -2020,13 +2039,14 @@ function buildReviewResultUI(overlay, options) {
       refreshAllEditSuggestionCardsVisuals();
       updateAnalysisFooter();
       updateSuggestionsFooter();
+      overlayForReviewSync._reviewDetailSyncApply?.();
     };
   }
 
 }
 
 /** Review node modal: show saved result (prompt + suggestions) or empty state. */
-export function openReviewDetailModal({ node, getPayload, getReviewResult, updateReviewResult, onExportNewPrompt, onResumeReview, getIsReviewStreaming }) {
+export function openReviewDetailModal({ node, getPayload, getReviewResult, updateReviewResult, onExportNewPrompt, getApplyBlockReason, onResumeReview, getIsReviewStreaming }) {
    const saved = getReviewResult ? getReviewResult() : null;
   const reviewName = (node?.querySelector?.('.workflow-node__title')?.textContent?.trim()) || 'Optimize';
   const title = `Optimize: ${reviewName}`;
@@ -2084,6 +2104,18 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
   const suggestionsEl = overlay.querySelector('#review-detail-suggestions');
   const resumeBtn = overlay.querySelector('.review-detail-resume-btn');
 
+  const note = document.createElement('p');
+  note.className = 'run-detail-stale-note review-detail-source-note';
+  function syncEvidence() {
+    const reason = getApplyBlockReason?.() || '';
+    note.hidden = !reason;
+    note.textContent = reason;
+    overlay._reviewDetailSyncApply?.();
+  }
+  overlay.querySelector('.review-detail-output-title').after(note);
+  document.addEventListener('workflow:history-resolved', syncEvidence);
+  syncEvidence();
+
   const reviewNodeId = node?.dataset?.nodeId || '';
   const baseOptions = {
     promptText: promptTextForDisplay,
@@ -2091,6 +2123,8 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
     saved: saved || {},
     onReviewResultChange: updateReviewResult || null,
     onExportNewPrompt: onExportNewPrompt || null,
+    getApplyBlockReason,
+    onApplied: close,
     getIsReviewStreaming: getIsReviewStreaming || null,
     getPayload: getPayload || null,
     getReviewResult: getReviewResult || null,
@@ -2183,9 +2217,11 @@ export function openReviewDetailModal({ node, getPayload, getReviewResult, updat
   });
 
   function close() {
+    document.removeEventListener('workflow:history-resolved', syncEvidence);
     if (reviewNodeId) document.removeEventListener('workflow:save-review-result', onSaveReviewResult);
     if (reviewNodeId) document.removeEventListener('workflow:review-stream-ended', onReviewStreamEnded);
     delete overlay._reviewDetailReconcile;
+    delete overlay._reviewDetailSyncApply;
     overlay.remove();
     document.body.style.overflow = '';
   }

@@ -106,6 +106,8 @@ export async function runVerifyPassRate({
   outputSchema,
   outputFields = [],
   scoreMapping = '{}',
+  scoreMatchCode = '',
+  runSettings = {},
   runWs = { headers: [], rows: [] },
   gtContent = { headers: [], rows: [] },
   signal,
@@ -116,7 +118,7 @@ export async function runVerifyPassRate({
   const samples = compileReviewInputs(templateText, inputEntries);
 
   // Submit run
-  const runRes = await postRun({ credential_id: credentialId, samples, output_schema: outputSchema }, signal, undefined, getCurrentProjectId());
+  const runRes = await postRun({ credential_id: credentialId, samples, output_schema: outputSchema, settings_overrides: runSettings }, signal, undefined, getCurrentProjectId());
   if (!runRes.ok) {
     const t = await runRes.text().catch(() => String(runRes.status));
     throw new Error(`Run API error ${runRes.status}: ${t}`);
@@ -142,6 +144,7 @@ export async function runVerifyPassRate({
   const { matchedCount, total } = await evaluateScoreOutputGt({
     apiBase: API_BASE,
     scoreMapping,
+    scoreMatchCode, signal,
     results: rawResults,
     inputEntries,
     outputFields: Array.isArray(finalData?.output_fields) ? finalData.output_fields : outputFields,
@@ -194,6 +197,8 @@ export async function runSuggestionOptimizationCompositional(options) {
     outputSchema,
     outputFields = [],
     scoreMapping = '{}',
+    scoreMatchCode = '',
+    runSettings = {},
     runWs = { headers: [], rows: [] },
     gtContent = { headers: [], rows: [] },
     abortController = null,
@@ -324,7 +329,7 @@ export async function runSuggestionOptimizationCompositional(options) {
           inputEntries,
           outputSchema,
           outputFields,
-          scoreMapping,
+          scoreMapping, scoreMatchCode, runSettings,
           runWs,
           gtContent,
           signal,

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { planRunTo, upstreamWithoutResult } from '../src/runPlan.js';
+import { planRunTo, runMenuItems, upstreamWithoutResult } from '../src/runPlan.js';
 
 const table = (count, header = 'text') => ({ headers: [header], rows: Array.from({ length: count }, (_, i) => [`row ${i}`]) });
 const data = (fromId, toId, alias, fromPort = 'result') => ({ type: 'data', fromId, fromPort, toId, ...(alias ? { alias } : {}) });
@@ -199,7 +199,7 @@ test('Run this step plans only the step, and needs current results before it', (
   const waiting = planRunTo(state, 'tidy', context, { onlyThis: true });
   assert.equal(waiting.scope, 'this');
   assert.deepEqual(actions(waiting), [['tidy', 'run']]);
-  assert.deepEqual(waiting.problems.map((item) => item.message), ['"Extract" has no current result. Use Run to here to run it first.']);
+  assert.deepEqual(waiting.problems.map((item) => item.message), ['"Extract" has no current result. Use Resume pipeline to here to run it first.']);
   assert.equal(upstreamWithoutResult(state, 'tidy'), 'Extract');
   assert.equal(upstreamWithoutResult(state, 'extract'), null);
 
@@ -222,4 +222,96 @@ test('when everything is current, rerun runs the target again and reuses the res
   const run = planRunTo(state, 'extract', context, { rerun: true, onlyThis: true });
   assert.deepEqual(actions(run), [['extract', 'rerun']]);
   assert.equal(run.steps[0].calls, 1000);
+});
+
+test('context menu hides equivalent scopes and shows Restart only when there is prior upstream work', () => {
+  const state = chain();
+  const items = id => runMenuItems(state, id);
+  const labels = id => items(id).map(item => item.label);
+  assert.deepEqual(labels('extract'), ['Run only this node']);
+  assert.deepEqual(labels('score'), ['Run only this node', 'Resume pipeline to here']);
+  assert.match(items('score')[0].blocked, /no current result/);
+  Object.assign(node(state, 'extract'), runDone(1000));
+  assert.deepEqual(labels('score'), ['Run only this node', 'Resume pipeline to here', 'Restart pipeline to here']);
+  Object.assign(node(state, 'tidy'), processDone(40));
+  assert.deepEqual(labels('score'), ['Run only this node', 'Restart pipeline to here']);
+  assert.equal(items('score')[0].blocked, '');
+  Object.assign(node(state, 'score'), runDone(40));
+  assert.deepEqual(labels('score'), ['Run only this node', 'Restart pipeline to here']);
+  assert.equal(planRunTo(state, 'score', context, { mode: 'resume' }).toRun, 0);
+});
+
+test('Historical upstream results still expose pipeline Resume even if the target ran before', () => {
+  const state = chain();
+  node(state, 'extract').historyStaleRecordId = 'old';
+  node(state, 'score').historyStaleRecordId = 'old-target';
+  assert.deepEqual(runMenuItems(state, 'score').map(item => item.label),
+    ['Run only this node', 'Resume pipeline to here', 'Restart pipeline to here']);
+});
+
+test('partial Generate offers explicit Resume as well as a fresh single-node Run', () => {
+  const state = chain();
+  Object.assign(node(state, 'extract'), { runResumable: true, runResults: JSON.stringify([{ input_row_index: 0 }]) });
+  assert.deepEqual(runMenuItems(state, 'extract').map(item => item.label), ['Run only this node', 'Resume']);
+  const resume = planRunTo(state, 'extract', context, { mode: 'resume-node' });
+  const fresh = planRunTo(state, 'extract', context, { mode: 'only' });
+  assert.equal(resume.steps[0].action, 'resume');
+  assert.equal(resume.calls, 999);
+  assert.equal(fresh.steps[0].action, 'rerun');
+  assert.equal(fresh.calls, 1000);
+  assert.equal(fresh.steps.length, 1);
+});
+
+test('Restart ignores all completed and partial progress and counts the full input', () => {
+  const state = chain();
+  Object.assign(node(state, 'extract'), { runResumable: true, runResults: JSON.stringify([{ input_row_index: 0 }]) });
+  Object.assign(node(state, 'tidy'), processDone(40));
+  Object.assign(node(state, 'score'), runDone(40));
+  const plan = planRunTo(state, 'score', context, { mode: 'restart' });
+  assert.deepEqual(actions(plan), [['extract', 'rerun'], ['tidy', 'rerun'], ['score', 'rerun']]);
+  assert.equal(plan.steps[0].calls, 1000);
+  assert.equal(plan.steps[2].calls, null); // The Process will produce a new, unknown row count.
+  assert.equal(plan.mode, 'restart');
+  assert(plan.steps.every(step => step.fresh));
+});
+
+test('a recalculated upstream prevents reusing or resuming its downstream result', () => {
+  const state = chain();
+  Object.assign(node(state, 'tidy'), processDone(40));
+  Object.assign(node(state, 'score'), { runResumable: true, runResults: JSON.stringify([{ input_row_index: 0 }]) });
+  const plan = planRunTo(state, 'score', context);
+  assert.deepEqual(actions(plan), [['extract', 'run'], ['tidy', 'rerun'], ['score', 'rerun']]);
+});
+
+test('Restart includes every required merge branch once and excludes unrelated branches and descendants', () => {
+  const state = chain();
+  state.nodes.push(process('branch', 'Branch'), process('unrelated', 'Unrelated'), process('after', 'After'));
+  state.connections.push(data('extract', 'branch', 'df'), data('branch', 'tidy', 'df_Branch'),
+    data('extract', 'unrelated', 'df'), data('score', 'after', 'df'));
+  node(state, 'tidy').dfCode = 'def process(df, df_Branch):\n    return df';
+  const plan = planRunTo(state, 'score', context, { mode: 'restart' });
+  assert.deepEqual(plan.steps.map(step => step.nodeId), ['extract', 'branch', 'tidy', 'score']);
+  assert.equal(plan.problems.length, 0);
+});
+
+test('pipeline actions reflect upstream task locks and reject cycles before execution', () => {
+  const state = chain();
+  Object.assign(node(state, 'extract'), runDone(1000));
+  const items = runMenuItems(state, 'score', { isLocked: id => id === 'extract' });
+  assert(items.filter(item => item.action !== 'run-this-step').every(item => item.blocked));
+  state.connections = state.connections.filter(edge => !(edge.type === 'data' && edge.toId === 'extract'));
+  state.connections.push(data('score', 'extract'));
+  assert(planRunTo(state, 'score', context, { mode: 'restart' }).problems.some(item => /cycle/.test(item.message)));
+  assert.throws(() => planRunTo(state, 'score', context, { mode: 'typo' }), /Unknown Run mode/);
+});
+
+test('a running node disables new execution and offers Stop, including a locked future pipeline step', () => {
+  const state = chain();
+  node(state, 'extract').runPending = true;
+  const running = runMenuItems(state, 'extract');
+  assert(running[0].blocked);
+  assert.deepEqual(running.at(-1), { action: 'stop-node-run', label: 'Stop', blocked: '' });
+  const future = runMenuItems(state, 'score', { isLocked: () => true });
+  assert(future.filter(item => item.action !== 'stop-node-run').every(item => item.blocked));
+  assert.equal(future.at(-1).label, 'Stop');
 });

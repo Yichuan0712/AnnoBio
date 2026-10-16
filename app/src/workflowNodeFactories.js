@@ -1,4 +1,5 @@
 import { reviewSettingsOverrides } from './nodeSettings.js';
+import { optimizationApplyBlockReason } from './evaluationHistory.js';
 import { generateDisplayName, isDefaultGenerateName } from './nodeLabels.js';
 import { datasetColorAt, promptColorAt } from './workflowNodeColors.js';
 import { isTaskLocked } from './runTaskLocks.js';
@@ -77,6 +78,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     runToHere,
     loadStaleRecord,
     resumeReviewNode,
+    applyReviewSuggestions,
     openSamplerDetailModal,
     openDatasetDetailModal,
     openScoreDetailModal,
@@ -87,6 +89,8 @@ export function createWorkflowNodeFactories(deps = {}) {
     deriveOutputFields,
     formatResultOutputColumnLabel,
     buildReviewComparisonRows,
+    getEvaluationPayload,
+    runScoreNode,
     resolveRunCredentialId,
     resolveReviewCredentialId,
     runReviewStart,
@@ -818,6 +822,9 @@ export function createWorkflowNodeFactories(deps = {}) {
         return { headers: (c.headers || []).slice(), rows: (c.rows || []).map((r) => r.slice()) };
       }
       async function getReviewPayload() {
+        if (getEvaluationPayload) return { ...await getEvaluationPayload(node.dataset.nodeId),
+          review_method: node.dataset.reviewMethod || undefined, settings_overrides: reviewSettingsOverrides(node) };
+
         if (!promptNode || !runNode || !node) return null;
         const promptText = promptNode.dataset.promptText || '';
         if (!promptText.trim()) return null;
@@ -863,9 +870,12 @@ export function createWorkflowNodeFactories(deps = {}) {
       }
       openScoreDetailModal({
         node,
+        history: getHistoryForNode?.(nodeId),
+        runEvaluation: runScoreNode ? options => runScoreNode(nodeId, options) : null,
         revealNode,
         // A Generate with results (also part way through) can be scored; one without cannot yet.
         getRunState: () => (runNode ? {
+          historyRecordId: runNode.dataset.historyRecordId || '',
           ready: runNode.dataset.runCompleted === '1' || (() => {
             try { return JSON.parse(runNode.dataset.runResults || '[]').length > 0; } catch (_) { return false; }
           })(),
@@ -978,6 +988,11 @@ export function createWorkflowNodeFactories(deps = {}) {
       const promptEdge = runNode ? getConnectionsList().find((c) => c.toId === runNode.dataset.nodeId && c.type === 'prompt-to-run') : null;
       const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
       async function getPayload() {
+        if (getEvaluationPayload) {
+          if (!node.dataset.evaluateRecordId) throw new Error('This legacy Optimize has no fixed evaluation snapshot. Create a new Optimize from Evaluate to verify suggestions.');
+          return getEvaluationPayload(node.dataset.evaluateNodeId || scoreNode?.dataset.nodeId, { recordId: node.dataset.evaluateRecordId });
+        }
+
         if (!promptNode || !runNode || !scoreNode) return null;
         const promptText = promptNode.dataset.promptText || '';
         if (!promptText.trim()) return null;
@@ -1025,7 +1040,7 @@ export function createWorkflowNodeFactories(deps = {}) {
       function getReviewResult() {
         try {
           let raw = (node.dataset.reviewResult || '').trim();
-          if (!raw && scoreNode && (scoreNode.dataset.reviewResult || '').trim()) {
+          if (!raw && !node.dataset.evaluateRecordId && scoreNode && (scoreNode.dataset.reviewResult || '').trim()) {
             raw = scoreNode.dataset.reviewResult || '';
             node.dataset.reviewResult = raw;
             emitCanvasChanged();
@@ -1044,9 +1059,15 @@ export function createWorkflowNodeFactories(deps = {}) {
         }
       }
       function onExportNewPrompt(text) {
-        document.dispatchEvent(new CustomEvent('workflow:add-prompt-from-review', {
-          detail: { text, afterReviewNodeId: node.dataset.nodeId },
-        }));
+        return applyReviewSuggestions({ reviewNodeId: node.dataset.nodeId, text, ensureUniqueName: true });
+      }
+      function getApplyBlockReason() {
+        const review = getNodeById(node.dataset.nodeId);
+        if (!review) return 'This Optimize node is no longer on the canvas.';
+        const scoreId = review.dataset.evaluateNodeId || getConnections().find(
+          edge => edge.type === 'score-to-prompt-review' && edge.toId === review.dataset.nodeId,
+        )?.fromId;
+        return optimizationApplyBlockReason(review.dataset, getNodeById(scoreId)?.dataset);
       }
       async function onResumeReview() {
         try {
@@ -1063,6 +1084,7 @@ export function createWorkflowNodeFactories(deps = {}) {
         getReviewResult,
         updateReviewResult,
         onExportNewPrompt,
+        getApplyBlockReason,
         onResumeReview,
         getIsReviewStreaming: () => pendingReviewNodeIds.has(node.dataset.nodeId),
       });

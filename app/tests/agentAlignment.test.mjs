@@ -31,8 +31,8 @@ function canvas(result = reviewResult()) {
     { type: 'dataset', nodeId: 'gt', name: 'GT', datasetContent: table(['a', 'b', 'c'], [['a', 'b', 'c'], ['A', 'B', 'C']]) },
     { type: 'prompt', nodeId: 'p', name: 'Prompt', text: 'Read {text}', outputFormat: { returnShape: 'single', fields: ['a', 'b', 'c'].map((key) => ({ key, type: 'str' })) } },
     { type: 'run', nodeId: 'r', runName: 'Run', runResults: JSON.stringify([{ row_index: 0, input_row_index: 0, output: { a: 'bad' } }]), runInputToColumn: '{"text":"text"}' },
-    { type: 'score', nodeId: 's', scoreName: 'Evaluate', scoreGroundTruthId: 'gt', scoreMapping: tree(), reviewResult: JSON.stringify({ comparison_rows: [comparison(0)] }) },
-    { type: 'promptReview', nodeId: 'rev', promptReviewName: 'Optimize', reviewResult: JSON.stringify(result) },
+    { type: 'score', nodeId: 's', scoreName: 'Evaluate', historyRecordId: 'evaluation-1', scoreGroundTruthId: 'gt', scoreMapping: tree(), reviewResult: JSON.stringify({ comparison_rows: [comparison(0)] }) },
+    { type: 'promptReview', nodeId: 'rev', promptReviewName: 'Optimize', evaluateRecordId: 'evaluation-1', evaluateNodeId: 's', reviewResult: JSON.stringify(result) },
   ], connections: [data('raw', 'r'), { type: 'prompt-to-run', fromId: 'p', toId: 'r' },
     { type: 'run-to-score', fromId: 'r', toId: 's' }, { type: 'score-to-prompt-review', fromId: 's', toId: 'rev' }] };
 }
@@ -146,7 +146,8 @@ test('row inclusion updates current scoring but keeps existing Optimize evidence
   assert.throws(() => plan(state, { exclude_row_keys: ['0'], ground_truth: 'gt' }), /separately/);
   assert.equal(readNodeRows(state, 's').rows[0].rowKey, '0');
   const rows = readNodeRows(state, 's', { comparisonRows: [] });
-  assert.equal(rows.rows[0].inputRow, 1);
+  assert.deepEqual(rows.rows, []); // History is authoritative even when a legacy inline cache has rows.
+  assert.equal(readNodeRows(state, 's', { comparisonRows: [comparison(2)] }).rows[0].inputRow, 3);
 });
 
 test('Optimize exposes paged diagnostic, stage, ground-truth and verification evidence', async () => {
@@ -287,9 +288,10 @@ test('suggestion optimization has a confirmed job and refuses methods without th
   for (const kind of ['stop', 'resume_review', 'optimize_suggestion']) assert.ok(tools.includes(kind));
 }));
 
-function runtimeHarness(result = reviewResult()) {
+function runtimeHarness(result = reviewResult(), overrides = {}) {
   const state = canvas(result);
   const elements = new Map(state.nodes.map((node) => [node.nodeId, { dataset: { nodeId: node.nodeId,
+    historyRecordId: node.historyRecordId, evaluateRecordId: node.evaluateRecordId, evaluateNodeId: node.evaluateNodeId,
     ...(node.type === 'prompt' ? { promptText: node.text, promptOutputFormat: JSON.stringify(node.outputFormat.fields) } : {}),
     ...(node.type === 'run' ? { runResults: node.runResults, runOutputFields: JSON.stringify([{ key: 'a' }]) } : {}),
     ...(node.type === 'score' ? { scoreGroundTruthId: 'gt', scoreMapping: JSON.stringify(node.scoreMapping) } : {}),
@@ -305,9 +307,45 @@ function runtimeHarness(result = reviewResult()) {
     datasetContentByNodeId: new Map([['gt', find(state, 'gt').datasetContent]]),
     buildReviewComparisonRows: async () => [comparison(0)],
     runReviewStart: async (request) => { requests.push(request); pending.add(request.reviewNodeId); },
+    ...overrides,
   });
   return { runtime, elements, requests, state };
 }
+
+test('Agent Apply rejects a different evaluation without mutations and permits the matching displayed stale evaluation', () => {
+  const state = canvas();
+  find(state, 's').historyRecordId = 'evaluation-2';
+  find(state, 'rev').reviewSourceEarlier = false;
+  const before = structuredClone(state);
+  const operations = [{ op: 'apply_review', review: 'rev', suggestion_ids: ['1'] }];
+  assert.throws(() => planChangeSet(state, operations, { extractInputFields }), /Historical.*different Evaluate History/);
+  assert.deepEqual(state, before);
+  delete find(state, 's').historyRecordId;
+  find(state, 's').historyStaleRecordId = 'evaluation-1';
+  find(state, 'rev').reviewSourceEarlier = true;
+  const applied = planChangeSet(state, operations, { extractInputFields });
+  assert.equal(applied.state.nodes.length, state.nodes.length + 1);
+  assert.equal(applied.state.nodes.at(-1).text, 'Read carefully {text}');
+});
+
+test('canvas Apply reconciles History and blocks a version change before creating a Prompt', async () => {
+  let elements;
+  let reconciled = false;
+  let created = 0;
+  const harness = runtimeHarness(reviewResult(), {
+    reconcileHistory: async () => {
+      reconciled = true;
+      elements.get('s').dataset.historyRecordId = 'evaluation-2';
+    },
+    createPromptNode: () => { created++; throw new Error('must not create'); },
+  });
+  elements = harness.elements;
+  const before = elements.get('rev').dataset.reviewResult;
+  await assert.rejects(harness.runtime.applyReviewSuggestions({ reviewNodeId: 'rev', text: 'New prompt' }), /Historical/);
+  assert.equal(reconciled, true);
+  assert.equal(created, 0);
+  assert.equal(elements.get('rev').dataset.reviewResult, before);
+});
 
 test('the canvas Resume entry reuses the existing Optimize node and shared payload checks', async () => {
   const { runtime, requests } = runtimeHarness(reviewResult({ streamComplete: false }));

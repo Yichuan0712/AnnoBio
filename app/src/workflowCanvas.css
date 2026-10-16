@@ -661,14 +661,16 @@
   pointer-events: none;
 }
 
-/* Waiting for an upstream step's result (runHistoryResolver.js waitingForUpstream). */
-.workflow-node[data-waiting-for-upstream="1"] {
+/* Waiting for upstream data, or showing an evaluation/optimization that no longer matches. */
+.workflow-node[data-waiting-for-upstream="1"],
+.workflow-node--score.workflow-node--stale,
+.workflow-node--prompt-review.workflow-node--stale {
   opacity: 0.6;
 }
 
 /* Its last result was made from inputs it no longer has (runHistoryResolver.js historyStaleRecordId). */
 .workflow-node--stale::after {
-  content: 'Needs update';
+  content: 'Historical';
   position: absolute;
   top: -9px;
   left: 50%;

@@ -15,6 +15,28 @@ const record = (nodeId, signature) => ({
   inputs: { prompt: 'hello' }, status: 'completed', results: [{ output: 'world' }],
 });
 
+test('desktop Evaluate supports repeated attempts and refuses rewriting a completed snapshot', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'annobio-evaluation-history-'));
+  try {
+    const file = path.join(root, 'evaluate.yc'), assets = newAssets();
+    await assets.save(file, { historyVersion: 1, nodes: [{ nodeId: 'score', type: 'score' }], connections: [] });
+    const first = { ...record('score', 'same'), kind: 'score', evaluationVersion: 1 };
+    const second = { ...first, id: crypto.randomUUID().replaceAll('-', '') };
+    await assets.saveHistoryRecord(file, first);
+    await assets.saveHistoryRecord(file, second);
+    assert.equal((await assets.loadHistoryIndex(file)).records.length, 2);
+    await assert.rejects(assets.saveHistoryRecord(file, { ...first, results: ['changed'] }), /Completed history records cannot change/);
+    assert.deepEqual(await assets.loadHistoryRecord(file, first.id), first);
+    const state = { historyVersion: 1, nodes: [{ nodeId: 'score', type: 'score', historyRecordId: second.id },
+      { nodeId: 'opt', type: 'promptReview', evaluateRecordId: first.id, evaluateNodeId: 'score' }], connections: [] };
+    await assets.save(file, state);
+    const copied = path.join(root, 'copy.yc');
+    await assets.save(copied, state, { copySessionFromCurrent: true });
+    assert.deepEqual(await assets.loadHistoryRecord(copied, first.id), first);
+    assert.equal((await assets.load(copied)).nodes.find(node => node.nodeId === 'opt').evaluateRecordId, first.id);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
 test('history signatures distinguish Dataset identity and normalize object key order', async () => {
   const content = { headers: ['text'], rows: [['hello']], columnTypes: ['text'], rowIds: ['row-1'] };
   const first = await datasetSignature({ nodeId: 'dataset-1', content });

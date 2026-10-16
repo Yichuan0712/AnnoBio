@@ -13,11 +13,17 @@ Instead of rules, an Evaluate node can use custom match code: a Python `match(in
 function that returns truthy when a model output row and a ground-truth row match. Pairing is first-fit: each Generate
 row takes the first unclaimed ground-truth row that matches.
 
-Rule-based Evaluate nodes compute automatically. Custom match code runs explicitly: after configuring
-`match_code`, request a `run_nodes` job with `kind: score` and `node` set to the Evaluate. It runs the
-same Python matcher as the Evaluate window, reports progress, stores the result and retains partial
-results on cancellation. It uses the Python interpreter in Settings and makes no model calls.
-Run this job before requesting an Optimize node of an Evaluate node that uses code matching.
+Both modes run explicitly: request a `run_nodes` job with `kind: score` and `node` set to the
+Evaluate. Each Run saves a new immutable History attempt with the Generate record, actual ground
+truth, rules/code, exclusions, metrics and comparison rows. Code mode uses Python in Settings.
+Changing inputs keeps earlier results visible with an update notice. Run Evaluate again before
+creating a new Optimize. `inspect_node` includes Evaluate History and `resultsFromEarlierSetup`.
+
+Each Optimize node is permanently bound to the completed Evaluate record used at creation.
+Verify, Resume and suggestion optimization use the bound Prompt, schema, input table, ground truth
+and rules/code. A newer Evaluate does not invalidate the old experiment. To use the newer record,
+create a separate Optimize. Legacy Optimize results stay readable; an incomplete legacy source
+cannot be used for new execution. Source History cannot be deleted while an Optimize references it.
 
 ## Comparison options per rule
 
@@ -39,7 +45,7 @@ Inspecting the rule tree preserves the exact stored structure instead of just li
 
 To exclude a known invalid row, propose update with `exclude_row_keys`; use `include_row_keys` to bring
 it back. Use the exact `rowKey` from read_rows: zero-based GT keys such as "0", or unpaired Generate-result keys such
-as "run:0". Change inclusion separately from rules or inputs. This updates metrics and the inputs of
+as "run:0". Change inclusion separately from rules or inputs. Run Evaluate again to update metrics and the inputs of
 future Optimize runs; existing Optimize nodes retain the evidence they were created with.
 
 ## Reading results

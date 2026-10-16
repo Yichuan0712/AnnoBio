@@ -9176,3 +9176,4 @@ body.wd-image-dragging .wd-image-thumb { cursor: grabbing; }
   .modal-panel--prompt-schema .prompt-output-format-wrap,
   .modal-panel--prompt-schema .prompt-output-keys-list { overflow: visible; }
 }
+.review-detail-source-note { flex-shrink: 0; margin: 12px 20px; }

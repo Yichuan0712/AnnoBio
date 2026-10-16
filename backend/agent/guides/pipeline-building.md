@@ -75,15 +75,21 @@ The workspace summary describes the route currently selected in the panel, or la
 route when the panel has not been mounted. Only the user can change a picker; after a change, refresh
 the workspace before acting.
 
-**Run to here** runs a step together with every step before it that has no current result, and
-reuses the steps that have one. The user starts it from a step's Run button (when an input has no
-result yet) or its right-click menu, and sees a plan first: what it reads, what it reuses, what runs.
-**Run this step** (same menu) runs only that step; the steps it reads must be current. When
-everything up to the step is current, either one runs the step again.
-To run a whole pipeline, use Run to here on its last step. Each such run is listed in the **Executions** tab, where
-it can be stopped or resumed. Every step's result goes into that step's History. The Agent requests
-the same with a `run_nodes` job of kind `run_to` (add `only_this: true` for one step), which the user
-confirms on a card.
+**Run only this node** starts just that node from the beginning using current upstream results.
+**Resume pipeline to here** reuses current completed results, continues compatible partial Generate
+results, and fills missing or outdated steps up to the target. If everything is current, nothing runs.
+**Restart pipeline to here** starts every required upstream step and the target from the beginning,
+ignoring completed and partial progress while keeping old History. The menu hides equivalent scopes:
+Resume is shown only when upstream work is needed; Restart only when upstream steps and prior work exist.
+Partial Generate nodes also offer **Resume** to continue only that node. Running tasks offer **Stop**.
+The plan states which inputs are read, which results are reused and which steps execute.
+Scope follows actual data dependencies, including all merge inputs, and excludes unrelated branches,
+downstream nodes and provenance connections. A saved Dataset is a boundary.
+Each run is listed in **Executions**, where it can be stopped or resumed. Continuing an interrupted
+Restart keeps its freshly completed steps but still reruns unstarted steps with old results.
+Every fresh step creates a new History attempt. The Agent uses a `run_nodes` job of kind `run_to`
+with `mode: resume` (default), `restart`, `only`, or `resume-node`. `only_this: true` remains an alias
+for `mode: only`. The user confirms the plan on a card.
 Use `run_nodes` for a single Generate or Process when testing or iterating on one stage.
 Use kind `stop` with a node id to request cancellation of a running Generate, Process, code Evaluate,
 Optimize or suggestion optimization, including tasks started in the UI. Refresh the workspace to
