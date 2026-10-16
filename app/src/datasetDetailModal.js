@@ -10,6 +10,7 @@ import { displayCell, imageCell, isImageCell, pdfCell, isPdfCell, cloneCell, nor
 import { getCurrentProjectId } from './currentProject.js';
 import * as webImageApi from './webImageApi.js';
 import { openDatasetBatchImport } from './datasetBatchImportModal.js';
+import { fillDatasetTextCells } from './datasetTableLayout.js';
 import { iconSquarePlus, iconCopyPlus, iconFileText } from './icons.js';
 
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
@@ -229,6 +230,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
       colgroup.appendChild(col);
     });
     table.style.width = `${Math.max(tableWidth, rowNumWidth)}px`;
+    fillDatasetTextCells(table);
   }
 
   /** Recognizes the specific GFM table shape backend/pdf_client.py's _rows_to_markdown emits
@@ -423,6 +425,11 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
       headers,
       columnTypes,
       rows,
+      previewAsset: (assetId) => hasElectron
+        ? window.electronAPI.imagePreview(assetId)
+        : webImageApi.imagePreview(getCurrentProjectId(), assetId),
+      columnWidths: columnWidths.slice(),
+      rowHeights: rowHeights.slice(),
       startAtRow: selectedRowIndex >= 0 ? selectedRowIndex : 0,
       importFiles: (entries) => {
         const paths = hasElectron
@@ -441,7 +448,6 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
         }
       },
       persistContent,
-      onPlanChange: () => render(),
       onClose: () => {
         activeBatchImport = null;
         activeBatchTarget = null;
@@ -1275,6 +1281,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
     if (nextBtn) nextBtn.disabled = currentPage >= totalPages;
     updateSummary();
     updateDeleteButtons();
+    fillDatasetTextCells(overlay.querySelector('.working-dataset-edit-table'));
     if (readOnly) overlay.querySelectorAll('.wd-header-inp, .wd-cell-textarea, .wd-cell-inp').forEach((input) => { input.readOnly = true; });
   }
 

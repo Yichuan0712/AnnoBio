@@ -1,8 +1,8 @@
-import { openPromptFieldEditor, renderPromptFieldCards } from './promptSchemaUi.js';
-import { inputsToViewHtml } from './promptDetailModal.js';
+import { mountPromptSchemaSettings, validatePromptSchema } from './promptSchemaUi.js';
+import { inputsToViewHtml, schemaToViewHtml } from './promptDetailModal.js';
 
 /**
- * Three-step Prompt creator: name, the prompt text, the output schema. Field editors open inside this window.
+ * Three-step Prompt creator: name, the prompt text, the output schema. Fields are edited in a separate dialog shared with existing Prompts.
  */
 
 function escapeHtml(str) {
@@ -58,19 +58,7 @@ export function openAddPromptModal(workflowCanvasApi) {
           </div>
           <div class="prompt-step prompt-step-3">
             <p class="prompt-step-label">Step 3 of 3 — LLM output schema</p>
-            <p class="prompt-hint">Define the fields in each output row. Choose whether each input row produces one output row or multiple output rows.</p>
-            <div class="prompt-output-return-shape-wrap">
-              <span class="prompt-output-return-shape-label">For each input row</span>
-              <div class="review-detail-view-switch prompt-output-row-switch" role="group" aria-label="Output rows">
-                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab prompt-output-row-btn" data-return-shape="single" aria-pressed="false">One output row</button>
-                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active prompt-output-row-btn" data-return-shape="table" aria-pressed="true">Multiple output rows</button>
-              </div>
-            </div>
-            <div class="prompt-output-format-wrap">
-              <div class="prompt-step-scroll prompt-step-3-format-scroll">
-                <div class="prompt-output-keys-list"></div>
-              </div>
-            </div>
+            <div class="prompt-schema-settings"></div>
             <div class="prompt-form-error prompt-modal-error" role="alert" aria-live="polite" hidden></div>
             <div class="prompt-actions">
               <button type="button" class="btn btn-secondary prompt-btn-back">Back</button>
@@ -86,56 +74,16 @@ export function openAddPromptModal(workflowCanvasApi) {
           <h3 class="prompt-schema-preview-title">
             <span class="prompt-schema-preview-heading-text">Output schema</span>
           </h3>
-          <div class="prompt-schema-preview-table-wrap">
-            <span class="prompt-schema-preview-return-shape prompt-schema-preview-return-shape-value" title="Each input row can produce multiple output rows.">Multiple output rows per input</span>
-            <table class="prompt-schema-preview-table" aria-readonly="true">
-              <thead>
-                <tr>
-                  <th>Field</th>
-                  <th>Description</th>
-                  <th>Examples</th>
-                </tr>
-              </thead>
-              <tbody class="prompt-schema-preview-tbody"></tbody>
-            </table>
-          </div>
+          <div class="prompt-create-schema-preview"></div>
         </div>
       </div>
     </div>
   `;
 
   const panel = overlay.querySelector('.modal-panel--prompt');
-  const modalBody = panel.querySelector('.modal-body');
-  const promptMain = panel.querySelector('.prompt-main');
   const textInput = overlay.querySelector('#prompt-text-input');
   const previewEl = overlay.querySelector('.prompt-preview');
-  let activeEditor = null;
-
-  function openInlineEditor(kind, openEditor) {
-    if (activeEditor) return;
-    const side = document.createElement('aside');
-    side.className = 'prompt-detail-editor-panel prompt-create-editor-panel';
-    side.setAttribute('aria-label', 'Edit output field');
-    const host = document.createElement('div');
-    host.className = 'prompt-detail-editor-panel__child-host';
-    side.appendChild(host);
-    modalBody.appendChild(side);
-    activeEditor = side;
-    panel.dataset.addPromptEditor = kind;
-    promptMain.inert = true;
-    panel.querySelectorAll('.prompt-step-2 .prompt-actions button, .prompt-step-3 .prompt-actions button').forEach((button) => {
-      button.disabled = true;
-    });
-    openEditor(host, () => {
-      side.remove();
-      activeEditor = null;
-      delete panel.dataset.addPromptEditor;
-      promptMain.inert = false;
-      panel.querySelectorAll('.prompt-step-2 .prompt-actions button, .prompt-step-3 .prompt-actions button').forEach((button) => {
-        button.disabled = false;
-      });
-    });
-  }
+  const schemaPreviewEl = overlay.querySelector('.prompt-create-schema-preview');
 
   function goToStep(step) {
     panel.setAttribute('data-add-prompt-step', String(step));
@@ -205,96 +153,21 @@ export function openAddPromptModal(workflowCanvasApi) {
   });
   overlay.querySelector('.prompt-btn-back').addEventListener('click', () => goToStep(2));
 
-  const OUTPUT_TYPES = [
-    { value: 'str', label: 'String' },
-    { value: 'float', label: 'Number' },
-    { value: 'list_str', label: 'List of string' },
-    { value: 'list_float', label: 'List of number' },
-  ];
-
   let outputFields = [];
-  let outputReturnShape = 'table'; // 'single' | 'table'
-  const outputKeysListEl = overlay.querySelector('.prompt-output-keys-list');
-  const returnShapeButtons = overlay.querySelectorAll('.prompt-output-row-btn');
-  returnShapeButtons.forEach((button) => {
-    button.addEventListener('click', () => {
-      outputReturnShape = button.dataset.returnShape;
-      returnShapeButtons.forEach((item) => {
-        const active = item === button;
-        item.classList.toggle('review-detail-tab--active', active);
-        item.setAttribute('aria-pressed', String(active));
-      });
-      updateSchemaPreview();
-    });
-  });
-
-  function examplesToText(examples, type) {
-    if (!Array.isArray(examples) || examples.length === 0) return '';
-    if (type === 'list_str' || type === 'list_float') {
-      return examples.map((arr) => (Array.isArray(arr) ? arr.map(String) : []).join(', ')).join('\n');
-    }
-    return examples.map((ex) => (typeof ex === 'string' ? ex : String(ex ?? ''))).join('\n');
-  }
-
-  function textToExamples(text, type) {
-    const lines = (text || '').split(/\n/).map((s) => s.trim()).filter(Boolean);
-    if (type === 'list_str') return lines.map((line) => line.split(',').map((s) => s.trim()).filter(Boolean));
-    if (type === 'list_float') return lines.map((line) => line.split(',').map((s) => s.trim()).filter((s) => s !== '').map(Number));
-    if (type === 'float') return lines.map(Number);
-    return lines;
-  }
-
-  const SCHEMA_PREVIEW_MAX_CHARS = 30;
-
-  function escapeAttr(str) {
-    const s = String(str ?? '');
-    return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-  }
-
-  function truncateForSchema(str) {
-    const s = String(str ?? '').trim();
-    return s.length > SCHEMA_PREVIEW_MAX_CHARS ? s.slice(0, SCHEMA_PREVIEW_MAX_CHARS) + '…' : s;
-  }
-
-  function formatExamplesForPreview(examples, type) {
-    if (!Array.isArray(examples) || examples.length === 0) return '';
-    const isStr = type === 'str';
-    const isListStr = type === 'list_str';
-    if (type === 'list_str' || type === 'list_float') {
-      return examples.map((arr) => {
-        if (!Array.isArray(arr)) return '[]';
-        if (isListStr) return '[' + arr.map((el) => '"' + String(el ?? '').replace(/"/g, '\\"') + '"').join(', ') + ']';
-        return '[' + arr.join(', ') + ']';
-      }).join('; ');
-    }
-    if (isStr) return examples.map((ex) => '"' + String(ex ?? '').replace(/"/g, '\\"') + '"').join(', ');
-    return examples.join(', ');
-  }
-
+  let outputReturnShape = 'table';
   function updateSchemaPreview() {
-    const tbody = overlay.querySelector('.prompt-schema-preview-tbody');
-    const returnShapeEl = overlay.querySelector('.prompt-schema-preview-return-shape-value');
-    if (!tbody) return;
-    if (returnShapeEl) {
-      const isSingle = outputReturnShape === 'single';
-      returnShapeEl.textContent = isSingle ? 'One output row per input' : 'Multiple output rows per input';
-      returnShapeEl.title = isSingle
-        ? 'Each input row produces one output row.'
-        : 'Each input row can produce multiple output rows.';
-    }
-    tbody.innerHTML = outputFields.map((f) => {
-      const nameRaw = (f.key || '').trim();
-      const descRaw = (f.description ?? '').trim();
-      const exRaw = formatExamplesForPreview(f.examples, f.type || 'str');
-      const name = escapeHtml(truncateForSchema(nameRaw));
-      const desc = escapeHtml(truncateForSchema(descRaw));
-      const ex = escapeHtml(truncateForSchema(exRaw));
-      const nameFull = escapeAttr(nameRaw);
-      const descFull = escapeAttr(descRaw);
-      const exFull = escapeAttr(exRaw);
-      return `<tr><td class="prompt-detail-schema-cell" data-fulltext="${nameFull}">${name}</td><td class="prompt-detail-schema-cell" data-fulltext="${descFull}">${desc}</td><td class="prompt-detail-schema-cell" data-fulltext="${exFull}">${ex}</td></tr>`;
-    }).join('');
+    schemaPreviewEl.innerHTML = schemaToViewHtml(outputFields, outputReturnShape, { showEmptyTable: true });
   }
+  const schemaSettings = mountPromptSchemaSettings(overlay.querySelector('.prompt-schema-settings'), {
+    fields: outputFields,
+    returnShape: outputReturnShape,
+    onChange({ fields, returnShape }) {
+      outputFields = fields;
+      outputReturnShape = returnShape;
+      clearPromptError();
+      updateSchemaPreview();
+    },
+  });
 
   function decodeAttr(s) {
     if (s == null) return '';
@@ -358,50 +231,6 @@ export function openAddPromptModal(workflowCanvasApi) {
     schemaWrap.addEventListener('mousemove', moveTooltip);
   }
 
-  function renderOutputFieldCards() {
-    renderPromptFieldCards({
-      fields: outputFields,
-      container: outputKeysListEl,
-      outputTypes: OUTPUT_TYPES,
-      onChange: () => {
-        renderOutputFieldCards();
-        updateSchemaPreview();
-      },
-      onEdit: (fieldIndex) => openInlineEditor('field', (host, onClose) => openPromptFieldEditor({
-        fields: outputFields,
-        fieldIndex,
-        outputTypes: OUTPUT_TYPES,
-        onDone: () => {
-          renderOutputFieldCards();
-          updateSchemaPreview();
-        },
-        host,
-        onClose,
-      })),
-    });
-    const addWrap = document.createElement('div');
-    addWrap.className = 'prompt-add-field-wrap';
-    const addBtn = document.createElement('button');
-    addBtn.type = 'button';
-    addBtn.className = 'btn btn-secondary prompt-output-add-key';
-    addBtn.textContent = '+ Add a field';
-    addBtn.addEventListener('click', () => {
-      openInlineEditor('field', (host, onClose) => openPromptFieldEditor({
-        fields: outputFields,
-        outputTypes: OUTPUT_TYPES,
-        onDone: () => {
-          renderOutputFieldCards();
-          updateSchemaPreview();
-        },
-        host,
-        onClose,
-      }));
-    });
-    addWrap.appendChild(addBtn);
-    outputKeysListEl.appendChild(addWrap);
-    updateSchemaPreview();
-  }
-
   /** The inputs the text uses, as the Prompt window lists them. */
   function updatePreview() {
     const text = textInput.value;
@@ -417,11 +246,6 @@ export function openAddPromptModal(workflowCanvasApi) {
     clearPromptError();
     updatePreview();
   });
-
-  function hasDuplicateFieldNames(fieldsList) {
-    const keys = fieldsList.map((o) => (o.key || '').trim().toLowerCase());
-    return keys.length !== new Set(keys).size;
-  }
 
   overlay.querySelector('.prompt-generate-node').addEventListener('click', () => {
     clearPromptError();
@@ -440,22 +264,9 @@ export function openAddPromptModal(workflowCanvasApi) {
         allowNone: o.allowNone === true,
       })),
     };
-    if (outputFormat.fields.length === 0) {
-      showPromptError('At least one output field is required.');
-      return;
-    }
-    const missingFieldName = outputFormat.fields.some((f) => !(f.key ?? '').trim());
-    if (missingFieldName) {
-      showPromptError('Field name is required for all fields.');
-      return;
-    }
-    if (hasDuplicateFieldNames(outputFormat.fields)) {
-      showPromptError('Field names must be unique within this prompt. Please fix duplicate field names.');
-      return;
-    }
-    const missingFieldDesc = outputFormat.fields.some((f) => !(f.description ?? '').trim());
-    if (missingFieldDesc) {
-      showPromptError('Field description is required for all fields.');
+    const schemaError = validatePromptSchema(outputFormat.fields);
+    if (schemaError) {
+      showPromptError(schemaError);
       return;
     }
     outputReturnShape = outputFormat.returnShape;
@@ -482,9 +293,10 @@ export function openAddPromptModal(workflowCanvasApi) {
   });
 
   updatePreview();
-  renderOutputFieldCards();
+  updateSchemaPreview();
 
   const close = () => {
+    schemaSettings.dispose();
     overlay.remove();
     document.body.style.overflow = '';
   };

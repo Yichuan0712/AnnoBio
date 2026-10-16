@@ -6369,7 +6369,8 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
 .working-dataset-edit-table td .wd-cell-textarea:hover,
 .prompt-detail-text-view--editable:hover,
 .prompt-detail-text-editor:hover,
-.modal-panel--prompt .dataset-meta-input:hover {
+.modal-panel--prompt .dataset-meta-input:hover,
+.modal-panel--field-editor .dataset-meta-input:hover {
   border-color: var(--border);
 }
 
@@ -6395,7 +6396,8 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
 .working-dataset-edit-table td .wd-cell-textarea:focus,
 .prompt-detail-text-view--editable:focus-visible,
 .prompt-detail-text-editor:focus,
-.modal-panel--prompt .dataset-meta-input:focus {
+.modal-panel--prompt .dataset-meta-input:focus,
+.modal-panel--field-editor .dataset-meta-input:focus {
   outline: none;
   border-color: var(--text-muted);
 }
@@ -6584,34 +6586,42 @@ body.wd-row-resizing {
   overflow: auto;
 }
 
+.modal-panel--dataset-batch {
+  width: 88vw;
+  min-width: min(960px, 92vw);
+  max-width: 92vw;
+  height: 78vh;
+  max-height: 98vh;
+  overflow: hidden;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text);
+}
+.dataset-batch-layout { display: flex; flex: 1; min-height: 0; overflow: hidden; }
 .dataset-batch-panel {
-  flex: 0 0 300px;
+  flex: 0 0 calc(100% / 3);
+  box-sizing: border-box;
   min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border-left: 1px solid var(--border);
-  background: var(--bg-bar);
+  border-right: 1px solid var(--border);
+  background: var(--bg);
   color: var(--text);
   font-family: inherit;
   font-size: 13px;
 }
 
-.dataset-batch-panel__header,
 .dataset-batch-panel__footer {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 12px 14px;
+  margin: 0;
+  padding: 12px 20px;
 }
 
-.dataset-batch-panel__header { border-bottom: 1px solid var(--border); }
-.dataset-batch-panel__heading { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.dataset-batch-panel__heading strong { flex: 0 0 auto; font-size: 14px; font-weight: 600; }
-.dataset-batch-panel__target { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-muted); }
-.dataset-batch-panel__close,
 .dataset-batch-card__remove {
   border: 0;
   background: transparent;
@@ -6619,10 +6629,11 @@ body.wd-row-resizing {
   cursor: pointer;
   font: inherit;
 }
-.dataset-batch-panel__close { flex: 0 0 auto; font-size: 20px; line-height: 1; }
-.dataset-batch-panel__body { flex: 1; min-height: 0; overflow: auto; padding: 14px; }
+.dataset-batch-panel > .prompt-preview-title,
+.dataset-batch-preview__heading { flex-shrink: 0; }
+.dataset-batch-panel__body { flex: 1; min-height: 0; overflow: auto; padding: 16px 20px; }
 .dataset-batch-panel__mode-switch { margin-bottom: 12px; }
-.dataset-batch-panel__source-field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; color: var(--text-muted); font-size: 12px; }
+.dataset-batch-panel__source-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; color: var(--text-muted); font-size: 13px; font-weight: 600; }
 .dataset-batch-panel__source-field[hidden] { display: none; }
 .dataset-batch-panel__source-field .dataset-meta-input { width: 100%; box-sizing: border-box; }
 .dataset-batch-panel__drop {
@@ -6639,8 +6650,6 @@ body.wd-row-resizing {
 .dataset-batch-panel__drop--active { border-color: var(--accent, #5667e9); background: var(--hover); }
 .dataset-batch-panel__hint { margin: 10px 0; }
 .dataset-batch-panel__summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 0; color: var(--text-muted); font-size: 12px; }
-.dataset-batch-panel__sort { flex: 0 0 auto; border: 0; background: transparent; color: var(--text); font: inherit; cursor: pointer; }
-.dataset-batch-panel__sort:disabled { color: var(--text-muted); cursor: default; }
 .dataset-batch-panel__cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .dataset-batch-panel__empty { grid-column: 1 / -1; }
 .dataset-batch-card {
@@ -6666,12 +6675,14 @@ body.wd-row-resizing {
   color: var(--text-muted);
 }
 .dataset-batch-card__preview img { width: 100%; height: 100%; object-fit: cover; }
+.dataset-batch-card__picture { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; }
+.dataset-batch-card__preview--pdf img { object-fit: contain; }
 .dataset-batch-card__order { position: absolute; top: 4px; left: 4px; padding: 2px 5px; background: var(--bg-bar); color: var(--text); font-size: 11px; }
 .dataset-batch-card__pdf { font-size: 13px; font-weight: 600; }
 .dataset-batch-card__placeholder { font-size: 12px; }
 .dataset-batch-card__info { display: flex; flex-direction: column; gap: 2px; padding-top: 6px; }
 .dataset-batch-card__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dataset-batch-card__destination { color: var(--text-muted); font-size: 11px; line-height: 1.35; }
+.dataset-batch-card__destination { color: var(--text-muted); font-size: 12px; line-height: 1.5; }
 .dataset-batch-card__remove {
   position: absolute;
   top: 6px;
@@ -6685,8 +6696,28 @@ body.wd-row-resizing {
   line-height: 1;
 }
 .dataset-batch-panel__footer { justify-content: flex-end; border-top: 1px solid var(--border); }
+.dataset-batch-preview {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+}
+.dataset-batch-preview__hint { padding: 12px 16px; }
+.dataset-batch-preview__table th.dataset-batch-preview__column--target .wd-header-inp { font-weight: 700; }
+.dataset-batch-preview__table .wd-pdf-cell { min-width: 0; }
+.dataset-batch-preview__table .wd-pdf-strip { min-width: 0; max-width: 100%; }
+.dataset-batch-preview__table .wd-pdf-chip-wrap { min-width: 0; }
+.dataset-batch-preview__table .wd-pdf-chip { min-width: 0; box-sizing: border-box; }
+.dataset-batch-preview__table .wd-pdf-chip svg { flex-shrink: 0; }
+.dataset-batch-preview__table .wd-pdf-chip-name { min-width: 0; }
+.dataset-batch-preview__new-label { display: block; font-size: 11px; color: var(--text-muted); }
+.dataset-batch-preview__table .dataset-batch-preview__cell--drop-target { outline: 2px solid var(--accent); outline-offset: -2px; background: var(--hover); }
+.dataset-batch-preview__pages { flex-wrap: wrap; gap: 8px; border-top: 1px solid var(--border); color: var(--text-muted); }
 .wd-batch-cell-preview__content {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   margin-top: 6px;
@@ -6696,11 +6727,18 @@ body.wd-row-resizing {
   font-size: 11px;
 }
 .wd-batch-cell-preview__content img { width: 26px; height: 26px; object-fit: cover; }
+.wd-batch-cell-preview__content > .wd-pdf-strip { flex-basis: 100%; }
+.wd-batch-cell-preview__content .wd-image-thumb { width: 26px; height: 26px; }
 .wd-pdf-cell--drop-target { outline: 2px solid var(--accent, #5667e9); outline-offset: -2px; background: var(--hover); }
 
 @media (max-width: 900px) {
-  .dataset-batch-panel { flex-basis: 240px; }
   .dataset-batch-panel__cards { grid-template-columns: 1fr; }
+}
+@media (max-width: 700px) {
+  .dataset-batch-layout { flex-direction: column; }
+  .dataset-batch-panel { flex: 0 1 45%; border-right: 0; border-bottom: 1px solid var(--border); }
+  .dataset-batch-panel__cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dataset-batch-preview__pages { gap: 6px; flex-wrap: wrap; }
 }
 
 .dataset-image-import-table th,
@@ -7614,11 +7652,13 @@ body.wd-row-resizing {
 }
 
 .prompt-schema-preview-table th:nth-child(1),
-.prompt-schema-preview-table td:nth-child(1) { width: 28%; }
+.prompt-schema-preview-table td:nth-child(1) { width: 24%; }
 .prompt-schema-preview-table th:nth-child(2),
-.prompt-schema-preview-table td:nth-child(2) { width: 36%; }
+.prompt-schema-preview-table td:nth-child(2) { width: 32%; }
 .prompt-schema-preview-table th:nth-child(3),
-.prompt-schema-preview-table td:nth-child(3) { width: 36%; }
+.prompt-schema-preview-table td:nth-child(3) { width: auto; }
+.prompt-schema-preview-table th:nth-child(4),
+.prompt-schema-preview-table td:nth-child(4) { width: 88px; }
 
 .prompt-schema-preview-table th,
 .prompt-schema-preview-table td {
@@ -7968,6 +8008,7 @@ body.wd-row-resizing {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .modal-panel--section-editor .modal-body {
@@ -8042,8 +8083,10 @@ body.wd-row-resizing {
 }
 
 .field-editor-scalar-input-wrap textarea.field-editor-scalar-inp {
-  min-height: 30px;
-  resize: vertical;
+  min-height: 38px;
+  line-height: 1.5;
+  overflow-y: hidden;
+  resize: none;
 }
 
 .field-editor-scalar-del {
@@ -8111,8 +8154,10 @@ body.wd-row-resizing {
 }
 
 .field-editor-element-input-wrap textarea.field-editor-element-inp {
-  min-height: 30px;
-  resize: vertical;
+  min-height: 38px;
+  line-height: 1.5;
+  overflow-y: hidden;
+  resize: none;
 }
 
 .field-editor-del-element {
@@ -9023,93 +9068,13 @@ body.wd-image-dragging .wd-image-thumb { cursor: grabbing; }
   flex-shrink: 0;
 }
 
-/* Prompt detail's schema editor stays inside the detail window, beside the schema preview. */
-.modal-panel--prompt-detail[data-prompt-side-kind="schema"] .prompt-detail-main {
-  display: none;
-}
-.modal-panel--prompt-detail[data-prompt-side-kind="schema"] .prompt-detail-side.prompt-preview-wrap {
-  flex: 1 1 0;
-}
-.modal-panel--prompt-detail[data-prompt-side-kind] .modal-pane-toggle { display: none; }
-.prompt-detail-editor-panel {
-  flex: 0 0 min(43%, 500px);
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  border-left: 1px solid var(--border);
-  background: var(--bg-bar);
-  color: var(--text);
-  font-family: inherit;
-  font-size: 13px;
-}
-.prompt-detail-editor-panel__header {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--border);
-}
-.prompt-detail-editor-panel__header strong { font-size: 14px; font-weight: 600; }
-.prompt-detail-editor-panel__overview,
-.prompt-detail-editor-panel__child-host {
-  flex: 1 1 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.prompt-detail-editor-panel__overview { gap: 10px; padding: 14px; }
-.prompt-detail-editor-panel__overview[hidden],
-.prompt-detail-editor-panel__child-host[hidden] { display: none; }
-.prompt-detail-editor-panel__overview > .prompt-hint { margin: 0; }
-.prompt-detail-editor-panel__scroll {
-  flex: 1 1 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  overflow-y: auto;
-}
-.prompt-detail-editor-panel .prompt-output-keys-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.prompt-detail-editor-panel .prompt-output-keys-list { flex: 0 0 auto; overflow: visible; }
-.prompt-detail-editor-panel .prompt-add-field-wrap { flex: 0 0 auto; }
-.prompt-detail-side-child-editor {
-  flex: 1 1 0;
-  min-height: 0;
-  display: flex;
-  overflow: hidden;
-}
-.prompt-detail-side-child-editor .modal-panel--section-editor,
-.prompt-detail-side-child-editor .modal-panel--field-editor {
-  flex: 1 1 0;
-  width: 100%;
-  min-width: 0;
-  max-width: none;
-  max-height: none;
-  height: 100%;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-}
-.prompt-detail-side-child-editor .modal-header { padding: 12px 14px; cursor: default; }
-.prompt-detail-side-child-editor .modal-title { font-size: 14px; }
-.prompt-detail-side-child-editor .modal-panel--section-editor .modal-body { padding: 14px; }
-
-/* All three Step 3 columns start with the same header height. */
+/* Keep both Step 3 header dividers aligned. */
 .modal-panel--prompt[data-add-prompt-step="3"] .prompt-main {
   padding-top: 0;
 }
 
 .modal-panel--prompt[data-add-prompt-step="3"] .prompt-step-3 > .prompt-step-label,
-.modal-panel--prompt .prompt-schema-preview-title,
-.prompt-create-editor-panel .modal-header {
+.modal-panel--prompt .prompt-schema-preview-title {
   box-sizing: border-box;
   height: 44px;
   flex-shrink: 0;
@@ -9122,22 +9087,68 @@ body.wd-image-dragging .wd-image-thumb { cursor: grabbing; }
   padding-inline: 20px;
 }
 
-/* Keep the three-step Prompt creator in place while editing a field. */
-.modal-panel--prompt[data-add-prompt-editor] .prompt-preview-wrap { display: none; }
-.modal-panel--prompt[data-add-prompt-editor="field"] .prompt-create-editor-panel {
-  flex: 0 0 min(43%, 500px);
+/* Shared schema settings; adding or editing a field opens an independent modal. */
+.prompt-schema-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }
-
-@media (max-width: 900px) {
-  .prompt-detail-editor-panel { flex-basis: 48%; }
+.prompt-schema-settings > .prompt-hint { margin: 0; flex-shrink: 0; }
+.prompt-schema-settings > .prompt-output-return-shape-wrap,
+.prompt-schema-settings .prompt-add-field-wrap { flex-shrink: 0; }
+.prompt-schema-settings .prompt-output-keys-list { flex: 0 0 auto; overflow: visible; }
+.prompt-create-schema-preview,
+.prompt-schema-editor-preview {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
 }
+.modal-panel--prompt-schema {
+  width: 88vw;
+  min-width: min(960px, 92vw);
+  max-width: 92vw;
+  height: 70vh;
+  max-height: 98vh;
+}
+.modal-panel--prompt-schema .prompt-schema-editor-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.prompt-schema-editor-settings {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  gap: 0;
+}
+.prompt-schema-editor-settings > .prompt-schema-settings { padding: 16px 20px; }
+.prompt-schema-editor-settings > .prompt-modal-error { margin: 0 20px 12px; }
+.modal-panel--prompt-schema .prompt-schema-preview-wrap {
+  flex: 1 1 0;
+  min-width: 0;
+  width: auto;
+}
+.prompt-schema-footer {
+  margin: 0;
+  padding: 12px 20px;
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+}
+.modal-panel--prompt-schema .prompt-schema-preview-title { height: 44px; box-sizing: border-box; }
 @media (max-width: 700px) {
-  .modal-panel--prompt[data-add-prompt-editor] .prompt-main,
-  .modal-panel--prompt[data-add-prompt-editor] .prompt-schema-preview-wrap { display: none; }
-  .modal-panel--prompt[data-add-prompt-editor] .prompt-create-editor-panel { flex: 1 1 0; }
-}
-@media (max-width: 700px) {
-  .modal-panel--prompt-detail[data-prompt-side-kind] .prompt-detail-main,
-  .modal-panel--prompt-detail[data-prompt-side-kind] .prompt-detail-side.prompt-preview-wrap { display: none; }
-  .prompt-detail-editor-panel { flex: 1 1 0; }
+  .modal-panel--prompt-schema .prompt-schema-editor-body { flex-direction: column; overflow: auto; }
+  .prompt-schema-editor-settings { flex: 0 0 auto; }
+  .modal-panel--prompt-schema .prompt-schema-preview-wrap { flex: 0 0 auto; border-top: 1px solid var(--border); border-left: 0; }
+  .modal-panel--prompt-schema .prompt-schema-settings,
+  .modal-panel--prompt-schema .prompt-output-format-wrap,
+  .modal-panel--prompt-schema .prompt-output-keys-list { overflow: visible; }
 }

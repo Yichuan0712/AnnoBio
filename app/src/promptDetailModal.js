@@ -1,5 +1,5 @@
 import { attachModalPaneCycle } from './paneToggleButton.js';
-import { openPromptFieldEditor, renderPromptFieldCards } from './promptSchemaUi.js';
+import { openPromptSchemaEditor } from './promptSchemaUi.js';
 import { extractInputFields, promptPlaceholders } from './promptText.js';
 
 /**
@@ -75,13 +75,6 @@ function promptTextToViewHtml(text, placeholder) {
   return `<div class="preview-field-content">${lines}</div>`;
 }
 
-const OUTPUT_TYPES = [
-  { value: 'str', label: 'String' },
-  { value: 'float', label: 'Number' },
-  { value: 'list_str', label: 'List of string' },
-  { value: 'list_float', label: 'List of number' },
-];
-
 const SCHEMA_PREVIEW_MAX_CHARS = 30;
 
 function escapeAttr(str) {
@@ -108,8 +101,8 @@ function formatSchemaExamplesForView(examples, type) {
   return type === 'str' ? examples.map((ex) => '"' + String(ex ?? '').replace(/"/g, '\\"') + '"').join(', ') : examples.join(', ');
 }
 
-function schemaToViewHtml(fields, returnShape) {
-  if (!fields || fields.length === 0) return '<p class="prompt-detail-placeholder">No output schema.</p>';
+export function schemaToViewHtml(fields, returnShape, { showEmptyTable = false } = {}) {
+  if (!showEmptyTable && (!fields || fields.length === 0)) return '<p class="prompt-detail-placeholder">No output schema.</p>';
   const isSingle = returnShape === 'single';
   const rowLabel = isSingle ? 'One output row per input' : 'Multiple output rows per input';
   const rowHint = isSingle
@@ -236,7 +229,7 @@ function buildPromptExportText(snapshot) {
 }
 
 function hasPromptExportBlockingOverlayOpen() {
-  return !!document.querySelector('.modal-overlay--field-editor, .modal-overlay--section-editor');
+  return !!document.querySelector('.modal-overlay--field-editor, .modal-overlay--section-editor, .modal-overlay--prompt-schema');
 }
 
 const PROMPT_TEXT_SAVE_DELAY_MS = 300;
@@ -311,54 +304,13 @@ export function openPromptDetailModal({ name = '', text = '', node: sourceNode =
       </div>
     `;
 
-  const panel = overlay.querySelector('.modal-panel--prompt-detail');
-  const detailBody = overlay.querySelector('.prompt-detail-body');
-  let activeSidePanel = null;
-
-  function openSidePanel(kind, title, bodyHtml) {
-    if (activeSidePanel?.kind === kind) return null;
-    activeSidePanel?.close();
-    const hadLeftCollapsed = overlay.classList.contains('modal-overlay--left-pane-collapsed');
-    const hadRightCollapsed = overlay.classList.contains('modal-overlay--right-pane-collapsed');
-    overlay.classList.remove('modal-overlay--left-pane-collapsed', 'modal-overlay--right-pane-collapsed');
-    const side = document.createElement('aside');
-    side.className = 'prompt-detail-editor-panel';
-    side.setAttribute('aria-label', title);
-    side.innerHTML = `<div class="prompt-detail-editor-panel__header"><strong>${title}</strong><button type="button" class="modal-close prompt-detail-editor-panel__close" aria-label="Close editor">&times;</button></div>
-      <div class="prompt-detail-editor-panel__overview">${bodyHtml}</div>
-      <div class="prompt-detail-editor-panel__child-host" hidden></div>`;
-    detailBody.appendChild(side);
-    panel.dataset.promptSideKind = kind;
-    const close = () => {
-      side.remove();
-      delete panel.dataset.promptSideKind;
-      if (hadLeftCollapsed) overlay.classList.add('modal-overlay--left-pane-collapsed');
-      if (hadRightCollapsed) overlay.classList.add('modal-overlay--right-pane-collapsed');
-      activeSidePanel = null;
-      syncPromptExportLocalEnabled();
-    };
-    side.querySelector('.prompt-detail-editor-panel__close').addEventListener('click', close);
-    activeSidePanel = { kind, side, close };
-    syncPromptExportLocalEnabled();
-    return side;
-  }
-
-  function showSideChild(side, openEditor) {
-    const overview = side.querySelector('.prompt-detail-editor-panel__overview');
-    const host = side.querySelector('.prompt-detail-editor-panel__child-host');
-    overview.hidden = true;
-    host.hidden = false;
-    openEditor(host, () => {
-      host.hidden = true;
-      overview.hidden = false;
-    });
-  }
+  let activeSchemaEditor = null;
   const exportLocalBtn = overlay.querySelector('.prompt-detail-export-local');
 
   function syncPromptExportLocalEnabled() {
     if (!exportLocalBtn) return;
     const noNode = !sourceNode;
-    const childBlocking = !!activeSidePanel || hasPromptExportBlockingOverlayOpen();
+    const childBlocking = !!activeSchemaEditor || hasPromptExportBlockingOverlayOpen();
     exportLocalBtn.disabled = noNode || childBlocking;
   }
 
@@ -366,6 +318,7 @@ export function openPromptDetailModal({ name = '', text = '', node: sourceNode =
   exportOverlayObserver.observe(document.body, { childList: true });
 
   function teardownPromptDetailModal() {
+    activeSchemaEditor?.close();
     exportOverlayObserver.disconnect();
     overlay.remove();
     document.body.style.overflow = '';
@@ -594,140 +547,28 @@ export function openPromptDetailModal({ name = '', text = '', node: sourceNode =
 
   const schemaBtnEdit = overlay.querySelector('.prompt-detail-schema-btn-edit');
 
-  function hasDuplicateFieldNames(fieldsList) {
-    const keys = fieldsList.map((o) => (o.key || '').trim().toLowerCase());
-    return keys.length !== new Set(keys).size;
+  function openEditSchemaWindow() {
+    if (activeSchemaEditor) return;
+    activeSchemaEditor = openPromptSchemaEditor({
+      fields: currentSchemaFields,
+      returnShape: currentSchemaReturnShape,
+      renderPreview: (fields, shape) => schemaToViewHtml(fields, shape, { showEmptyTable: true }),
+      onChange({ fields, returnShape }) {
+        currentSchemaFields = fields;
+        currentSchemaReturnShape = returnShape;
+        if (sourceNode) {
+          sourceNode.dataset.promptOutputFormat = JSON.stringify(fields);
+          sourceNode.dataset.promptOutputReturnShape = returnShape;
+        }
+        schemaView.innerHTML = schemaToViewHtml(fields, returnShape);
+        document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+      },
+      onClose() { activeSchemaEditor = null; syncPromptExportLocalEnabled(); },
+    });
+    syncPromptExportLocalEnabled();
   }
 
-  function openEditSchemaSidePanel() {
-    const editSchemaFields = currentSchemaFields.map((o) => ({
-      key: o.key || '',
-      type: o.type || 'str',
-      description: o.description ?? '',
-      examples: (o.examples || []).map((ex) => (Array.isArray(ex) ? ex.slice() : ex)),
-      allowNone: o.allowNone === true,
-    }));
-    const side = openSidePanel('schema', 'Edit output schema', `
-      <div class="edit-schema-form prompt-detail-editor-panel__scroll">
-        <div class="prompt-output-return-shape-wrap">
-          <span class="prompt-output-return-shape-label">Output rows</span>
-          <div class="review-detail-view-switch prompt-output-row-switch" role="group" aria-label="Output rows">
-            <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab prompt-output-row-btn" data-return-shape="single" aria-pressed="false">One row</button>
-            <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab prompt-output-row-btn" data-return-shape="table" aria-pressed="false">Multiple rows</button>
-          </div>
-        </div>
-        <div class="prompt-output-keys-list"></div>
-        <div class="prompt-add-field-wrap"><button type="button" class="btn btn-secondary prompt-output-add-key">+ Add a field</button></div>
-      </div>
-      <div class="prompt-form-error prompt-modal-error edit-schema-error" role="alert" aria-live="polite" hidden></div>`);
-    if (!side) return;
-    const formContainer = side.querySelector('.edit-schema-form');
-    const keysListEl = formContainer.querySelector('.prompt-output-keys-list');
-    const returnShapeButtons = formContainer.querySelectorAll('.prompt-output-row-btn');
-    let selectedReturnShape = currentSchemaReturnShape === 'single' ? 'single' : 'table';
-    function selectReturnShape(shape) {
-      selectedReturnShape = shape;
-      returnShapeButtons.forEach((button) => {
-        const active = button.dataset.returnShape === shape;
-        button.classList.toggle('review-detail-tab--active', active);
-        button.setAttribute('aria-pressed', String(active));
-      });
-    }
-    selectReturnShape(selectedReturnShape);
-    const errorEl = side.querySelector('.edit-schema-error');
-
-    function renderSchemaCards() {
-      renderPromptFieldCards({
-        fields: editSchemaFields,
-        container: keysListEl,
-        outputTypes: OUTPUT_TYPES,
-        onChange: () => {
-          renderSchemaCards();
-          persistToNode();
-        },
-        onEdit: (fieldIndex) => showSideChild(side, (host, onClose) => openPromptFieldEditor({
-          fields: editSchemaFields, fieldIndex, outputTypes: OUTPUT_TYPES,
-          onDone: () => { renderSchemaCards(); persistToNode(); }, host, onClose,
-        })),
-      });
-    }
-
-    const addFieldBtn = formContainer.querySelector('.prompt-output-add-key');
-    if (addFieldBtn) {
-      addFieldBtn.addEventListener('click', () => {
-        showSideChild(side, (host, onClose) => openPromptFieldEditor({
-          fields: editSchemaFields, outputTypes: OUTPUT_TYPES,
-          onDone: () => { renderSchemaCards(); persistToNode(); }, host, onClose,
-        }));
-      });
-    }
-
-    returnShapeButtons.forEach((button) => button.addEventListener('click', () => {
-      selectReturnShape(button.dataset.returnShape);
-      persistToNode();
-    }));
-
-    function showError(msg) {
-      if (errorEl) {
-        errorEl.textContent = msg;
-        errorEl.hidden = false;
-      }
-    }
-
-    function clearError() {
-      if (errorEl) {
-        errorEl.textContent = '';
-        errorEl.hidden = true;
-      }
-    }
-
-    function persistToNode() {
-      const returnShape = selectedReturnShape;
-      const fieldsToSave = editSchemaFields.length
-        ? editSchemaFields.map((o) => ({
-            key: o.key || '',
-            type: o.type || 'str',
-            description: (o.description ?? '').trim() || '',
-            examples: (o.examples || []).map((ex) => (Array.isArray(ex) ? ex.slice() : ex)),
-            allowNone: o.allowNone === true,
-          }))
-        : [];
-      clearError();
-      if (fieldsToSave.length === 0) {
-        showError('Add at least one field.');
-        return false;
-      }
-      const missingFieldName = fieldsToSave.some((f) => !(f.key ?? '').trim());
-      if (missingFieldName) {
-        showError('Field name is required for all fields.');
-        return false;
-      }
-      const missingFieldDesc = fieldsToSave.some((f) => !(f.description ?? '').trim());
-      if (missingFieldDesc) {
-        showError('Field description is required for all fields.');
-        return false;
-      }
-      if (hasDuplicateFieldNames(fieldsToSave)) {
-        showError('Field names must be unique within this prompt. Please fix duplicate field names.');
-        return false;
-      }
-      currentSchemaFields = fieldsToSave;
-      currentSchemaReturnShape = returnShape;
-      if (sourceNode) {
-        sourceNode.dataset.promptOutputFormat = JSON.stringify(currentSchemaFields);
-        sourceNode.dataset.promptOutputReturnShape = currentSchemaReturnShape;
-      }
-      schemaView.innerHTML = schemaToViewHtml(currentSchemaFields, currentSchemaReturnShape);
-      document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-      return true;
-    }
-
-    renderSchemaCards();
-  }
-
-  if (schemaBtnEdit) {
-    schemaBtnEdit.addEventListener('click', () => openEditSchemaSidePanel());
-  }
+  schemaBtnEdit?.addEventListener('click', openEditSchemaWindow);
 
   attachModalPaneCycle({
     overlay,

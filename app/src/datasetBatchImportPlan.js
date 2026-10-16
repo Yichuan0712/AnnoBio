@@ -62,6 +62,7 @@ export function buildBatchAssetPlan({ rows, files, targetColumn, sourceColumn, m
         let nextNewRow = rows.length;
         return files.map((_, index) => {
           if (manualTargets.has(index) || manualRows.has(index)) return { rowIndex: null, reason: '' };
+          while (reservedRows.has(nextNewRow)) nextNewRow++;
           const rowIndex = nextEmpty < emptyRows.length ? emptyRows[nextEmpty++] : nextNewRow++;
           return { rowIndex, reason: '' };
         });
@@ -74,7 +75,8 @@ export function buildBatchAssetPlan({ rows, files, targetColumn, sourceColumn, m
     const manualTarget = manualTargets.get(index);
     const selectedRow = manualTarget ? manualTarget.rowIndex : manualRows.has(index) ? manualRows.get(index) : automatic[index].rowIndex;
     const autoNewRow = mode === 'empty' && !manualTarget && !manualRows.has(index) && selectedRow >= rows.length;
-    const rowIndex = Number.isInteger(selectedRow) && selectedRow >= 0 && (selectedRow < rows.length || autoNewRow) ? selectedRow : null;
+    const manualNewRow = mode === 'empty' && manualTarget && selectedRow >= rows.length && selectedRow < rows.length + files.length;
+    const rowIndex = Number.isInteger(selectedRow) && selectedRow >= 0 && (selectedRow < rows.length || autoNewRow || manualNewRow) ? selectedRow : null;
     const columnIndex = Number.isInteger(manualTarget?.columnIndex) ? manualTarget.columnIndex : targetColumn;
     const current = rowIndex === null ? null : rows[rowIndex]?.[columnIndex];
     const existingCount = cellTest(current) ? current.assetIds.length : 0;
