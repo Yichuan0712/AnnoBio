@@ -25,6 +25,7 @@
 import { generateDisplayName } from './nodeLabels.js';
 import { effectiveProcessOutputs, showsProcessOutputs } from './processOutputPorts.js';
 import { processInputSources, runInputSource } from './stepInputs.js';
+import { normalizePipelineNames, pipelineNameKey } from './pipelineNames.js';
 
 const STEP_KIND = { PROMPT: 'prompt', PROCESS: 'process', DATASET: 'dataset' };
 
@@ -337,7 +338,11 @@ export function detectPipelines(canvasState) {
       const order = topoSort(componentIds, localEdges);
       return splitByConsumerKind(order.map((id) => stepById.get(id)), localEdges);
     })
-    .map((pipeline, index) => ({ id: `pipeline-${index + 1}`, ...pipeline }));
+    .map(({ nameScopes = [], ...pipeline }, index) => {
+      const nameKey = pipelineNameKey(pipeline, nameScopes);
+      const name = normalizePipelineNames(canvasState?.pipelineNames)[nameKey];
+      return { id: `pipeline-${index + 1}`, ...pipeline, nameKey, ...(name ? { name } : {}) };
+    });
 }
 
 const MAX_PIPELINES_PER_COMPONENT = 32;
@@ -368,7 +373,7 @@ function splitByConsumerKind(orderedSteps, edges) {
     }
     for (const kind of [STEP_KIND.PROMPT, STEP_KIND.PROCESS]) {
       const cut = new Set(mixed.consumerStepIds.filter((id) => stepById.get(id)?.kind !== kind));
-      queue.push(pruneVariant(variant, mixed.id, cut, kind));
+      queue.push({ ...pruneVariant(variant, mixed.id, cut, kind), nameScopes: [...(variant.nameScopes || []), `${mixed.id}:${kind}`] });
     }
   }
   return results;

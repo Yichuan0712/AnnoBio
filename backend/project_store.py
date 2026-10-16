@@ -439,6 +439,12 @@ def merge_project(target_id: str, source_id: str):
 
         target_state["nodes"] = target_nodes + source_nodes
         target_state["connections"] = list(target_state.get("connections") or []) + list(source_state.get("connections") or [])
+        target_names = target_state.get("pipelineNames")
+        source_names = source_state.get("pipelineNames")
+        target_state["pipelineNames"] = {
+            **(source_names if isinstance(source_names, dict) else {}),
+            **(target_names if isinstance(target_names, dict) else {}),
+        }
 
         target_assets = dict(target_data.get("assets") or {})
         source_assets = source_data.get("assets") or {}

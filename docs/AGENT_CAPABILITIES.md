@@ -24,11 +24,11 @@ Agent 的写入继续通过提案卡片确认，执行代码和模型任务通�
 | 单节点停止 | `run_nodes` 的 `stop` 请求取消界面或 Agent 启动的任务，Process / code Evaluate 共用瞬时任务取消句柄；已发出的模型请求可能继续完成；建议验证仍不可中途停止 |
 | History | `select_history`/`delete_history` 的预览和应用方法完整传入聊天运行环境；保留原有独立提案要求 |
 | 内容锁与删除 | `inspect_node.contentLock` 显示锁定来源；内容更新受相同锁约束；不能删除仍被下游使用的节点，可按用户要求整组删除 |
-| 运行到这里 | `run_nodes` 的 `run_to` 与界面共用规划和执行代码：`mode: resume`（默认）复用有效结果、续跑兼容的部分结果并补跑到当前节点，全有效时不执行；`mode: restart` 从头重跑全部必需上游及当前节点；`mode: only` 只从头跑当前节点；`mode: resume-node` 只续跑当前节点。`only_this: true` 兼容为 `only`。记录在 Executions，重跑保留旧 History。 |
-| 整条 Pipeline | `pipeline_action` 只做 Python 项目导出（运行改用 `run_to`，2026-10-16 起） |
+| 运行到这里 | `run_nodes` 的 `run_to` 与界面共用规划和执行代码：`mode: resume`（默认）复用有效结果、续跑兼容的部分结果并补跑到当前节点，全有效时不执行；`mode: restart` 从头重跑全部必需上游及当前节点；`mode: only` 只从头跑当前节点；`mode: resume-node` 只续跑当前节点。`only_this: true` 兼容为 `only`。记录在 Run 标签，重跑保留旧 History。 |
+| 整条 Pipeline | `pipeline_action` 支持 Python 项目导出与 `rename` 重命名（`name` 必填）；运行使用 `run_to`。工作区摘要显示自定义名称，导出默认使用该名称。 |
 
 以下仍由用户在界面操作：选择并上传本地新文件、配置凭据与 Python、选择 Pipeline 路线、
-点击节点文件导出、发布 Gallery。Prompt Version 以横向家族树展示来源，点击节点定位并高亮画布上的 Prompt、点击连线比较版本。
+点击节点文件导出、发布 Gallery。Prompt 标签以 Pipeline 同款横向流程展示 Prompt 家族，只有 Prompt 与 Evaluate & Optimize 两种节点；点击节点定位并高亮画布节点，点击版本上的 Compare 按钮与上一版本比较。
 Agent 的指南会说明实际入口，
 不会伪造已上传文件、凭据或这些操作的完成状态。已有上传文件可以直接通过 Agent 复用或重排。
 桌面底部另有 Log 标签，用于后端日志与前端错误；Agent 不具备读取该日志的工具。

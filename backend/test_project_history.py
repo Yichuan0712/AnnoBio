@@ -113,9 +113,12 @@ class ProjectHistoryTest(unittest.TestCase):
         other = project_store.create_project(project_store.ProjectCreate(name="Other"))["id"]
         second = record(node_id="run-2", signature="signature-2")
         self.save(second, other)
+        project_store.save_project(self.project_id, project_store.ProjectSave(state={"nodes": [], "connections": [], "pipelineNames": {"first": "Evidence curation"}}))
+        project_store.save_project(other, project_store.ProjectSave(state={"nodes": [], "connections": [], "pipelineNames": {"second": "Validation", "first": "Keep destination name"}}))
         project_store.merge_project(self.project_id, other)
         ids = {entry["id"] for entry in project_store.get_history_index(self.project_id)["records"]}
         self.assertEqual(ids, {first["id"], second["id"]})
+        self.assertEqual(project_store.get_project(self.project_id)["state"]["pipelineNames"], {"first": "Evidence curation", "second": "Validation"})
 
     def test_asset_prune_retains_history_only_cells(self):
         item = record()

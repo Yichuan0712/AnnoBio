@@ -24,6 +24,7 @@ function routeNodeIds(route) {
 
 function exportName(item, runtime, given) {
   if (String(given || '').trim()) return String(given).trim();
+  if (String(item.name || '').trim()) return String(item.name).trim();
   const nodes = new Map(runtime.getCanvasState().nodes.map((node) => [node.nodeId, node]));
   const route = routeOf(item);
   const first = route.find((step) => step.prompt_node_id || step.process_node_id);
@@ -34,10 +35,19 @@ function exportName(item, runtime, given) {
 export async function previewPipelineAction(args, runtime) {
   try {
     const action = String(args?.action || '');
-    if (action !== 'export') {
-      throw new Error('action must be export. To run steps, use run_nodes with a run_to job on the last step to run.');
+    if (!['export', 'rename'].includes(action)) {
+      throw new Error('action must be export or rename. To run steps, use run_nodes with a run_to job on the last step to run.');
     }
     const item = selection(runtime, args.pipeline_id);
+    if (action === 'rename') {
+      const name = String(args.name || '').trim();
+      if (!name) throw new Error('Enter a Pipeline name.');
+      if (!runtime.renamePipeline || !item.nameKey) throw new Error('Pipeline renaming is unavailable.');
+      return { ok: true, action, name, nameKey: item.nameKey,
+        projectIdentity: runtime.getAssetProjectId?.() ?? null,
+        items: [{ kind: 'update', title: `Rename "${item.name || `Pipeline ${item.index + 1}`}" to "${name}"`,
+          nodeIds: [...routeNodeIds(routeOf(item))], lines: ['Saves the Pipeline name in this project.'] }] };
+    }
     const route = routeOf(item);
     if (!routeNodeIds(route).size) throw new Error('The selected route has no runnable steps.');
     const compiled = await compileCurrentPipeline({ canvasState: runtime.getCanvasState(), route });
@@ -45,7 +55,7 @@ export async function previewPipelineAction(args, runtime) {
     if (!compiled.spec || errors.length) throw new Error(errors.map((error) => error.message).join('; ') || 'This route cannot be compiled.');
     return {
       ok: true,
-      items: [{ kind: 'update', title: `Export Pipeline ${item.index + 1}`, nodeIds: [...routeNodeIds(route)], lines: [
+      items: [{ kind: 'update', title: `Export ${item.name || `Pipeline ${item.index + 1}`}`, nodeIds: [...routeNodeIds(route)], lines: [
         `Route: ${route.filter((step) => step.type !== 'dataset').length} executable steps.`,
         `Selection: ${item.source === 'panel' ? 'Pipeline panel' : 'default route (panel is not mounted)'}.`,
         'A Python project zip will be downloaded. Dataset rows and files are excluded.',
@@ -59,8 +69,16 @@ export async function previewPipelineAction(args, runtime) {
 }
 
 export async function executePipelineAction(args, preview, runtime) {
-  if (args.action !== 'export') throw new Error('Only export is available; prepare the action again.');
+  if (!['export', 'rename'].includes(args.action) || preview.action !== args.action) throw new Error('Prepare this Pipeline action again.');
   const item = selection(runtime, args.pipeline_id);
+  if ((runtime.getAssetProjectId?.() ?? null) !== (preview.projectIdentity ?? null)) {
+    throw new Error('The open project changed. Prepare this action again.');
+  }
+  if (args.action === 'rename') {
+    if (item.nameKey !== preview.nameKey) throw new Error('That Pipeline changed. Prepare the rename again.');
+    await runtime.renamePipeline(item.id, preview.name);
+    return { status: 'renamed', pipeline_id: item.id, name: preview.name };
+  }
   const route = routeOf(item);
   if (pipelineRouteKey(route) !== preview.routeKey) throw new Error('The selected route changed. Ask the Agent to prepare this action again.');
   if ((runtime.getAssetProjectId?.() ?? null) !== (preview.projectIdentity ?? null)) {

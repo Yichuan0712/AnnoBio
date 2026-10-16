@@ -9,11 +9,12 @@
 - 从当前有效评估创建 Optimize。**一个 Optimize 节点终身绑定一条 Evaluate History**，不提供重新绑定操作。
 - Generate 重跑后，Evaluate 保留旧结果，并提示：
   `These results are from an earlier Generate run. Run Evaluate to update them.`
-- Optimize 只比较绑定记录与 Evaluate 当前显示的 History 记录（包括过期但仍显示的记录）。记录 ID 不同才显示：
-  `This optimization uses a different Evaluate History record.`
+- Optimize 比较绑定记录与 Evaluate 当前显示的 History 记录（包括过期但仍显示的记录）。记录 ID 不同时显示：
+  `Historical: this optimization uses a different Evaluate History record. Select its original evaluation in History before applying.`
   提示显示在 Findings 标题下方。Optimize 窗口不提供查看来源或创建新 Optimize 的入口。
   Generate 重跑、评估规则修改等造成 Evaluate 输入过期时，若仍显示原来的评估记录，Optimize 不显示版本提示。
-- 画布上的过期 Evaluate 和版本不匹配的 Optimize 使用 60% 不透明度；提示、标记与透明样式采用相同判定。
+- 画布上的历史 Generate、Process、Evaluate 和版本不匹配的 Optimize 使用 60% 不透明度；提示、标记与透明样式采用相同判定。
+- 固定来源的 Evaluate 节点缺失或没有显示任何评估记录时，Optimize 同样标为 Historical 并阻止 Apply；仍可查看已保存的优化内容。
 
 ## 保存的数据
 
@@ -33,8 +34,8 @@
 
 ## Optimize 的读取约束
 
-Evaluate 的 History 条目被画布上的 Optimize 节点固定绑定时，显示 `Has optimization` 气泡；悬停列出绑定节点的名称。
-按 `evaluateRecordId` 精确对应记录，同配置的其他尝试不继承标记。多个 Optimize 只显示一个气泡，节点改名或删除后重新打开 History 即更新；不改写评估快照。
+Evaluate 的 History 条目被画布上的 Optimize 节点固定绑定时，在 Precision · Recall · F1 下一行以文字显示 `Has optimization: <绑定节点名称>`（不是气泡）。
+按 `evaluateRecordId` 精确对应记录，同配置的其他尝试不继承标记。多个 Optimize 合并在同一处，名称用逗号分隔；节点改名或删除后重新打开 History 即更新；不改写评估快照。
 
 Optimize 与前方 Evaluate 当前显示的 History 记录不一致时，节点显示 `Historical` 并变淡，Findings 下说明版本不匹配，Apply 禁用。
 窗口打开期间切换 History 也会同步按钮；实际 Apply 和 Agent `apply_review` 均重新校验版本，失败时不创建 Prompt 或修改建议。
@@ -44,6 +45,18 @@ Optimize 与前方 Evaluate 当前显示的 History 记录不一致时，节点�
 不改变绑定、不清除优化结果。Optimize 初次运行、Resume、Verify、单条建议优化都从绑定记录读取
 Prompt、schema、输入、Ground truth、规则或代码。模型凭据 ID 和 Generate 节点参数也取自快照。
 Verify 仍会发起新的模型请求和匹配计算，所用输入与判定配置来自原评估。
+Apply 创建新 Prompt 时，输出 schema 和输入类型也必须取自原评估快照，不能混入当前上游 Prompt 的设置。
+Agent 在异步读取快照后重新读取画布并校验版本，避免套用快照读取前的过时画布。
+
+## 上下游一致性回归（2026-10-16）
+
+- 没有当前记录指针但仍有保存结果的项目，能够显示 Historical 状态与旧结果；已删除的 Evaluate 指针不残留。
+- 修改输入后恢复原设置，保留原来选中的同输入尝试，不自动跳到另一条较新的记录。
+- 已停止且有部分结果的 Generate 修改输入后保留历史展示，但下游不能读取这些不兼容的部分结果。
+- Generate 历史表格使用保存的输入表头和输出 schema；零行结果也显示历史提示；迟到的加载不会覆盖后来切换的记录。
+- Process 窗口已打开时，上游记录改变或重新计算完成，表格与历史提示同步更新；从其他入口启动的 Process 也同步运行状态，运行期间禁止重复启动与代码编辑。
+- Optimize 首次加载只有内联结果时补存固定来源缓存；只有 History 缓存时恢复缓存，不能用空内联值覆盖它。
+- 单元测试覆盖记录解析、绑定、Apply 的结构来源与异步版本变化；浏览器检查覆盖实际透明度、历史提示、零行结果、Optimize 缓存恢复和来源缺失。
 
 删除记录时，仍在画布上的 Optimize 保护其绑定来源；
 删除上游 Generate/Process History 的级联删除也遵守这个约束。

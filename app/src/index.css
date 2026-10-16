@@ -21,6 +21,7 @@
   --status-success: #10893e;
   --status-danger: #c0392b;
   --status-warning: #9a6700;
+  --locate-highlight: #f59e0b;
   --status-dataset: #7c3aed;
   --control-radius: 3px;
 }
@@ -48,6 +49,7 @@ html.dark {
   --status-success: #4ade80;
   --status-danger: #fca5a5;
   --status-warning: #fbbf24;
+  --locate-highlight: #fbbf24;
   --status-dataset: #c4b5fd;
   --control-radius: 3px;
 }

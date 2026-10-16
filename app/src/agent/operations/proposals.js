@@ -19,6 +19,20 @@ const IMPORT_MAX_WAIT_MS = 5 * 60 * 1000;
 
 let sourcesPromise = null;
 
+async function evaluationPromptsFor(operations, workspace) {
+  if (!workspace.getEvaluationPayload) return null;
+  const prompts = new Map();
+  for (const op of operations || []) {
+    if (op?.op !== 'apply_review') continue;
+    const review = workspace.getCanvasState().nodes.find(node => node.nodeId === String(op.review || '').trim());
+    if (!review?.evaluateRecordId || prompts.has(review.evaluateRecordId)) continue;
+    const payload = await workspace.getEvaluationPayload(review.evaluateNodeId, { recordId: review.evaluateRecordId });
+    if (!payload.prompt_snapshot) throw new Error('The original Prompt snapshot is unavailable.');
+    prompts.set(review.evaluateRecordId, payload.prompt_snapshot);
+  }
+  return prompts;
+}
+
 /** Importable sources and their fields, from GET /api/agent/sources (cached per session). */
 export function loadSources() {
   if (!sourcesPromise) {
@@ -84,10 +98,13 @@ export async function previewProposal(proposal, workspace) {
         nodeIds: plan.changedNodeIds, lines: [`Restore inputs on ${plan.changedNodeIds.length} nodes.`, `Affected pipeline nodes: ${plan.affectedNodeIds.length}.`], diffs: [] }], warnings: [] };
     }
     const sources = await loadSources();
+    const contentLocks = await workspace.getContentLocks?.();
+    const evaluationPrompts = await evaluationPromptsFor(proposal?.operations, workspace);
     const plan = planChangeSet(workspace.getCanvasState(), proposal?.operations, {
       extractInputFields: workspace.extractInputFields,
       sources,
-      contentLocks: await workspace.getContentLocks?.(),
+      contentLocks,
+      evaluationPrompts,
     });
     return {
       ok: true,
@@ -123,11 +140,14 @@ export async function applyProposal(proposal, workspace, { signal, onStatus } = 
     onStatus?.(`Importing from ${sources[op.source]?.label || op.source}...`);
     imported.set(index, await fetchSourceRows(op.source, op.ids, op.fields, signal));
   }
+  const contentLocks = await workspace.getContentLocks?.();
+  const evaluationPrompts = await evaluationPromptsFor(operations, workspace);
   const plan = planChangeSet(workspace.getCanvasState(), operations, {
     extractInputFields: workspace.extractInputFields,
     sources,
     imported,
-    contentLocks: await workspace.getContentLocks?.(),
+    contentLocks,
+    evaluationPrompts,
   });
   workspace.applyCanvasState(plan.state, { highlightNodeIds: plan.nodeIds });
   const byId = new Map(plan.state.nodes.map((n) => [n.nodeId, n]));

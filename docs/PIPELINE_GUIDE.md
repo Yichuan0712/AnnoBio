@@ -33,6 +33,11 @@ does not follow the step it was saved from.
 
 ## Selecting a route
 
+Click a Pipeline's name to rename it in place. Press Enter or click elsewhere to save; Escape
+cancels. Blank input keeps the previous name. Names are saved with the project, support undo/redo,
+and stay with their entry steps when other pipelines are renumbered or downstream steps are added.
+Python exports use the custom Pipeline name by default.
+
 In Pipeline, choose any Prompt version or Generate alternative shown by the route. A Process's
 branches are drawn as aligned lanes with continuous connections. A branch that feeds the shared
 next step directly is drawn as a continuous bypass line. Outputs with no downstream step are
@@ -65,7 +70,7 @@ dependencies, including every required merge input, and stops at this node. Unre
 downstream nodes and Prompt optimization provenance connections are excluded. A saved Dataset is
 an input boundary; it does not rerun the step it was saved from.
 
-The **Executions** tab records the mode and each step's outcome. Running tasks offer **Stop**.
+The **Run** tab records the mode and each step's outcome. Running tasks offer **Stop**.
 Resuming an interrupted Restart keeps newly finished steps and partial progress, while its unstarted
 steps still run freshly. Each fresh step creates a new History attempt; older results remain available.
 

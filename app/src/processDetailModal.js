@@ -426,8 +426,31 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
   }
 
   // An upstream step finishing elsewhere lets this one run.
-  const onHistoryResolved = () => {
+  const onHistoryResolved = (event) => {
     if (!overlay.isConnected) return;
+    if (!running) {
+      const currentId = node?.dataset?.historyRecordId || '';
+      const staleId = node?.dataset?.historyStaleRecordId || '';
+      const currentResults = restoreResults(node, 'processDfResults', 'processResults');
+      if (currentResults || !staleId || lastResultsRecordId !== staleId) {
+        if (currentId !== lastResultsRecordId || currentResults) lastError = '';
+        lastResults = currentResults;
+        lastResultsRecordId = currentId;
+      }
+      const resolvedNode = event?.detail?.state?.nodes?.find(item => item.nodeId === nodeId);
+      if (!currentId) currentHistoryStatus = '';
+      else if (resolvedNode?.processPending) currentHistoryStatus = 'running';
+      else if (node?.dataset?.processResumable === '1') currentHistoryStatus = 'stopped';
+      else if (currentResults) currentHistoryStatus = 'completed';
+      else currentHistoryStatus = lastError || currentHistoryStatus === 'failed' ? 'failed' : '';
+      const externalRunning = currentHistoryStatus === 'running';
+      runBtn.disabled = externalRunning;
+      editorView.dispatch({ effects: editable.reconfigure(EditorView.editable.of(!externalRunning && !isTaskLocked(nodeId))) });
+      runBtn.textContent = externalRunning ? 'Processing…' : currentHistoryStatus === 'completed' ? 'Run again' : executionIdleLabel({
+        task: 'processing', interrupted: currentHistoryStatus === 'stopped', failed: currentHistoryStatus === 'failed',
+      });
+      refreshResults();
+    }
     refreshUpstreamState();
     void showStaleResults();
   };

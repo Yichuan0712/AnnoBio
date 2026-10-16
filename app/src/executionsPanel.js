@@ -1,5 +1,5 @@
 /**
- * The Executions tab of the bottom panel: every Generate to here of the project, newest first
+ * The Run tab of the bottom panel (formerly Executions): every Generate to here of the project, newest first
  * (executionRecords.js). A running one can be stopped; a stopped or failed one resumed, which plans
  * its target again. A step shows its node on the canvas.
  */
@@ -77,7 +77,7 @@ export function mountExecutionsPanel(container, { getRecords, isActive, onStop, 
     }
     const html = records.length
       ? `<ol class="executions__list">${records.map((record) => recordHtml(record, { open: opened.has(record.id), active: isActive(record.id) })).join('')}</ol>`
-      : '<p class="executions__empty">No executions yet. Right-click a Generate or Process node to run only that node, resume its pipeline to that point, or restart its pipeline from the beginning.</p>';
+      : '<p class="executions__empty">No runs yet. Right-click a Generate or Process node to run only that node, resume its pipeline to that point, or restart its pipeline from the beginning.</p>';
     if (html === previousHtml) return;
     previousHtml = html;
     view.innerHTML = html;

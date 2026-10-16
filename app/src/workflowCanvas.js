@@ -72,6 +72,7 @@ import { dependencyColorSources, dependentNodeVisualColors } from './workflowDep
 import { showAlert, showConfirm, showSelect } from './alertModal.js';
 import { openAgentWindowModal } from './agentWindowModal.js';
 import { detectPipelines } from './pipelineDetection.js';
+import { normalizePipelineNames } from './pipelineNames.js';
 import { buildSelectedRoute } from './pipelineRouteSelection.js';
 import { showPipelineOverviewModal } from './pipelineOverviewModal.js';
 import { createWorkspacePanels } from './workspacePanels.js';
@@ -100,8 +101,8 @@ import { stepOutputTable } from './stepOutputs.js';
 import { readSavedFrom, savedFromLabel, savedProcessOutputs, savedRunOutput, scoreSavedFrom } from './savedDatasets.js';
 import { inputMenuItems, outputMenuItems } from './outputMenu.js';
 import { getCurrentProjectId } from './currentProject.js';
-import { analysisInputKeys, analysisKeyForSave } from './runAnalysisHistory.js';
-import { runEvaluation, evaluationPayload, optimizationSourceIsEarlier } from './evaluationHistory.js';
+import { analysisInputKeys } from './runAnalysisHistory.js';
+import { runEvaluation, evaluationPayload, optimizationSourceIsEarlier, optimizationApplyBlockReason } from './evaluationHistory.js';
 import { contentLocks } from './contentLocks.js';
 import { isTaskLocked, taskLockedIds } from './runTaskLocks.js';
 import { planRunTo, runMenuItems, RUN_ACTION_LABELS } from './runPlan.js';
@@ -1192,14 +1193,19 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   /** @type {Set<string>} Multi-selected node ids — Ctrl/Shift+click or marquee-select (see startMarqueeSelect). */
   let selectedNodeIds = new Set();
+  /** The node last shown by revealNode (Run tab, node windows, Agent); highlighted until deselected. */
+  let locatedNodeId = '';
   /** The ports each node was last drawn with (refreshNodePorts), so unchanged nodes are left alone. */
   const drawnPorts = new WeakMap();
   /** The node under the pointer; its lines are highlighted like those of selected nodes. */
   let hoveredNodeId = '';
 
   function applySelectionVisuals() {
+    // A located node keeps its highlight until the selection moves off it.
+    if (locatedNodeId && !selectedNodeIds.has(locatedNodeId)) locatedNodeId = '';
     nodesLayer.querySelectorAll('.workflow-node').forEach((node) => {
       node.classList.toggle('workflow-node--selected', selectedNodeIds.has(node.dataset.nodeId));
+      node.classList.toggle('workflow-node--located', node.dataset.nodeId === locatedNodeId);
     });
     syncActiveEdges();
   }
@@ -2286,6 +2292,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const node = getNodeById(nodeId);
     if (!node) return;
     selectedNodeIds = new Set([nodeId]);
+    locatedNodeId = nodeId;
     applySelectionVisuals();
     const left = parseFloat(node.style.left) || 0;
     const top = parseFloat(node.style.top) || 0;
@@ -3381,6 +3388,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     const current = workspacePanels.pipelineHost.querySelector('.pipeline-overview-overlay');
     if (current?.getPipelineSelections) return current.getPipelineSelections().map((item) => ({ ...item, source: 'panel' }));
     return detectPipelines(getCanvasState()).map((pipeline, index) => ({
+      name: pipeline.name, nameKey: pipeline.nameKey,
       id: String(pipeline?.id || `pipeline-index-${index}`),
       index,
       route: buildSelectedRoute(pipeline, new Map()),
@@ -3404,8 +3412,14 @@ export function buildWorkflowCanvas(root, options = {}) {
         // run_to runs through here, so the Agent's runs are in Executions too.
         runPlanned: (nodeId, options) => runPlanned(nodeId, { ...options, source: 'agent' }),
         getScoreComparisonRows,
+        getEvaluationPayload,
         getSelectedNodeIds: () => [...selectedNodeIds],
         getPipelineSelections: getAgentPipelineSelections,
+        renamePipeline: (pipelineId, name) => {
+          const pipeline = detectPipelines(getCanvasState()).find(item => item.id === pipelineId);
+          if (!pipeline) throw new Error('That Pipeline is no longer on the canvas.');
+          return renamePipeline(pipeline.nameKey, name);
+        },
         getAssetProjectId: getCurrentProjectId,
         extractInputFields,
         applyCanvasState: applyAgentCanvasState,
@@ -4894,9 +4908,9 @@ export function buildWorkflowCanvas(root, options = {}) {
   let canvasHistoryVersion = null;
   /** Desktop: which file owns this project's Pipeline runs (currentProject.js pipelineOwnerFor); saved, never edited. */
   let pipelineOwner = null;
+  let pipelineNames = {};
   let historySession = null;
   let historyAnalysisKeys = new Map();
-  let historyAnalysisKeysInitialized = false;
   let historyRevision = 0;
   document.addEventListener('workflow:canvas-changed', () => { historyRevision += 1; });
 
@@ -5121,6 +5135,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     return {
       version: CANVAS_VERSION, ...(canvasHistoryVersion === 1 ? { historyVersion: 1 } : {}), ...(pipelineOwner ? { pipelineOwner } : {}),
       zoomLevel, nodes, connections: connections.slice(),
+      ...(Object.keys(pipelineNames).length ? { pipelineNames: { ...pipelineNames } } : {}),
     };
   }
 
@@ -5131,6 +5146,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     portDrag.cancel();
     historyRevision += 1;
     canvasHistoryVersion = state.historyVersion === 1 ? 1 : null;
+    pipelineNames = normalizePipelineNames(state.pipelineNames);
     pipelineOwner = state.pipelineOwner?.id ? { at: String(state.pipelineOwner.at || ''), id: String(state.pipelineOwner.id) } : null;
     zoomLevel = normalizeZoomLevel(state.zoomLevel);
     applyZoom();
@@ -5411,7 +5427,6 @@ export function buildWorkflowCanvas(root, options = {}) {
     }
     historySession = session;
     historyAnalysisKeys = new Map();
-    historyAnalysisKeysInitialized = false;
   }
 
   async function recoverHistoryJobs() {
@@ -5695,9 +5710,10 @@ export function buildWorkflowCanvas(root, options = {}) {
     const priorKeys = historyAnalysisKeys;
     for (const node of before.nodes) {
       if (node.type !== 'promptReview' || !node.evaluateRecordId) continue;
-      const reviewKey = analysisKeyForSave(priorKeys, initialKeys, 'review', node.nodeId, historyAnalysisKeysInitialized);
-      if (reviewKey && (node.reviewResult || node.reviewProgress
-        || await session.analysisRecord(node.nodeId, 'review', reviewKey.signature))) {
+      // A pinned Optimize key never follows live inputs. Inline saved results are safe to persist
+      // on first load, while an absent inline cache must not overwrite the saved History result.
+      const reviewKey = initialKeys.review.get(node.nodeId);
+      if (reviewKey && node.reviewResult) {
         await session.saveAnalysis(node.nodeId, 'review', reviewKey, {
           reviewResult: node.reviewResult || null, reviewProgress: node.reviewProgress || 0,
         });
@@ -5770,8 +5786,8 @@ export function buildWorkflowCanvas(root, options = {}) {
         const earlier = optimizationSourceIsEarlier(item, score);
         if (earlier) live.dataset.reviewSourceEarlier = '1'; else delete live.dataset.reviewSourceEarlier;
         live.classList.toggle('workflow-node--stale', earlier);
-        if (earlier) live.title = 'This optimization uses a different Evaluate History record.';
-        else if (live.title === 'This optimization uses a different Evaluate History record.' || live.title === 'This optimization is based on an earlier evaluation.') live.removeAttribute('title');
+        if (earlier) live.title = optimizationApplyBlockReason(item, score);
+        else if (live.title.startsWith('Historical:') || live.title === 'This optimization uses a different Evaluate History record.' || live.title === 'This optimization is based on an earlier evaluation.') live.removeAttribute('title');
         // The poller rebuilds a running Review from the live node; replacing it here would drop the
         // prompt text and comparison rows saved at start, leaving an empty Review window.
         if (streamingReviewIds.has(item.nodeId)) continue;
@@ -5795,7 +5811,6 @@ export function buildWorkflowCanvas(root, options = {}) {
     for (const id of streamingReviewIds) {
       if (priorKeys?.has(`review:${id}`)) historyAnalysisKeys.set(`review:${id}`, priorKeys.get(`review:${id}`));
     }
-    historyAnalysisKeysInitialized = true;
     refreshNodePorts();
     updateEdges();
     document.dispatchEvent(new CustomEvent('workflow:history-resolved', { detail: resolved }));
@@ -6236,6 +6251,16 @@ export function buildWorkflowCanvas(root, options = {}) {
     pipelineToggleIcon.replaceChildren(iconLayoutPanel(panelVisibility.pipeline, panelToggleIconSize));
     agentToggleIcon.replaceChildren(iconLayoutSidebarRight(panelVisibility.agent, panelToggleIconSize));
   }
+  function renamePipeline(nameKey, name) {
+    const trimmed = String(name || '').trim();
+    if (!trimmed) throw new Error('Enter a Pipeline name.');
+    if (!detectPipelines(getCanvasState()).some(item => item.nameKey === nameKey)) {
+      throw new Error('This Pipeline changed. Try renaming it again.');
+    }
+    if (pipelineNames[nameKey] === trimmed) return;
+    pipelineNames = { ...pipelineNames, [nameKey]: trimmed };
+    document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+  }
   const workspacePanels = createWorkspacePanels(root, canvas, ({ pipeline, agent, tab }) => {
     panelVisibility = { pipeline, agent };
     syncPanelButtons();
@@ -6243,6 +6268,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       showPipelineOverviewModal(() => detectPipelines(getCanvasState()), {
         host: workspacePanels.pipelineHost,
         getCanvasState,
+        onRenamePipeline: renamePipeline,
         highlightCanvasNodes: highlightPipelineNodes,
         focusCanvasNodes: focusPipelineNodes,
       });
@@ -6255,9 +6281,10 @@ export function buildWorkflowCanvas(root, options = {}) {
   }, {
     bottomTabs: [
       { id: 'pipeline', label: 'Pipeline' },
-      { id: 'optimization', label: 'Prompt Version' },
-      // Not "Runs": Process steps are recorded here too.
-      { id: 'executions', label: 'Executions' },
+      // Id kept from "Prompt Version": the open tab is saved by id.
+      { id: 'optimization', label: 'Prompt' },
+      // Id kept from "Executions": the open tab is saved by id. Process steps are recorded here too.
+      { id: 'executions', label: 'Run' },
       ...(isElectron ? [{ id: 'log', label: 'Log' }] : []),
     ],
     onCollapse: () => currentPipelineBtn.focus(),
@@ -6275,7 +6302,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     // Plans the target again: finished steps are reused, a stopped Run continues.
     onResume: (record) => {
       if (!getNodeById(record.targetNodeId)) {
-        showAlert('That step is no longer on the canvas.', { title: 'Executions' });
+        showAlert('That step is no longer on the canvas.', { title: 'Run' });
         return;
       }
       void runToHere(record.targetNodeId, executionResumeOptions(record));
@@ -6284,7 +6311,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   });
   document.addEventListener('workflow:project-changed', () => { void ensureExecutionRecords(); });
   void ensureExecutionRecords();
-  // Rebuild visible ancestry when names, version connections or Optimize methods change.
+  // Rebuild visible families when names, version connections, rounds or Optimize methods change.
   let optimizationRefreshTimer = null;
   const scheduleOptimizationRefresh = () => {
     if (!optimizationVisible) return;

@@ -74,6 +74,7 @@ export function evaluationPayload(record) {
   const fields = Array.isArray(rawSchema) ? rawSchema : rawSchema.fields || [];
   return {
     evaluation_record_id: record.id, evaluation_node_id: record.nodeId,
+    prompt_snapshot: copy(prompt),
     prompt: prompt.text || '', run_results: input.runResults, output_fields: input.outputFields,
     output_schema: { return_shape: rawSchema.returnShape || prompt.returnShape || 'single', fields: fields.map(field => ({ ...field, allow_none: field.allowNone === true || field.allow_none === true })) },
     comparison_rows: result.comparisonRows || [], score_mapping: typeof input.mapping === 'string' ? input.mapping : JSON.stringify(input.mapping),
@@ -87,10 +88,16 @@ export function evaluationPayload(record) {
 /** Compare the fixed source with the displayed Evaluate History, even when that evaluation is stale. */
 export function optimizationSourceIsEarlier(node, scoreNode) {
   const displayedRecordId = scoreNode?.historyRecordId || scoreNode?.historyStaleRecordId;
-  return !!node?.evaluateRecordId && !!displayedRecordId && node.evaluateRecordId !== displayedRecordId;
+  return !!node?.evaluateRecordId && node.evaluateRecordId !== displayedRecordId;
 }
 
 export function optimizationApplyBlockReason(node, scoreNode) {
+  if (node?.evaluateRecordId && !scoreNode) {
+    return 'Historical: its source Evaluate node is unavailable. Restore it before applying.';
+  }
+  if (node?.evaluateRecordId && !scoreNode?.historyRecordId && !scoreNode?.historyStaleRecordId) {
+    return 'Historical: its source evaluation is not currently displayed. Select its original evaluation in History before applying.';
+  }
   return optimizationSourceIsEarlier(node, scoreNode)
     ? 'Historical: this optimization uses a different Evaluate History record. Select its original evaluation in History before applying.'
     : '';

@@ -230,7 +230,7 @@ export function openRunDetailModal({
   }
 
   /** Results as the table shows them, from the node's current result or from `source` (a History record's). */
-  function getNodeResults(source = node?.dataset) {
+  function getNodeResults(source = node?.dataset, savedSchemaFields = null) {
     const r = source?.runResults;
     if (!r || typeof r !== 'string') return { results: [], outputFields: [] };
     let results;
@@ -250,7 +250,7 @@ export function openRunDetailModal({
     results = markEmptyOutputAsError(results);
     let outputFields = [];
     try {
-      const schemaFields = getPromptTemplate()?.outputSchema?.fields || [];
+      const schemaFields = savedSchemaFields ?? getPromptTemplate()?.outputSchema?.fields ?? [];
       outputFields = deriveOutputFields(results, schemaFields);
     } catch (e) {
       console.warn('[Run] deriveOutputFields failed', e?.message || e);
@@ -263,7 +263,7 @@ export function openRunDetailModal({
       if (first) outputFields = Object.keys(first.output).map((k) => ({ key: k, display: k }));
     }
     if (outputFields.length === 0 && results.length > 0) {
-      const schemaFields = getPromptTemplate()?.outputSchema?.fields || [];
+      const schemaFields = savedSchemaFields ?? getPromptTemplate()?.outputSchema?.fields ?? [];
       if (schemaFields.length > 0) outputFields = schemaFields.map((f) => ({ key: (f.key || '').trim() || 'field', display: (f.display || f.key || '').trim() || 'field' })).filter((f) => f.key);
     }
     return { results, outputFields };
@@ -358,10 +358,10 @@ export function openRunDetailModal({
     return selectedInput()?.table?.headers || [];
   }
 
-  function showResults(results, outputFields, status, placeholderText) {
+  function showResults(results, outputFields, status, placeholderText, inputHeaders = getInputHeaders()) {
     resultsState.results = results || [];
     resultsState.outputFields = outputFields || [];
-    resultsState.inputHeaders = getInputHeaders();
+    resultsState.inputHeaders = inputHeaders;
     resultsState.status = status || 'complete';
     const scrollWrap = rightCol.querySelector('.run-detail-results-table-wrap');
     const savedScrollLeft = scrollWrap ? scrollWrap.scrollLeft : 0;
@@ -891,15 +891,18 @@ export function openRunDetailModal({
 
   /** Its inputs changed since its last run (runHistoryResolver.js historyStaleRecordId): show that run's results, marked. */
   async function showStaleResults() {
-    if (!loadStaleRecord || !node?.dataset?.historyStaleRecordId || isCompleted() || isRunning() || getNodeResults().results.length) return;
+    const staleId = node?.dataset?.historyStaleRecordId;
+    if (!loadStaleRecord || !staleId || isCompleted() || isRunning() || getNodeResults().results.length) return;
     const record = await loadStaleRecord();
-    if (!record?.results || !overlay.isConnected || isCompleted() || isRunning()) return;
+    if (!record?.results || record.id !== staleId || node.dataset.historyStaleRecordId !== staleId
+      || !overlay.isConnected || isCompleted() || isRunning() || node.dataset.historyRecordId) return;
+    const schema = record.inputs?.prompt?.outputFormat;
+    const fields = Array.isArray(schema) ? schema : schema?.fields || [];
     const { results, outputFields } = getNodeResults({
       runResults: JSON.stringify(record.results.runResults || []),
       runInputContent: record.results.runInputContent ? JSON.stringify(record.results.runInputContent) : '',
-    });
-    if (!results.length) return;
-    showResults(results, outputFields, 'complete');
+    }, fields);
+    showResults(results, outputFields, record.status === 'completed' ? 'complete' : 'incomplete', 'No rows returned.', record.results.runInputContent?.headers || []);
     // Save and Evaluate act on the current result, which it does not have.
     rightCol.querySelector('.run-detail-results-footer-actions')?.setAttribute('hidden', '');
     const note = document.createElement('p');

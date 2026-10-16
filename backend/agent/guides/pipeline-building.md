@@ -69,7 +69,7 @@ merges.
 A pipeline needs at least one Prompt with a Generate, or a Process; a pipeline of only Processes is valid.
 A Dataset read by both Prompt/Generate steps and Processes starts separate pipelines, one per step type, rather
 than a mixed picker. Hovering a step highlights its Prompt, Generate or Process and the Datasets it reads;
-clicking it finds them on the canvas. The chosen route is what Export Python Project uses.
+clicking it finds them on the canvas. The chosen route is what Export Python Project uses. Click the Pipeline name to rename it in place (Enter or blur saves, Escape cancels). Names are saved with the project and become the default export name; the Agent can request pipeline_action with action rename and name.
 
 The workspace summary describes the route currently selected in the panel, or labels it as the default
 route when the panel has not been mounted. Only the user can change a picker; after a change, refresh
@@ -85,7 +85,7 @@ Partial Generate nodes also offer **Resume** to continue only that node. Running
 The plan states which inputs are read, which results are reused and which steps execute.
 Scope follows actual data dependencies, including all merge inputs, and excludes unrelated branches,
 downstream nodes and provenance connections. A saved Dataset is a boundary.
-Each run is listed in **Executions**, where it can be stopped or resumed. Continuing an interrupted
+Each run is listed in the **Run** tab, where it can be stopped or resumed. Continuing an interrupted
 Restart keeps its freshly completed steps but still reruns unstarted steps with old results.
 Every fresh step creates a new History attempt. The Agent uses a `run_nodes` job of kind `run_to`
 with `mode: resume` (default), `restart`, `only`, or `resume-node`. `only_this: true` remains an alias

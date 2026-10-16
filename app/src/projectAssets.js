@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import { collectHistoryAssetIds } from './runHistoryAssets.js';
 import { dependentHistoryIds } from './runHistoryDeletion.js';
+import { normalizePipelineNames } from './pipelineNames.js';
 
 export const YC_EXTENSION = '.yc';
 const BUNDLE_VERSION = 1;
@@ -205,6 +206,7 @@ export class ProjectAssets {
 
       targetState.nodes = targetNodes.concat(sourceNodes);
       targetState.connections = (targetState.connections || []).concat(sourceState.connections || []);
+      targetState.pipelineNames = { ...normalizePipelineNames(sourceState.pipelineNames), ...normalizePipelineNames(targetState.pipelineNames) };
 
       // Images are embedded as base64 (assetBlobs), keyed by the sha256 of their bytes — a
       // matching id is guaranteed to already be the same image, so merging is a plain union,

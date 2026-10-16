@@ -36,9 +36,12 @@ not attributable to the prompt.
 
 ## Comparing versions
 
-The Prompt Version tab shows each prompt family as a left-to-right tree, including prompts that
-have not been run. Branch labels identify Manual edit, Agent edit, or Optimize and its method when
-recorded. Click a node to locate and highlight its Prompt on the canvas; click a branch or its label to compare the parent and child.
+The Prompt tab shows each prompt family as a left-to-right flow, including prompts that have not been
+run. Its steps are Prompt versions and Evaluate & Optimize rounds: one step for a Generate, its Evaluate
+and the Optimize made from it, named by the Optimize method when recorded. A Manual or Agent edit links
+two Prompts directly, and each Prompt step says how it was made. An Evaluate not optimized yet, or an
+Optimize not applied yet, ends its branch as a dashed step. Click a step to locate and highlight its
+canvas nodes; click a version's Compare button to compare it with its parent.
 Independent duplicates start their own families. Inspect the Generate and Evaluate nodes to compare results;
 this panel displays version ancestry rather than evaluation metrics.
 

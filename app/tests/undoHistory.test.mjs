@@ -25,6 +25,17 @@ const prompt = { type: 'prompt', nodeId: 'p', name: 'v1' };
 const run = { type: 'run', nodeId: 'r', runName: 'Run', runPending: false };
 const results = '[{"input_row_index":0,"output":{"answer":"paid"}}]';
 
+test('pipeline renames undo and redo without changing node results', () => {
+  const { history, change, canvas, node } = setup([{ ...run, runResults: results, runCompleted: '1' }]);
+  change(state => { state.pipelineNames = { stableKey: 'Evidence curation' }; });
+  history.undo();
+  assert.equal(canvas.state.pipelineNames, undefined);
+  assert.equal(node('r').runResults, results);
+  history.redo();
+  assert.deepEqual(canvas.state.pipelineNames, { stableKey: 'Evidence curation' });
+  assert.equal(node('r').runResults, results);
+});
+
 test('undoing an edit made before a run keeps the run results', () => {
   const { history, change, node } = setup([{ ...prompt }, { ...run }]);
   change((state) => { state.nodes[0].name = 'v2'; });

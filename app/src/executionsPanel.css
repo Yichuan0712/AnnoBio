@@ -1,4 +1,4 @@
-/* Executions tab (executionsPanel.js). Step kind badges come from .pipeline-step-kind in modals.css. */
+/* Run tab (executionsPanel.js). Step kind badges come from .pipeline-step-kind in modals.css. */
 .executions { height: 100%; overflow: auto; padding: 12px 18px; box-sizing: border-box; color: var(--text); }
 .executions__empty { margin: 0; color: var(--text-muted); font-size: 13.5px; }
 .executions__list, .executions__steps { margin: 0; padding: 0; list-style: none; }

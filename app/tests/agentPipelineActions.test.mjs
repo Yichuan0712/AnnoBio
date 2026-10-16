@@ -38,7 +38,7 @@ test('export requests the chosen route and downloads only after confirmation', a
   };
   globalThis.document = { createElement: () => ({ click() { clicked = true; }, remove() {} }),
     body: { appendChild() {} } };
-  const runtime = { getCanvasState: () => canvas, getPipelineSelections: () => [selected()] };
+  const runtime = { getCanvasState: () => canvas, getPipelineSelections: () => [{ ...selected(), name: 'Saved Pipeline name' }] };
   try {
     const args = { action: 'export', pipeline_id: 'pipeline-1' };
     const preview = await previewPipelineAction(args, runtime);
@@ -47,6 +47,7 @@ test('export requests the chosen route and downloads only after confirmation', a
     assert.equal((await executePipelineAction(args, preview, runtime)).status, 'exported');
     assert.equal(clicked, true);
     assert.match(calls.at(-1).url, /\/api\/pipeline\/export$/);
+    assert.equal(JSON.parse(calls.at(-1).options.body).name, 'Saved Pipeline name');
   } finally { globalThis.fetch = originalFetch; globalThis.document = originalDocument; }
 });
 
@@ -59,4 +60,20 @@ test('Pipeline action keeps an explicit pending confirmation in conversation his
   assert.equal(pending.kind, 'pipeline');
   resolvePipelineAction(messages, pending, { status: 'cancelled' });
   assert.equal(findPendingInteraction(messages), null);
+});
+
+test('Agent rename uses the saved identity, and refuses a pipeline whose display number was reassigned', async () => {
+  let item = { ...selected(), nameKey: 'stable-entry', name: 'Before' };
+  const renamed = [];
+  const runtime = { getPipelineSelections: () => [item], renamePipeline: async (id, name) => renamed.push({ id, name }) };
+  const args = { action: 'rename', pipeline_id: item.id, name: '  Evidence curation  ' };
+  const preview = await previewPipelineAction(args, runtime);
+  assert.equal(preview.ok, true);
+  assert.deepEqual(renamed, []);
+  assert.equal((await executePipelineAction(args, preview, runtime)).status, 'renamed');
+  assert.deepEqual(renamed, [{ id: item.id, name: 'Evidence curation' }]);
+  item = { ...item, nameKey: 'a-different-pipeline' };
+  await assert.rejects(executePipelineAction(args, preview, runtime), /Pipeline changed/);
+  assert.equal(renamed.length, 1);
+  assert.equal((await previewPipelineAction({ ...args, name: ' ' }, runtime)).ok, false);
 });

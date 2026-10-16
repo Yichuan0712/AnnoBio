@@ -164,7 +164,7 @@ test('desktop .yc keeps Run to here records through canvas saves, Save As and me
     const copy = path.join(root, 'copy.yc');
     const source = path.join(root, 'source.yc');
     const assets = newAssets();
-    const state = { nodes: [{ nodeId: 'run-1', type: 'run' }], connections: [] };
+    const state = { nodes: [{ nodeId: 'run-1', type: 'run' }], connections: [], pipelineNames: { first: 'Evidence curation' } };
     const runRecord = (id) => ({ id, targetNodeId: 'run-1', status: 'completed', steps: [] });
     await assets.save(original, state);
     assert.deepEqual(await assets.loadRunRecords(original), []);
@@ -175,10 +175,11 @@ test('desktop .yc keeps Run to here records through canvas saves, Save As and me
     assert.deepEqual(await assets.loadRunRecords(copy), [runRecord('a')]);
 
     const sourceAssets = newAssets();
-    await sourceAssets.save(source, { nodes: [{ nodeId: 'run-2', type: 'run' }], connections: [] });
+    await sourceAssets.save(source, { nodes: [{ nodeId: 'run-2', type: 'run' }], connections: [], pipelineNames: { second: 'Validation', first: 'Keep destination name' } });
     await sourceAssets.saveRunRecords(source, [runRecord('a'), runRecord('b')]);
     await assets.merge(copy, source);
     assert.deepEqual((await assets.loadRunRecords(copy)).map((item) => item.id), ['a', 'b']);
+    assert.deepEqual((await assets.load(copy)).pipelineNames, { first: 'Evidence curation', second: 'Validation' });
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
