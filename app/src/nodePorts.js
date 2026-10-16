@@ -23,6 +23,7 @@ import {
   runInputSource, setProcessInputs, setProcessPrimarySource, setRunInputSource, sourceKey, stepSourceLabel,
 } from './stepInputs.js';
 import { stepOutputTable } from './stepOutputs.js';
+import { isTaskLocked } from './runTaskLocks.js';
 
 export const PORT_TYPES = Object.freeze({ TABLE: 'table', PROMPT: 'prompt', SCORE: 'score' });
 
@@ -405,6 +406,7 @@ const refuse = (reason) => ({ ok: false, reason });
 /** Why `node` cannot have its inputs changed right now, or ''. */
 function changeBlocked(state, node, inputId, running) {
   if (isRunning(node, running)) return `"${nodeLabel(state, nodeIdOf(node))}" is running. Stop it before changing its inputs.`;
+  if (node && isTaskLocked(nodeIdOf(node))) return `"${nodeLabel(state, nodeIdOf(node))}" is part of a run in progress. Stop the run before changing its inputs.`;
   // As the Run window: without History, a Run's prompt and input lock once it has results.
   if (node.type === 'run' && state?.historyVersion !== 1 && hasRunResults(node) && (inputId === 'prompt' || inputId === 'input')) {
     return 'This Run already has results, so its prompt and input are fixed. Add a new Run instead.';

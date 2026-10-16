@@ -19,7 +19,8 @@ export const graph = {
   ],
 };
 
-export const indexOf = (records) => ({ records: records.map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature })) });
+// Like the stored index (backend/project_store.py, projectAssets.js), each entry carries its record's status.
+export const indexOf = (records) => ({ records: records.map(({ id, nodeId, kind, signature, status }) => ({ id, nodeId, kind, signature, status })) });
 
 /**
  * Completed History records for the results cached on the graph's Run and Process, captured the way

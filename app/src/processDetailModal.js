@@ -8,6 +8,7 @@
  */
 
 import { EditorView, basicSetup } from 'codemirror';
+import { isTaskLocked } from './runTaskLocks.js';
 import { Compartment } from '@codemirror/state';
 import { python } from '@codemirror/lang-python';
 import { attachModalPaneCycle } from './paneToggleButton.js';
@@ -61,12 +62,13 @@ function restoreResults(node, ...keys) {
  *   syncProcessDependencies?: (code: string) => void,
  *   getInputRows?: (code: string) => Array<{ alias: string, nodeId: string, label: string, color: string }>,
  *   revealNode?: (nodeId: string) => void,
- *   getInputStatus?: () => { waiting: string } }} options
+ *   getInputStatus?: () => { waiting: string },
+ *   runToHere?: (options?: object) => Promise<object> }} options runToHere: Run when an input has no result runs the steps before it too
  *   getProcessInputs: every Dataset and step output (stepInputs.js processInputBindings), marking the
  *   ones the code reads, by source key; a step output without a result yet has no content
  *   getInputRows: df and each parameter of `code`, with what is connected to it (empty label: nothing)
  */
-export function openProcessDetailModal({ node, runProcessNode, getProcessInputs, syncProcessDependencies, getInputRows = () => [], revealNode = () => {}, getInputStatus, history = null }) {
+export function openProcessDetailModal({ node, runProcessNode, getProcessInputs, syncProcessDependencies, getInputRows = () => [], revealNode = () => {}, getInputStatus, runToHere = null, loadStaleRecord = null, history = null }) {
   const nodeId = (node?.dataset?.nodeId ?? '').trim();
   const existing = nodeId
     ? document.querySelector(`.modal-overlay[data-process-node-id="${CSS.escape(nodeId)}"]`)
@@ -244,7 +246,31 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
     updateActionEmphasis();
   }
 
+  // Its inputs changed since its last run (runHistoryResolver.js historyStaleRecordId): that run's results, marked.
+  const staleNoteEl = document.createElement('p');
+  staleNoteEl.className = 'run-detail-stale-note run-detail-stale-note--outside';
+  staleNoteEl.textContent = 'These results are from an earlier setup: its inputs have changed since. Run to update them.';
+  staleNoteEl.hidden = true;
+  resultsContent.parentElement?.insertBefore(staleNoteEl, resultsContent);
+  async function showStaleResults() {
+    const staleId = node?.dataset?.historyStaleRecordId;
+    if (!loadStaleRecord || !staleId || running || lastResults) return;
+    const record = await loadStaleRecord();
+    let dfResults = record?.results?.dfResults;
+    if (typeof dfResults === 'string') {
+      try { dfResults = JSON.parse(dfResults); } catch (_) { dfResults = null; }
+    }
+    const results = normalizeResults(dfResults);
+    if (!results || !overlay.isConnected || running || lastResults || node.dataset.historyStaleRecordId !== staleId) return;
+    lastResults = results;
+    lastResultsRecordId = record.id;
+    lastError = '';
+    refreshResults();
+  }
+
   function refreshResults() {
+    const staleId = node?.dataset?.historyStaleRecordId;
+    staleNoteEl.hidden = !(staleId && lastResults && lastResultsRecordId === staleId);
     if (lastError) {
       showError(lastError);
       return;
@@ -317,6 +343,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
       lastError = current?.status === 'failed' ? String(current.error || 'Process failed.') : '';
       refreshResults();
       refreshUpstreamState();
+      void showStaleResults();
     } catch (_) { /* startRun reports storage errors when used */ }
   }
 
@@ -329,14 +356,30 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
     waitingBannerEl.textContent = status.waiting;
     waitingBannerEl.hidden = !status.waiting;
     if (running) return;
-    if (status.waiting) {
+    if (status.waiting && !runToHere) {
       runBtn.disabled = true;
       runBtn.textContent = 'Waiting for upstream';
     } else if (runBtn.textContent === 'Waiting for upstream') {
       runBtn.disabled = false;
       runBtn.textContent = currentHistoryStatus === 'completed' ? 'Run code again' : executionIdleLabel({ task: 'processing', interrupted: node?.dataset?.processResumable === '1' });
     }
+    applyTaskHold();
   }
+
+  /** While a run in progress holds this step (runTaskLocks.js), its code and Run button wait. */
+  function applyTaskHold() {
+    const held = isTaskLocked(nodeId);
+    if (!held && runBtn.dataset.heldByTask !== '1') return;
+    if (held) runBtn.dataset.heldByTask = '1';
+    else delete runBtn.dataset.heldByTask;
+    if (running) return;
+    editorView.dispatch({ effects: editable.reconfigure(EditorView.editable.of(!held)) });
+    runBtn.title = held ? 'This step is part of a run in progress. Stop that run to change or run it on its own.' : '';
+    if (held) runBtn.disabled = true;
+    else if (runBtn.textContent !== 'Waiting for upstream') runBtn.disabled = false;
+  }
+  const onTaskLocksChanged = () => { if (overlay.isConnected) applyTaskHold(); };
+  document.addEventListener('workflow:run-task-locks-changed', onTaskLocksChanged);
 
   async function startRun() {
     const { bindings, unlistedPrimary } = readDatasets(getCode());
@@ -381,16 +424,32 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
   }
 
   // An upstream step finishing elsewhere lets this one run.
-  const onHistoryResolved = () => { if (overlay.isConnected) refreshUpstreamState(); };
+  const onHistoryResolved = () => {
+    if (!overlay.isConnected) return;
+    refreshUpstreamState();
+    void showStaleResults();
+  };
   document.addEventListener('workflow:history-resolved', onHistoryResolved);
 
   const cancelJob = (jobId) => fetch(`${API_BASE}/api/process/df/run/cancel/${jobId}`, { method: 'POST' }).catch(() => {});
   let cancelRequested = false;
-  runBtn.addEventListener('click', () => {
+  runBtn.addEventListener('click', async () => {
     if (running) {
       cancelRequested = true;
       if (currentJobId) cancelJob(currentJobId);
       return;
+    }
+    // An input has no result yet: plan and run the steps before it too (Run to here).
+    if (runToHere && getInputStatus?.()?.waiting) {
+      node.dataset.processDfCode = getCode();
+      runBtn.disabled = true;
+      try {
+        const task = await runToHere({ single: 'skip', onShowNode: () => close() });
+        if (task?.status !== 'single') return;
+      } finally {
+        runBtn.disabled = false;
+        refreshUpstreamState();
+      }
     }
     void startRun();
   });
@@ -410,6 +469,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
       cancelRequested = true;
       if (currentJobId) cancelJob(currentJobId);
     }
+    document.removeEventListener('workflow:run-task-locks-changed', onTaskLocksChanged);
     editorView.destroy();
     overlay.remove();
     document.body.style.overflow = '';

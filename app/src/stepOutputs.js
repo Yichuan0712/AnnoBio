@@ -39,7 +39,9 @@ export function runResultsTable(state, run) {
 
 function runOutput(state, run, port) {
   if (run.runPending) return { waiting: 'running' };
-  if (run.runCompleted !== '1' && run.runCompleted !== true) return { waiting: run.runResumable ? 'stopped' : 'no-result' };
+  if (run.runCompleted !== '1' && run.runCompleted !== true) {
+    return { waiting: run.runResumable ? 'stopped' : run.historyStaleRecordId ? 'stale' : 'no-result' };
+  }
   if (port !== RESULT) return { waiting: 'missing-port' };
   const results = parsed(run.runResults, []);
   const table = runResultsTable(state, run);
@@ -62,7 +64,8 @@ function processOutput(processNode, port) {
   if (!outputs || !Object.keys(outputs).length) {
     // Without a result, a branch the code is known not to return will not come by running it.
     const known = effectiveProcessOutputs({ detected: processNode.processOutputPorts });
-    return { waiting: known.source === 'code' && !known.dynamic && !known.ports.includes(port) ? 'missing-port' : 'no-result' };
+    if (known.source === 'code' && !known.dynamic && !known.ports.includes(port)) return { waiting: 'missing-port' };
+    return { waiting: processNode.historyStaleRecordId ? 'stale' : 'no-result' };
   }
   const table = outputs[port];
   if (!table || !Array.isArray(table.headers) || !Array.isArray(table.rows)) return { waiting: 'missing-port' };
@@ -84,7 +87,8 @@ function processOutput(processNode, port) {
  * @param {object} state canvas state
  * @param {{ nodeId: string, port?: string } | null} source
  * @returns {{ table: { headers: string[], rows: any[][], columnTypes?: string[], rowIds?: any[] }, errorRowCount?: number }
- *   | { waiting: 'no-result' | 'running' | 'stopped' | 'missing-port' }}
+ *   | { waiting: 'no-result' | 'running' | 'stopped' | 'missing-port' | 'stale' }} 'stale': its last
+ *   result was made from inputs it no longer has (runHistoryResolver.js historyStaleRecordId)
  */
 export function stepOutputTable(state, source) {
   const node = source?.nodeId ? findNode(state, source.nodeId) : null;

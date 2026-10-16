@@ -50,7 +50,9 @@ function applyResult(node, record) {
 /**
  * Resolve the visible canvas from current inputs and the history index. Nothing is persisted here.
  * A Run or Process without a matching record has its output cache cleared; one with an input that
- * has no result yet also gets `waitingForUpstream`.
+ * has no result yet also gets `waitingForUpstream`. When its last result no longer matches its
+ * inputs, `historyStaleRecordId` points to that record: the node "needs updating", and its window
+ * shows the earlier result. Nothing downstream reads it (docs/design/RUN_TO_HERE_PLAN.md step 5).
  */
 export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
   const next = copy(state || {});
@@ -71,6 +73,12 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
   const recordCache = new Map();
   const resolvedNodes = new Map();
   const visiting = new Set();
+
+  /** The completed record a node showed last, if it is still in History. */
+  function staleEntry(node) {
+    const entry = byId.get(String(node.historyRecordId || node.historyStaleRecordId || ''));
+    return entry && entry.nodeId === nodeId(node) && entry.kind === node.type && entry.status === 'completed' ? entry : null;
+  }
 
   async function recordFor(node, signature) {
     const key = `${nodeId(node)}\u0000${signature}`;
@@ -158,11 +166,15 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
         applyResult(node, record);
         node.historyRecordId = record.id;
         if (record.signature === signature) delete node.historySelectionSignature;
+        delete node.historyStaleRecordId;
         currentRecordIds[id] = record.id;
       } else {
+        const stale = staleEntry(node);
         clearResult(node);
         delete node.historyRecordId;
         delete node.historySelectionSignature;
+        if (stale) node.historyStaleRecordId = stale.id;
+        else delete node.historyStaleRecordId;
         missingResultNodeIds.push(id);
       }
       resolvedNodes.set(id, record);

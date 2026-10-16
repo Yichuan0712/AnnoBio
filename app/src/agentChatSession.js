@@ -568,7 +568,7 @@ export function mountAgentChatSession({
         } else if (call.preview) {
           const isRun = call.name === RUN_NODES_TOOL;
           const isPipeline = call.name === PIPELINE_ACTION_TOOL;
-          const actionLabel = isPipeline ? { run: 'Run Pipeline', export: 'Export', stop: 'Stop', resume: 'Resume' }[args.action] || 'Continue' : '';
+          const actionLabel = isPipeline ? { export: 'Export' }[args.action] || 'Continue' : '';
           messagesEl.appendChild(createProposalNode({
             summary: String(args.summary || ''),
             preview: call.preview,
@@ -694,10 +694,7 @@ export function mountAgentChatSession({
       previewRunRequest: (request) => previewRunRequest(request, runWorkspace),
       executeRunRequest: (request, options) => executeRunRequest(request, runWorkspace, options),
       getPipelineSelections: workspace.getPipelineSelections,
-      getPipelineProjectId: workspace.getPipelineProjectId,
       getAssetProjectId: workspace.getAssetProjectId,
-      getPipelineRunNeedsAssets: workspace.getPipelineRunNeedsAssets,
-      registerPipelineRun: workspace.registerPipelineRun,
       previewPipelineAction: (request) => previewPipelineAction(request, workspace),
       executePipelineAction: (request, preview) => executePipelineAction(request, preview, workspace),
     };

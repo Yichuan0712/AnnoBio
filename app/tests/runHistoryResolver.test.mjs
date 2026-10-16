@@ -87,3 +87,38 @@ test('matching index entry with a missing record fails instead of adopting stale
     /History record is missing or invalid/,
   );
 });
+
+test('a step whose inputs changed points to its last result, which nothing downstream reads; changing back restores it', async () => {
+  const migrated = await recordGraph(graph);
+  const records = Object.fromEntries(migrated.records.map((record) => [record.id, record]));
+  const resolve = (state, index = indexOf(migrated.records)) => resolveHistoryCanvasState(state, { index, loadRecord: async (id) => records[id] });
+  const nodeOf = (resolved, id) => resolved.state.nodes.find((node) => node.nodeId === id);
+  const original = await resolve(migrated.state);
+  const { run: runRecordId, process: processRecordId } = original.currentRecordIds;
+  const input = (state) => state.nodes.find((node) => node.nodeId === 'input').datasetContent.rows[0];
+  const firstValue = input(original.state)[0];
+
+  const changed = structuredClone(original.state);
+  input(changed)[0] = 'changed';
+  const stale = await resolve(changed);
+  assert.equal(nodeOf(stale, 'run').historyStaleRecordId, runRecordId);
+  assert.equal(nodeOf(stale, 'process').historyStaleRecordId, processRecordId);
+  assert.equal(nodeOf(stale, 'run').runCompleted, undefined);
+  assert.equal(nodeOf(stale, 'run').historyRecordId, undefined);
+  assert.deepEqual(stale.currentRecordIds, {});
+  assert.deepEqual(stepOutputTable(stale.state, { nodeId: 'run', port: 'result' }), { waiting: 'stale' });
+
+  // The pointer is saved with the node, so resolving again keeps it.
+  const again = await resolve(stale.state);
+  assert.equal(nodeOf(again, 'run').historyStaleRecordId, runRecordId);
+
+  const back = structuredClone(again.state);
+  input(back)[0] = firstValue;
+  const restored = await resolve(back);
+  assert.equal(nodeOf(restored, 'run').historyStaleRecordId, undefined);
+  assert.equal(restored.currentRecordIds.run, runRecordId);
+
+  // A deleted record leaves nothing to point to.
+  const gone = await resolve(stale.state, indexOf(migrated.records.filter((record) => record.nodeId !== 'run')));
+  assert.equal(nodeOf(gone, 'run').historyStaleRecordId, undefined);
+});

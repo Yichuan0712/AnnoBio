@@ -312,6 +312,7 @@ function inspectProcess(node, ctx) {
         : node.processResumable === true ? 'interrupted; ready to resume'
           : Object.keys(outputs).length ? 'completed' : 'not run yet',
       waitingFor: waiting,
+      needsUpdate: node.historyStaleRecordId ? 'Its inputs changed since its last run; that result is in its History. Run it (or run_to a later step) to update.' : null,
       savedAsDatasets: savedDatasets,
     },
     diagnostics,
@@ -367,6 +368,7 @@ function inspectRun(node, ctx, options) {
       resultRows: results.length,
       errorRows: errorCount,
       waitingFor: source ? waitingFor(ctx.canvasState, [source]) : null,
+      needsUpdate: node.historyStaleRecordId ? 'Its inputs changed since its last run; that result is in its History. Run it (or run_to a later step) to update.' : null,
       readBy: readersOf(ctx),
       savedAsDatasets: savedFromNode(ctx.canvasState, ctx.nodeId).map(({ dataset }) => linkedNode(dataset)),
       preview: preview.items.map((r) => ({

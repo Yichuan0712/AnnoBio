@@ -6,6 +6,7 @@
  */
 
 import { embedInputRow, markEmptyOutputAsError } from './runResumeUtils.js';
+import { isTaskLocked } from './runTaskLocks.js';
 import { selectPlaceholderLabel, formatResultOutputColumnLabel } from './displayTextNormalize.js';
 import { renderSourceLink } from './nodeSourceLink.js';
 import { attachModalPaneCycle } from './paneToggleButton.js';
@@ -110,6 +111,8 @@ export function openRunDetailModal({
   getRunMappingsFromCanvas,
   getInputSource = () => null,
   getInputStatus = () => ({ waiting: '' }),
+  runToHere = null,
+  loadStaleRecord = null,
   history = null,
 }) {
   (getRunMappingsFromCanvas?.() || []).forEach((parsed) => {
@@ -225,8 +228,9 @@ export function openRunDetailModal({
     return source ? getInputTable(source) : null;
   }
 
-  function getNodeResults() {
-    const r = node?.dataset?.runResults;
+  /** Results as the table shows them, from the node's current result or from `source` (a History record's). */
+  function getNodeResults(source = node?.dataset) {
+    const r = source?.runResults;
     if (!r || typeof r !== 'string') return { results: [], outputFields: [] };
     let results;
     try {
@@ -237,8 +241,8 @@ export function openRunDetailModal({
     }
     if (!Array.isArray(results)) return { results: [], outputFields: [] };
     let content = null;
-    if (node?.dataset?.runInputContent) {
-      try { content = JSON.parse(node.dataset.runInputContent); } catch (_) {}
+    if (source?.runInputContent) {
+      try { content = JSON.parse(source.runInputContent); } catch (_) {}
     }
     if (!content) content = selectedInput()?.table || null;
     if (content) results = embedInputRow(results, content);
@@ -289,7 +293,23 @@ export function openRunDetailModal({
     return status;
   }
 
+  /** While a run in progress holds this step (runTaskLocks.js), its inputs and Run button wait. */
+  function applyTaskHold() {
+    const held = !isRunning() && isTaskLocked(node?.dataset?.nodeId);
+    runBtn.title = held ? 'This step is part of a run in progress. Stop that run to change or run it on its own.' : '';
+    if (!held) return false;
+    runBtn.disabled = true;
+    inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = true; });
+    overlay.querySelector('.run-detail-main')?.classList.add('run-detail-main--locked');
+    return true;
+  }
+
   function refreshButton() {
+    refreshButtonState();
+    applyTaskHold();
+  }
+
+  function refreshButtonState() {
     const status = refreshInputStatus();
     if (isCompleted()) {
       runBtn.disabled = !historyMode;
@@ -320,8 +340,8 @@ export function openRunDetailModal({
     runBtn.textContent = executionIdleLabel({ task: 'generation', interrupted: node?.dataset?.runResumable === '1', hasPartial: results.length > 0 });
     const allMapped = inputFields.length === 0 || inputFields.every((name) => (inputToColumn[name] || '').trim());
     runBtn.disabled = !(getPromptId() && getInputSource() && allMapped);
-    // The input has no complete result yet: run the upstream step first (stepOutputs.js).
-    if (status.waiting) {
+    // The input has no complete result yet (stepOutputs.js): Run runs the steps before it too.
+    if (status.waiting && !runToHere) {
       runBtn.disabled = true;
       runBtn.textContent = 'Waiting for upstream';
     }
@@ -705,6 +725,8 @@ export function openRunDetailModal({
     if (e.detail?.nodeId !== nodeId) return;
     let { results, outputFields, isComplete, cancelled, error } = e.detail;
     if (isComplete) runId = null;
+    // Started elsewhere (Run to here, the Agent): take its job so Stop here can stop it.
+    else if (!runId) runId = getPendingRunId() || null;
     if (isComplete && !cancelled && node) node.dataset.runCompleted = '1';
     if (cancelled && error) {
       formErrorEl.textContent = String(error);
@@ -734,16 +756,20 @@ export function openRunDetailModal({
   function closeModal() {
     document.removeEventListener('workflow:run-results-updated', onRunResultsUpdated);
     document.removeEventListener('workflow:history-resolved', onHistoryResolved);
+    document.removeEventListener('workflow:run-task-locks-changed', onTaskLocksChanged);
     overlay.remove();
     document.body.style.overflow = '';
   }
 
   document.addEventListener('workflow:run-results-updated', onRunResultsUpdated);
+  const onTaskLocksChanged = () => { if (overlay.isConnected && !isRunning()) refreshButton(); };
+  document.addEventListener('workflow:run-task-locks-changed', onTaskLocksChanged);
   function onHistoryResolved() {
     if (!historyMode || isRunning() || !overlay.isConnected) return;
     const { results, outputFields } = getNodeResults();
     showResults(results, outputFields, isCompleted() ? 'complete' : (results.length ? 'incomplete' : 'complete'));
     refreshButton();
+    void showStaleResults();
   }
   if (historyMode) document.addEventListener('workflow:history-resolved', onHistoryResolved);
   overlay.querySelector('.modal-close').addEventListener('click', closeModal);
@@ -788,6 +814,17 @@ export function openRunDetailModal({
       return;
     }
     if (!getInputSource()) return;
+    // Its input has no result yet: plan and run the steps before it too (Run to here).
+    if (runToHere && getInputStatus().waiting) {
+      runBtn.disabled = true;
+      let task;
+      try {
+        task = await runToHere({ single: 'skip', onShowNode: closeModal });
+      } finally {
+        refreshButton();
+      }
+      if (task?.status !== 'single') return;
+    }
     const emptyInput = selectedInput()?.table?.rows?.length === 0;
     if (!selectedCredentialId && !emptyInput) {
       await ensureRunNodeModel(node);
@@ -850,4 +887,24 @@ export function openRunDetailModal({
     card.innerHTML = `<div class="run-detail-results"><p class="run-detail-placeholder">${runId ? 'Running…' : 'Run to see results.'}</p></div>`;
     rightCol.appendChild(card);
   }
+
+  /** Its inputs changed since its last run (runHistoryResolver.js historyStaleRecordId): show that run's results, marked. */
+  async function showStaleResults() {
+    if (!loadStaleRecord || !node?.dataset?.historyStaleRecordId || isCompleted() || isRunning() || getNodeResults().results.length) return;
+    const record = await loadStaleRecord();
+    if (!record?.results || !overlay.isConnected || isCompleted() || isRunning()) return;
+    const { results, outputFields } = getNodeResults({
+      runResults: JSON.stringify(record.results.runResults || []),
+      runInputContent: record.results.runInputContent ? JSON.stringify(record.results.runInputContent) : '',
+    });
+    if (!results.length) return;
+    showResults(results, outputFields, 'complete');
+    // Save and Evaluate act on the current result, which it does not have.
+    rightCol.querySelector('.run-detail-results-footer-actions')?.setAttribute('hidden', '');
+    const note = document.createElement('p');
+    note.className = 'run-detail-stale-note';
+    note.textContent = 'These results are from an earlier setup: its inputs have changed since. Run to update them.';
+    rightCol.prepend(note);
+  }
+  void showStaleResults();
 }
