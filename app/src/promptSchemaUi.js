@@ -75,8 +75,11 @@ export function openPromptSchemaEditor({ fields, returnShape, renderPreview, onC
       <div class="prompt-schema-editor-settings"><h3 class="prompt-schema-preview-title">Output settings</h3><div class="prompt-schema-settings"></div>
         <div class="prompt-form-error prompt-modal-error" role="alert" hidden></div></div>
       <div class="prompt-schema-preview-wrap"><h3 class="prompt-schema-preview-title">Output schema</h3>
+        <div class="prompt-schema-editor-content score-detail-preview-content">
+        <div class="prompt-schema-editor-results run-detail-results-card">
         <div class="prompt-schema-editor-preview"></div>
-        <div class="modal-footer-actions prompt-schema-footer"><button type="button" class="btn btn-primary prompt-schema-done">Done</button></div></div>
+        <div class="modal-footer-actions prompt-schema-footer"><button type="button" class="btn btn-primary prompt-schema-done">Done</button></div>
+        </div></div></div>
     </div>
   </div>`;
   const error = overlay.querySelector('.prompt-modal-error');

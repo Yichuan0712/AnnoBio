@@ -1,5 +1,6 @@
 import { mountPromptSchemaSettings, validatePromptSchema } from './promptSchemaUi.js';
 import { inputsToViewHtml, schemaToViewHtml } from './promptDetailModal.js';
+import { extractInputFields } from './promptText.js';
 
 /**
  * Three-step Prompt creator: name, the prompt text, the output schema. Fields are edited in a separate dialog shared with existing Prompts.
@@ -53,7 +54,7 @@ export function openAddPromptModal(workflowCanvasApi) {
             <div class="prompt-form-error prompt-modal-error" role="alert" aria-live="polite" hidden></div>
             <div class="prompt-actions">
               <button type="button" class="btn btn-secondary prompt-btn-back-from-2">Back</button>
-              <button type="button" class="btn btn-secondary prompt-btn-next-to-3">Next</button>
+              <button type="button" class="btn btn-secondary prompt-btn-next-to-3" disabled>Next</button>
             </div>
           </div>
           <div class="prompt-step prompt-step-3">
@@ -84,6 +85,7 @@ export function openAddPromptModal(workflowCanvasApi) {
   const textInput = overlay.querySelector('#prompt-text-input');
   const previewEl = overlay.querySelector('.prompt-preview');
   const schemaPreviewEl = overlay.querySelector('.prompt-create-schema-preview');
+  const nextToSchemaBtn = overlay.querySelector('.prompt-btn-next-to-3');
 
   function goToStep(step) {
     panel.setAttribute('data-add-prompt-step', String(step));
@@ -128,6 +130,7 @@ export function openAddPromptModal(workflowCanvasApi) {
     }
     clearPromptError();
     goToStep(2);
+    updatePreview();
     textInput.focus();
   });
 
@@ -138,10 +141,11 @@ export function openAddPromptModal(workflowCanvasApi) {
 
   function validateStep2() {
     if (!textInput.value.trim()) return { valid: false, message: 'Please write the prompt.' };
+    if (!extractInputFields(textInput.value).length) return { valid: false, message: 'Add at least one input placeholder, such as {abstract}, to continue.' };
     return { valid: true };
   }
 
-  overlay.querySelector('.prompt-btn-next-to-3').addEventListener('click', () => {
+  nextToSchemaBtn.addEventListener('click', () => {
     const result = validateStep2();
     if (!result.valid) {
       showPromptError(result.message);
@@ -234,12 +238,16 @@ export function openAddPromptModal(workflowCanvasApi) {
   /** The inputs the text uses, as the Prompt window lists them. */
   function updatePreview() {
     const text = textInput.value;
+    const validation = validateStep2();
+    nextToSchemaBtn.disabled = !validation.valid;
+    nextToSchemaBtn.title = validation.message || '';
     previewEl.classList.toggle('prompt-preview--empty', !text.trim());
     if (!text.trim()) {
       previewEl.textContent = 'Write the prompt on the left; each {input} it uses shows here.';
       return;
     }
-    previewEl.innerHTML = inputsToViewHtml(text);
+    previewEl.innerHTML = extractInputFields(text).length ? inputsToViewHtml(text)
+      : '<p class="prompt-detail-placeholder">No inputs. Add at least one input placeholder, such as <code>{abstract}</code>, to continue.</p>';
   }
 
   textInput.addEventListener('input', () => {
@@ -250,8 +258,12 @@ export function openAddPromptModal(workflowCanvasApi) {
   overlay.querySelector('.prompt-generate-node').addEventListener('click', () => {
     clearPromptError();
     const text = textInput.value;
-    if (!text.trim()) {
-      showPromptError('Please write the prompt.');
+    const promptValidation = validateStep2();
+    if (!promptValidation.valid) {
+      goToStep(2);
+      updatePreview();
+      showPromptError(promptValidation.message);
+      textInput.focus();
       return;
     }
     const outputFormat = {
