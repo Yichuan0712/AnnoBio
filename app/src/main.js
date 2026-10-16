@@ -543,6 +543,16 @@ ipcMain.handle('project:merge', async (_e, targetFile, sourceFile) => {
   return projectAssets.merge(targetFile, sourceFile);
 });
 
+ipcMain.handle('run-records:load', async (_e, projectPath) => {
+  const resolved = String(projectPath || '').trim();
+  return resolved ? projectAssets.loadRunRecords(resolved) : [];
+});
+
+ipcMain.handle('run-records:save', async (_e, projectPath, records) => {
+  const resolved = String(projectPath || '').trim();
+  return resolved ? { ok: await projectAssets.saveRunRecords(resolved, records) } : { ok: false };
+});
+
 ipcMain.handle('agent-conversations:load', async (_e, projectPath) => {
   const resolved = String(projectPath || '').trim();
   if (!resolved) return { activeConversationId: '', conversations: [] };

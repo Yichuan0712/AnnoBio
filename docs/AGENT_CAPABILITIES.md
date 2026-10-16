@@ -22,7 +22,8 @@ Agent 的写入继续通过提案卡片确认，执行代码和模型任务通�
 | 单节点停止 | `run_nodes` 的 `stop` 请求取消界面或 Agent 启动的任务，Process / code Evaluate 共用瞬时任务取消句柄；已发出的模型请求可能继续完成；建议验证仍不可中途停止 |
 | History | `select_history`/`delete_history` 的预览和应用方法完整传入聊天运行环境；保留原有独立提案要求 |
 | 内容锁与删除 | `inspect_node.contentLock` 显示锁定来源；内容更新受相同锁约束；不能删除仍被下游使用的节点，可按用户要求整组删除 |
-| 整条 Pipeline | `pipeline_action` 请求运行、停止、恢复、Python 项目导出；`get_pipeline_runs` 查询整条 Pipeline 历史 |
+| 运行到这里 | `run_nodes` 的 `run_to` 运行一个步骤和它之前还没有当前结果的步骤，与界面的 Run to here 共用规划和执行代码，记录在 Executions 页签 |
+| 整条 Pipeline | `pipeline_action` 只做 Python 项目导出（运行改用 `run_to`，2026-10-16 起） |
 
 以下仍由用户在界面操作：选择并上传本地新文件、配置凭据与 Python、选择 Current Pipeline 路线、
 点击节点文件导出、发布 Gallery。Prompt Version 以横向家族树展示来源，点击节点定位并高亮画布上的 Prompt、点击连线比较版本。

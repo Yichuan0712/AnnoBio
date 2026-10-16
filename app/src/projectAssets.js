@@ -13,6 +13,17 @@ function emptyHistory() {
   return { index: { version: 1, records: [] }, records: {} };
 }
 
+function runRecordsOf(payload) {
+  return Array.isArray(payload?.runRecords) ? payload.runRecords : [];
+}
+
+/** The target's run records, then the source's ones it does not have. */
+function mergeRunRecords(target, source) {
+  const kept = Array.isArray(target) ? target.slice() : [];
+  const known = new Set(kept.map((record) => record?.id));
+  return kept.concat((Array.isArray(source) ? source : []).filter((record) => !known.has(record?.id)));
+}
+
 function historyOf(payload) {
   const history = payload?.history;
   if (history == null) return emptyHistory();
@@ -229,6 +240,7 @@ export class ProjectAssets {
         project: { ...targetState, schemaVersion: 2 },
         assetBlobs: targetBlobs,
         agentSession: targetPayload.agentSession || null,
+        runRecords: mergeRunRecords(targetPayload.runRecords, sourcePayload.runRecords),
         history: { index: { version: 1, records: historyEntries }, records: historyRecords },
       };
       const temp = resolvedTarget + '.' + crypto.randomUUID() + '.tmp';
@@ -267,6 +279,8 @@ export class ProjectAssets {
           project: { ...state, schemaVersion: 2, assets },
           assetBlobs,
           agentSession: copySessionFromCurrent ? historySource?.agentSession || null : existingBundle?.agentSession || null,
+          // Run records name History records, so they go wherever the History goes.
+          runRecords: newProject ? [] : runRecordsOf(historySource),
           history: newProject ? emptyHistory() : historyOf(historySource),
         };
         const temp = file + '.' + crypto.randomUUID() + '.tmp';
@@ -389,6 +403,28 @@ export class ProjectAssets {
       await fs.writeFile(temp, JSON.stringify(next, null, 2), 'utf8');
       await replaceFile(temp, resolved);
       return { removed };
+    });
+  }
+
+  /** Run to here records (executionRecords.js) of a bundled project, newest last. */
+  async loadRunRecords(file) {
+    return this.enqueue(async () => {
+      const resolved = path.resolve(file);
+      if (!isBundledProjectFile(resolved)) return [];
+      return runRecordsOf(await this.readBundlePayload(resolved));
+    });
+  }
+
+  async saveRunRecords(file, records) {
+    return this.enqueue(async () => {
+      const resolved = path.resolve(file);
+      if (!isBundledProjectFile(resolved)) return false;
+      const payload = await this.readBundlePayload(resolved);
+      if (!payload?.project) throw new Error('Project file is missing or invalid.');
+      const temp = resolved + '.' + crypto.randomUUID() + '.tmp';
+      await fs.writeFile(temp, JSON.stringify({ ...payload, runRecords: Array.isArray(records) ? records : [] }, null, 2), 'utf8');
+      await replaceFile(temp, resolved);
+      return true;
     });
   }
 

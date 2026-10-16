@@ -1,5 +1,6 @@
 import { fillModelPicker, pickedModel } from './modelPicker.js';
 import { attachModalPaneCycle } from './paneToggleButton.js';
+import { isTaskLocked } from './runTaskLocks.js';
 import { openPromptSchemaEditor } from './promptSchemaUi.js';
 import { extractInputFields, promptPlaceholders } from './promptText.js';
 
@@ -322,6 +323,7 @@ export function openPromptDetailModal({ name = '', text = '', node: sourceNode =
   function teardownPromptDetailModal() {
     activeSchemaEditor?.close();
     exportOverlayObserver.disconnect();
+    document.removeEventListener('workflow:run-task-locks-changed', onTaskLocksChanged);
     overlay.remove();
     document.body.style.overflow = '';
   }
@@ -370,6 +372,7 @@ export function openPromptDetailModal({ name = '', text = '', node: sourceNode =
   function persistText() {
     if (textSaveTimer) clearTimeout(textSaveTimer);
     textSaveTimer = null;
+    if (heldByRun()) return;
     const next = textEditor.value;
     if (next === currentText) return;
     currentText = next;
@@ -387,7 +390,7 @@ export function openPromptDetailModal({ name = '', text = '', node: sourceNode =
    * text out the same way (modals.css), so keeping the scroll position keeps every line where it was.
    */
   function startTextEdit(clickedLine = null) {
-    if (locked || !textEditorWrap.hidden) return;
+    if (locked || heldByRun() || !textEditorWrap.hidden) return;
     const lines = [...textView.querySelectorAll('.preview-field-content-line')];
     const lineIndex = clickedLine ? lines.indexOf(clickedLine) : -1;
     const { scrollTop } = textView;
@@ -553,7 +556,7 @@ export function openPromptDetailModal({ name = '', text = '', node: sourceNode =
   const schemaBtnEdit = overlay.querySelector('.prompt-detail-schema-btn-edit');
 
   function openEditSchemaWindow() {
-    if (activeSchemaEditor) return;
+    if (activeSchemaEditor || heldByRun()) return;
     activeSchemaEditor = openPromptSchemaEditor({
       fields: currentSchemaFields,
       returnShape: currentSchemaReturnShape,
@@ -574,6 +577,30 @@ export function openPromptDetailModal({ name = '', text = '', node: sourceNode =
   }
 
   schemaBtnEdit?.addEventListener('click', openEditSchemaWindow);
+
+  /*
+   * A run in progress reads this Prompt (runTaskLocks.js): editing waits until it ends, also when
+   * this window opened before the run started. Text typed meanwhile is not saved.
+   */
+  function heldByRun() {
+    return !!sourceNode?.dataset?.nodeId && isTaskLocked(sourceNode.dataset.nodeId);
+  }
+  function onTaskLocksChanged() {
+    const held = heldByRun();
+    if (held && !textEditorWrap.hidden) {
+      textEditorWrap.hidden = true;
+      textView.innerHTML = promptTextToViewHtml(currentText, emptyTextPlaceholder);
+      textView.hidden = false;
+    }
+    if (held) activeSchemaEditor?.close();
+    if (schemaBtnEdit) {
+      schemaBtnEdit.disabled = held;
+      schemaBtnEdit.title = held ? 'A run in progress reads this Prompt.' : '';
+    }
+    textView.title = held ? 'A run in progress reads this Prompt.' : (locked ? '' : 'Click to edit');
+  }
+  document.addEventListener('workflow:run-task-locks-changed', onTaskLocksChanged);
+  onTaskLocksChanged();
 
   attachModalPaneCycle({
     overlay,

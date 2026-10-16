@@ -189,6 +189,11 @@ class ProjectRename(BaseModel):
     name: str
 
 
+class RunRecordsSave(BaseModel):
+    # One record per Run to here (app/src/executionRecords.js), newest last.
+    records: list[dict[str, Any]] = []
+
+
 class AgentConversationsSave(BaseModel):
     # 2 = tool-calling Agent messages (see app/src/agentWindowModal.js); absent on older saves.
     format_version: int | None = None
@@ -286,6 +291,7 @@ def create_project(body: ProjectCreate):
             "state": {},
             "assets": {},
             "agentSession": None,
+            "runRecords": [],
         }
         _atomic_write_json(_project_file(project_id), payload)
     return {"id": project_id}
@@ -389,6 +395,8 @@ def duplicate_project(project_id: str):
             "state": data.get("state") or {},
             "assets": assets,
             "agentSession": None,  # a fresh copy starts its own agent chat, not the source's history
+            # Run records name the History records copied above, so they come along.
+            "runRecords": list(data.get("runRecords") or []),
         }
         _atomic_write_json(_project_file(new_id), new_data)
     return {"id": new_id}
@@ -462,6 +470,9 @@ def merge_project(target_id: str, source_id: str):
         merged_entries.extend(entry for entry in source_history["index"]["records"] if entry["id"] not in known_ids)
         if merged_entries:
             _write_history_bundle(target_id, {"index": {"version": 1, "records": merged_entries}, "records": merged_records})
+        known_runs = {record.get("id") for record in target_data.get("runRecords") or []}
+        target_data["runRecords"] = list(target_data.get("runRecords") or []) + [
+            record for record in source_data.get("runRecords") or [] if record.get("id") not in known_runs]
         target_data.setdefault("meta", {})["updatedAt"] = time.time()
         _atomic_write_json(_project_file(target_id), target_data)
 
@@ -638,6 +649,21 @@ def prepare_assets(project_id: str):
     return {"project_session_id": create_session(_assets_root(project_id), assets)}
 
 
+@router.get("/{project_id}/run-records")
+def get_run_records(project_id: str):
+    return {"records": _read_project(project_id).get("runRecords") or []}
+
+
+@router.put("/{project_id}/run-records")
+def save_run_records(project_id: str, body: RunRecordsSave):
+    with _lock:
+        data = _read_project(project_id)
+        data["runRecords"] = body.records
+        data.setdefault("meta", {})["updatedAt"] = time.time()
+        _atomic_write_json(_project_file(project_id), data)
+    return {"ok": True}
+
+
 @router.get("/{project_id}/agent-conversations")
 def get_agent_conversations(project_id: str):
     data = _read_project(project_id)
@@ -781,6 +807,7 @@ def export_yc(project_id: str):
         "project": {**(data.get("state") or {}), "schemaVersion": 2, "assets": assets},
         "assetBlobs": asset_blobs,
         "agentSession": data.get("agentSession"),
+        "runRecords": data.get("runRecords") or [],
         "history": _read_history_bundle(project_id),
     }
     name = (data.get("meta") or {}).get("name") or "project"
@@ -822,6 +849,7 @@ async def import_yc(file: UploadFile = File(...)):
             "state": state,
             "assets": assets,
             "agentSession": payload.get("agentSession"),
+            "runRecords": payload.get("runRecords") if isinstance(payload.get("runRecords"), list) else [],
         }
         _atomic_write_json(_project_file(project_id), data)
         if payload.get("history"):

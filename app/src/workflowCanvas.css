@@ -666,6 +666,25 @@
   opacity: 0.6;
 }
 
+/* Its last result was made from inputs it no longer has (runHistoryResolver.js historyStaleRecordId). */
+.workflow-node--stale::after {
+  content: 'Needs update';
+  position: absolute;
+  top: -9px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--status-warning, #b26a00);
+  background: var(--bg);
+  border: 1px solid currentColor;
+  pointer-events: none;
+}
+
 /* Run progress: bar at bottom fills left-to-right with working set color；右侧直角，不设圆角 */
 .workflow-node__run-progress {
   position: absolute;

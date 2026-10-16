@@ -72,7 +72,6 @@ import { openAgentWindowModal } from './agentWindowModal.js';
 import { detectPipelines } from './pipelineDetection.js';
 import { buildSelectedRoute } from './pipelineRouteSelection.js';
 import { showPipelineOverviewModal } from './pipelineOverviewModal.js';
-import { importPipelineRunHistory, pipelineRunImported } from './pipelineHistoryImport.js';
 import { createWorkspacePanels } from './workspacePanels.js';
 import { setLogPanelAvailable, subscribeAppErrors } from './appErrors.js';
 import { mountBackendLogPanel } from './backendLogPanel.js';
@@ -98,9 +97,15 @@ import {
 import { stepOutputTable } from './stepOutputs.js';
 import { readSavedFrom, savedFromLabel, savedProcessOutputs, savedRunOutput, scoreSavedFrom } from './savedDatasets.js';
 import { inputMenuItems, outputMenuItems } from './outputMenu.js';
-import { getCurrentProjectId, getPipelineProjectId } from './currentProject.js';
+import { getCurrentProjectId } from './currentProject.js';
 import { analysisInputKeys, analysisKeyForSave } from './runAnalysisHistory.js';
 import { contentLocks } from './contentLocks.js';
+import { isTaskLocked, taskLockedIds } from './runTaskLocks.js';
+import { planRunTo } from './runPlan.js';
+import { runTo } from './runTo.js';
+import { openRunPlanDialog } from './runPlanDialog.js';
+import { endInterruptedRecords, loadExecutionRecords, newExecutionRecord, saveExecutionRecords, updateExecutionRecord } from './executionRecords.js';
+import { mountExecutionsPanel } from './executionsPanel.js';
 
 /** Same backend as Run/Review (embeddings API). */
 const SCORE_BACKEND_BASE = BACKEND_API_BASE;
@@ -2016,6 +2021,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           processPending: pendingProcesses.has(nodeId), processResumable: el.dataset.processResumable === '1' || undefined,
           dfCode: el.dataset.processDfCode || '', code: el.dataset.processCode || '',
           historyRecordId: el.dataset.historyRecordId || undefined,
+          historyStaleRecordId: el.dataset.historyStaleRecordId || undefined,
           get processOutputPorts() { return el.dataset.processOutputPorts; },
           get dfResults() { return el.dataset.processDfResults || el.dataset.processResults; },
         };
@@ -2026,6 +2032,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           runCompleted: el.dataset.runCompleted || undefined, runPending: pendingRuns.has(nodeId),
           runInputToColumn: el.dataset.runInputToColumn || '',
           runResumable: el.dataset.runResumable === '1' || undefined, historyRecordId: el.dataset.historyRecordId || undefined,
+          historyStaleRecordId: el.dataset.historyStaleRecordId || undefined,
           get runResults() { return el.dataset.runResults; },
           get runInputContent() { return el.dataset.runInputContent; },
         };
@@ -2181,7 +2188,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     for (const source of stepNodeInputs(state, stepNode)) {
       const output = stepOutputTable(state, source);
       if (output.waiting && !waiting) {
-        waiting = output.waiting === 'missing-port' || source.kind === 'dataset'
+        waiting = output.waiting === 'missing-port' || output.waiting === 'stale' || source.kind === 'dataset'
           ? stepInputWaitingMessage(state, source, output.waiting)
           : `Waiting for upstream results from "${stepSourceLabel(state, { ...source, port: RESULT_PORT })}".`;
       }
@@ -3154,6 +3161,8 @@ export function buildWorkflowCanvas(root, options = {}) {
     openPromptDetailModal,
     openRunDetailModal,
     startRunNode: (options) => startRunNode(options),
+    runToHere: (nodeId, options) => runToHere(nodeId, options),
+    loadStaleRecord: (nodeId) => loadStaleRecord(nodeId),
     resumeReviewNode: (nodeId) => resumeReviewNode(nodeId),
     openSamplerDetailModal,
     openDatasetDetailModal,
@@ -3334,20 +3343,12 @@ export function buildWorkflowCanvas(root, options = {}) {
       workspace: {
         getCanvasState,
         inspectNode,
+        // run_to runs through here, so the Agent's runs are in Executions too.
+        runPlanned: (nodeId, options) => runPlanned(nodeId, { ...options, source: 'agent' }),
         getScoreComparisonRows,
         getSelectedNodeIds: () => [...selectedNodeIds],
         getPipelineSelections: getAgentPipelineSelections,
-        getPipelineProjectId,
         getAssetProjectId: getCurrentProjectId,
-        getPipelineRunNeedsAssets: (runId) => workspacePanels.pipelineHost
-          .querySelector('.pipeline-overview-overlay')?.getPipelineRunNeedsAssets?.(runId),
-        showPipelinePanel: () => workspacePanels.show('pipeline'),
-        registerPipelineRun: async (pipelineId, run, needsAssets) => {
-          workspacePanels.show('pipeline');
-          const panel = workspacePanels.pipelineHost.querySelector('.pipeline-overview-overlay');
-          if (!panel?.registerAgentRun) throw new Error('Current Pipeline is unavailable.');
-          await panel.registerAgentRun(pipelineId, run, needsAssets);
-        },
         extractInputFields,
         applyCanvasState: applyAgentCanvasState,
         getContentLocks: getContentLocksForCanvas,
@@ -3552,7 +3553,12 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (!isPortMenu) {
       manageItems += '<button type="button" class="workflow-node-context-item" data-action="copy-name" role="menuitem">Copy name</button>';
     }
-    menu.innerHTML = menuGroup(inputPort !== undefined ? 'Create input' : 'Next steps', nextStepItems) + menuGroup('Manage node', manageItems);
+    // Run to here (runToHere): this step and every step before it that has no current result.
+    const held = isTaskLocked(node.dataset.nodeId);
+    const runItems = !isPortMenu && (isRun || isProcess)
+      ? `<button type="button" class="workflow-node-context-item" data-action="run-to-here" role="menuitem"${held ? ' disabled title="This step is part of a run in progress."' : ''}>Run to here</button>`
+      : '';
+    menu.innerHTML = menuGroup('Run', runItems) + menuGroup(inputPort !== undefined ? 'Create input' : 'Next steps', nextStepItems) + menuGroup('Manage node', manageItems);
     /** The output an output item starts from. */
     const outputSource = (button) => ({ nodeId: node.dataset.nodeId, port: button.dataset.port || RESULT_PORT, kind: isRun ? 'run' : isProcess ? 'process' : 'dataset' });
 
@@ -3770,6 +3776,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       },
       'run-this-prompt': () => newRunNode({ promptNode: node, at }),
       'run-prompt-on-output': (button) => newRunNode({ inputSource: outputSource(button), at }),
+      'run-to-here': () => { void runToHere(node.dataset.nodeId); },
       'process-output': (button) => newProcessNode({ inputSource: outputSource(button), at }),
       // A duplicate is a standalone node: no connections are copied (same for Datasets and Processes).
       duplicate: () => {
@@ -4879,6 +4886,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           processResumable: node.dataset.processResumable === '1' || undefined,
           historyRecordId: node.dataset.historyRecordId || undefined,
           historySelectionSignature: node.dataset.historySelectionSignature || undefined,
+          historyStaleRecordId: node.dataset.historyStaleRecordId || undefined,
         };
         if ((node.dataset.nodeOrigin || '').trim()) out.nodeOrigin = node.dataset.nodeOrigin.trim();
         return out;
@@ -4918,6 +4926,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           runResumable: node.dataset.runResumable === '1' || undefined,
           historyRecordId: node.dataset.historyRecordId || undefined,
           historySelectionSignature: node.dataset.historySelectionSignature || undefined,
+          historyStaleRecordId: node.dataset.historyStaleRecordId || undefined,
         };
         if ((node.dataset.nodeOrigin || '').trim()) out.nodeOrigin = node.dataset.nodeOrigin.trim();
         if (pct <= 0 && node.dataset.runResults && node.dataset.runInputContent) {
@@ -5096,6 +5105,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (n.dfResults || n.results) node.dataset.processDfResults = n.dfResults || n.results;
         if (n.historyRecordId) node.dataset.historyRecordId = n.historyRecordId;
         if (n.historySelectionSignature) node.dataset.historySelectionSignature = n.historySelectionSignature;
+        if (n.historyStaleRecordId) node.dataset.historyStaleRecordId = n.historyStaleRecordId;
         if (n.processPending === true || n.processResumable === true) node.dataset.processResumable = '1';
         if (n.results || n.dfResults) {
           const bar = node.querySelector('.workflow-node__process-progress');
@@ -5117,6 +5127,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (n.runCompleted) runNode.dataset.runCompleted = n.runCompleted;
         if (n.historyRecordId) runNode.dataset.historyRecordId = n.historyRecordId;
         if (n.historySelectionSignature) runNode.dataset.historySelectionSignature = n.historySelectionSignature;
+        if (n.historyStaleRecordId) runNode.dataset.historyStaleRecordId = n.historyStaleRecordId;
         if (n.runResumable === true || n.runPending === true) runNode.dataset.runResumable = '1';
         if (n.runInputContent) runNode.dataset.runInputContent = n.runInputContent;
         if (n.runResults) {
@@ -5401,8 +5412,12 @@ export function buildWorkflowCanvas(root, options = {}) {
   /** Results in History and sampled Dataset outputs both lock their source content. */
   async function getContentLocksForCanvas() {
     const state = getCanvasState();
-    return historySession?.projectId && canvasHistoryVersion === 1
-      ? historySession.contentLocks(state) : contentLocks([], state);
+    // A copy: the History session may cache its map.
+    const locks = new Map(historySession?.projectId && canvasHistoryVersion === 1
+      ? await historySession.contentLocks(state) : contentLocks([], state));
+    // A run in progress holds its Prompts and Datasets too (runTaskLocks.js).
+    for (const id of taskLockedIds()) if (!locks.get(id)?.length) locks.set(id, ['run-task']);
+    return locks;
   }
 
   async function isContentLocked(nodeId) {
@@ -5509,6 +5524,27 @@ export function buildWorkflowCanvas(root, options = {}) {
    * Marks a Run or Process whose input has no result yet (runHistoryResolver.js): it is shown faded,
    * naming what it waits for. Neither the attribute nor the tooltip is saved.
    */
+  /** Its last result no longer matches its inputs (runHistoryResolver.js historyStaleRecordId). */
+  function setHistoryStale(live, item) {
+    if (item.historyStaleRecordId) live.dataset.historyStaleRecordId = item.historyStaleRecordId;
+    else delete live.dataset.historyStaleRecordId;
+    live.classList.toggle('workflow-node--stale', !!item.historyStaleRecordId);
+    if (item.historyStaleRecordId && !item.waitingForUpstream) {
+      live.title = 'Needs update: its inputs changed since its last run. Open it to see the earlier result, or run it to update.';
+    } else if (!item.waitingForUpstream && live.title.startsWith('Needs update')) live.removeAttribute('title');
+  }
+
+  /** The record a node's earlier result is in, while it needs updating; null otherwise. */
+  async function loadStaleRecord(nodeId) {
+    const id = getNodeById(nodeId)?.dataset.historyStaleRecordId;
+    if (!id || !historySession?.projectId) return null;
+    try {
+      return await historySession.storage.loadRecord(historySession.projectId, id);
+    } catch (_) {
+      return null;
+    }
+  }
+
   function setWaitingForUpstream(live, item) {
     if (item.waitingForUpstream) {
       live.dataset.waitingForUpstream = '1';
@@ -5542,6 +5578,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       if (item.historySelectionSignature) live.dataset.historySelectionSignature = item.historySelectionSignature;
       else delete live.dataset.historySelectionSignature;
       setWaitingForUpstream(live, item);
+      setHistoryStale(live, item);
       const progress = Number(item.runProgress || 0);
       const bar = live.querySelector('.workflow-node__run-progress');
       if (bar) { bar.style.width = `${progress}%`; bar.setAttribute('aria-valuenow', String(progress)); }
@@ -5626,6 +5663,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (item.historySelectionSignature) live.dataset.historySelectionSignature = item.historySelectionSignature;
         else delete live.dataset.historySelectionSignature;
         setWaitingForUpstream(live, item);
+        setHistoryStale(live, item);
         const bar = live.querySelector('.workflow-node__run-progress');
         if (bar) { bar.style.width = `${progress}%`; bar.setAttribute('aria-valuenow', String(progress)); }
       } else if (item.type === 'process') {
@@ -5639,6 +5677,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (item.historySelectionSignature) live.dataset.historySelectionSignature = item.historySelectionSignature;
         else delete live.dataset.historySelectionSignature;
         setWaitingForUpstream(live, item);
+        setHistoryStale(live, item);
         const bar = live.querySelector('.workflow-node__process-progress');
         if (bar) { bar.style.width = `${progress}%`; bar.setAttribute('aria-valuenow', String(progress)); }
       } else if (item.type === 'score') {
@@ -5865,6 +5904,147 @@ export function buildWorkflowCanvas(root, options = {}) {
     return { outputs, cancelled };
   }
 
+  // ---------- Run to here (docs/design/RUN_TO_HERE_PLAN.md, runPlan.js, runTo.js) ----------
+
+  /** Settings and the credentials that exist, for planning a run; plus each model's name for the plan. */
+  async function loadRunPlanContext() {
+    const [settings, credentials] = await Promise.all([
+      fetch(`${RUN_API_BASE}/api/settings`).then((res) => (res.ok ? res.json() : {})).catch(() => ({})),
+      fetch(`${RUN_API_BASE}/api/credentials`).then((res) => (res.ok ? res.json() : [])).catch(() => []),
+    ]);
+    const list = Array.isArray(credentials) ? credentials : [];
+    return {
+      settings: settings || {},
+      credentialIds: new Set(list.map((credential) => credential.id)),
+      modelLabels: new Map(list.map((credential) => [credential.id, credential.model || credential.llm || credential.id])),
+    };
+  }
+
+  /**
+   * Run to here: plans the steps up to `nodeId`, shows the plan when steps before it would run or
+   * something keeps it from running, and runs it once confirmed. Each step runs as it does from its
+   * own window, so its window shows its progress and its Stop stops the whole run.
+   * @param {{ single?: 'run'|'skip', onShowNode?: () => void }} options single: when only this step
+   *   needs running, 'run' runs it here and 'skip' returns { status: 'single' } so the window that
+   *   asked runs it its own way. onShowNode: called before the plan shows a node on the canvas, so
+   *   the window that asked can close instead of covering it
+   */
+  async function runToHere(nodeId, { single = 'run', onShowNode } = {}) {
+    const context = await loadRunPlanContext();
+    const plan = planRunTo(getCanvasState(), nodeId, context);
+    if (!plan.problems.length && plan.toRun === 0) {
+      showAlert('Everything up to here already has current results.', { title: 'Run to here' });
+      return { status: 'up-to-date' };
+    }
+    const onlyThis = !plan.problems.length && plan.toRun === 1 && plan.steps.at(-1)?.action !== 'reuse';
+    if (onlyThis && single === 'skip') return { status: 'single' };
+    if (!onlyThis) {
+      const start = await openRunPlanDialog({
+        plan,
+        modelLabel: (id) => context.modelLabels.get(id) || id,
+        showNode: (id) => { onShowNode?.(); revealNode(id); },
+      });
+      if (!start) return { status: 'cancelled' };
+    }
+    const task = await runPlanned(nodeId, { context, approvedPlan: plan });
+    if (task.status === 'failed') {
+      const failed = task.steps.find((step) => step.status === 'failed');
+      showAlert(task.error || failed?.message || `"${failed?.name}" failed.`, { title: 'Run to here' });
+    }
+    return task;
+  }
+
+  // ---------- Executions: one record per Run to here (executionRecords.js) ----------
+
+  let executionRecords = [];
+  let executionRecordsKey = null;
+  let executionRecordsLoading = null;
+  let executionRecordsSave = Promise.resolve();
+  /** Record id → the AbortController of its run in this window. */
+  const activeExecutions = new Map();
+  let executionsPanel = null;
+
+  /** The open project's records, loaded once per project; ones a closed app left running end as stopped. */
+  function ensureExecutionRecords() {
+    const key = getCurrentProjectId() || '';
+    if (key === executionRecordsKey) return Promise.resolve(executionRecords);
+    if (executionRecordsLoading?.key === key) return executionRecordsLoading.promise;
+    const promise = (async () => {
+      let records = [];
+      try {
+        records = await loadExecutionRecords(key);
+      } catch (error) {
+        console.error('Load run records:', error);
+      }
+      if ((getCurrentProjectId() || '') !== key) return executionRecords;
+      const ended = endInterruptedRecords(records, new Set(activeExecutions.keys()), Date.now());
+      executionRecords = ended.records;
+      executionRecordsKey = key;
+      executionRecordsLoading = null;
+      if (ended.changed) persistExecutionRecords(key);
+      executionsPanel?.refresh();
+      return executionRecords;
+    })();
+    executionRecordsLoading = { key, promise };
+    return promise;
+  }
+
+  function persistExecutionRecords(key) {
+    const records = executionRecords;
+    executionRecordsSave = executionRecordsSave
+      .then(() => saveExecutionRecords(key, records))
+      .catch((error) => console.error('Save run records:', error));
+  }
+
+  /** Adds or replaces a record of project `key`; ignored once another project is open. */
+  function putExecutionRecord(key, record) {
+    if (key !== executionRecordsKey) return;
+    const index = executionRecords.findIndex((item) => item.id === record.id);
+    executionRecords = index < 0 ? [...executionRecords, record]
+      : executionRecords.map((item) => (item.id === record.id ? record : item));
+    executionsPanel?.refresh();
+    persistExecutionRecords(key);
+  }
+
+  /**
+   * Runs the plan up to `nodeId` (runTo.js) and keeps its record in Executions from its first step.
+   * A run refused before any step starts leaves no record. Used by Run to here and the Agent's run_to.
+   * @param {{ context: object, approvedPlan?: object, signal?: AbortSignal, source?: 'user'|'agent',
+   *   onStep?: (step: object, task: object) => void }} options
+   */
+  async function runPlanned(nodeId, { context, approvedPlan, signal, source = 'user', onStep } = {}) {
+    await ensureExecutionRecords();
+    const key = executionRecordsKey;
+    let record = newExecutionRecord(planRunTo(getCanvasState(), nodeId, context), {
+      id: globalThis.crypto.randomUUID(), now: Date.now(), source,
+    });
+    const controller = new AbortController();
+    if (signal?.aborted) controller.abort();
+    else signal?.addEventListener('abort', () => controller.abort(), { once: true });
+    activeExecutions.set(record.id, controller);
+    let recorded = false;
+    const update = (task, ended) => {
+      record = updateExecutionRecord(record, task, { now: Date.now(), ended });
+      recorded = true;
+      putExecutionRecord(key, record);
+    };
+    const env = { getCanvasState, startRunNode, stopRunNode, runProcessNode, inspectNode };
+    try {
+      const task = await runTo(nodeId, env, {
+        context, approvedPlan, signal: controller.signal,
+        onStep: (step, current) => {
+          update(current, false);
+          onStep?.(step, current);
+        },
+      });
+      if (recorded) update(task, true);
+      return task;
+    } finally {
+      activeExecutions.delete(record.id);
+      executionsPanel?.refresh();
+    }
+  }
+
   /** Ask the backend to stop a Run in flight; the run poll picks up the cancelled status. */
   async function stopRunNode(nodeId) {
     const runId = pendingRuns.get(nodeId);
@@ -5987,43 +6167,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (pipeline) {
       showPipelineOverviewModal(() => detectPipelines(getCanvasState()), {
         host: workspacePanels.pipelineHost,
-        // Opens the node's own window, where its History is, the same way a new node opens.
-        revealCanvasNode: revealNode,
         getCanvasState,
-        getPipelineProjectId,
-        getAssetProjectId: getCurrentProjectId,
-        // A finished run's results are added to the History of the steps it ran, and each step switches
-        // to them; nothing is added to the canvas (docs/design/DATA_FLOW_DESIGN.md §6.3).
-        publishPipelineRun: async ({ run, definition, getArtifact }) => {
-          const canvasProjectId = getCurrentProjectId();
-          const projectChanged = () => new Error('The open project changed while publishing Pipeline results.');
-          if (await getPipelineProjectId() !== run.project_id) throw projectChanged();
-          if (getCurrentProjectId() !== canvasProjectId) throw projectChanged();
-          if (!historySession?.projectId || canvasHistoryVersion !== 1) {
-            return { history: 0, historyError: 'Node History is unavailable for this project.' };
-          }
-          let history;
-          try {
-            history = await importPipelineRunHistory({ run, definition, getArtifact, session: historySession });
-          } catch (error) {
-            return { history: 0, historyError: error?.message || 'Could not import node History.' };
-          }
-          if (getCurrentProjectId() !== canvasProjectId) throw projectChanged();
-          // Each step shows this run's result, also where an earlier record had the same inputs.
-          let changed = false;
-          for (const [jobId, recordId] of history.recordIdsByJob) {
-            const step = getNodeById(definition.spec.source_map?.[jobId]?.node_ids?.at(-1));
-            if (step && step.dataset.historyRecordId !== recordId) {
-              step.dataset.historyRecordId = recordId;
-              changed = true;
-            }
-          }
-          if (changed) document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
-          if (history.imported || changed) await reconcileHistory();
-          return { history: history.imported, historyError: '' };
-        },
-        isPipelineRunImported: (run) => (historySession?.projectId
-          ? pipelineRunImported(run, historySession.index) : Promise.resolve(false)),
         highlightCanvasNodes: highlightPipelineNodes,
         focusCanvasNodes: focusPipelineNodes,
       });
@@ -6037,6 +6181,8 @@ export function buildWorkflowCanvas(root, options = {}) {
     bottomTabs: [
       { id: 'pipeline', label: 'Current Pipeline' },
       { id: 'optimization', label: 'Prompt Version' },
+      // Not "Runs": Process steps are recorded here too.
+      { id: 'executions', label: 'Executions' },
       ...(isElectron ? [{ id: 'log', label: 'Log' }] : []),
     ],
     onCollapse: () => currentPipelineBtn.focus(),
@@ -6047,6 +6193,22 @@ export function buildWorkflowCanvas(root, options = {}) {
     comparePrompts: (fromId, toId) => openEdgeDetailModal({ fromId, toId }),
     highlightCanvasNodes: highlightPipelineNodes,
   });
+  executionsPanel = mountExecutionsPanel(workspacePanels.tabHost('executions'), {
+    getRecords: () => executionRecords,
+    isActive: (recordId) => activeExecutions.has(recordId),
+    onStop: (recordId) => activeExecutions.get(recordId)?.abort(),
+    // Plans the target again: finished steps are reused, a stopped Run continues.
+    onResume: (record) => {
+      if (!getNodeById(record.targetNodeId)) {
+        showAlert('That step is no longer on the canvas.', { title: 'Executions' });
+        return;
+      }
+      void runToHere(record.targetNodeId);
+    },
+    revealNode,
+  });
+  document.addEventListener('workflow:project-changed', () => { void ensureExecutionRecords(); });
+  void ensureExecutionRecords();
   // Rebuild visible ancestry when names, version connections or Optimize methods change.
   let optimizationRefreshTimer = null;
   const scheduleOptimizationRefresh = () => {

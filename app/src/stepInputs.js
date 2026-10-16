@@ -76,6 +76,7 @@ export function stepInputWaitingMessage(state, source, waiting) {
   if (STEP_KINDS.has(source?.kind)) {
     const name = stepSourceLabel(state, { ...source, port: RESULT_PORT });
     if (waiting === 'missing-port') return `Process "${name}" does not return branch "${source.port}".`;
+    if (waiting === 'stale') return `"${name}" needs updating: its inputs changed since its last run.`;
     return `Waiting for upstream results: run "${name}" first.`;
   }
   return `Input Dataset "${stepSourceLabel(state, source)}" has no current result. Run its upstream node first.`;

@@ -134,6 +134,8 @@
 
 ## 11. 统一的运行入口（草案，第二部分）
 
+> 已由 [ANNOBIO_V2_FUNCTIONAL_DESIGN.md](ANNOBIO_V2_FUNCTIONAL_DESIGN.md) 和 [RUN_TO_HERE_PLAN.md](RUN_TO_HERE_PLAN.md) 取代（2026-10-16 实施）：运行入口是步骤上的 Run to here，不是工具栏上的单一 Run 按钮；Prompt 和 Run 仍是两个节点（第 13 节的合并没有做）。下文是当时的讨论。
+
 现状：
 
 - Run、Process 窗口各有自己的 Run 按钮，只运行这一步；上游没有结果时，这一步等待。

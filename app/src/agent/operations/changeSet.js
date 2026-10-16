@@ -23,6 +23,7 @@ import { stepOutputTable } from '../../stepOutputs.js';
 import { parseScoreMappingBundle, serializeScoreMappingBundle } from '../../scoreMappingBundle.js';
 import { nodeTitle, processOutputsOf, runResultsOf } from '../canvas/workflowNodeInspector.js';
 import { contentLocks } from '../../contentLocks.js';
+import { isTaskLocked } from '../../runTaskLocks.js';
 import { validateAgentScoreTree } from './scoreRules.js';
 
 export class ChangeSetError extends Error {
@@ -911,6 +912,7 @@ export function planChangeSet(state, operations, ctx) {
       const bad = keys.filter((k) => !allowed.includes(k));
       if (bad.length) fail(`A ${node.type} cannot set ${bad.join(', ')}. Settable: ${allowed.join(', ')}.`);
       if (node.type === 'score' && node.scoreMatchPending && keys.some((key) => key !== 'name')) fail(`Evaluate "${before}" is matching; stop it before changing its configuration.`);
+      if (isTaskLocked(node.nodeId) && keys.some((key) => !['name', 'note'].includes(key))) fail(`"${before}" is part of a run in progress; stop the run before changing it.`);
 
       if ('name' in set) {
         const name = clean(set.name);

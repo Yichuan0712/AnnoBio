@@ -112,6 +112,8 @@
 
 ## 4. 要删的东西
 
+已于 2026-10-16 删除（[RUN_TO_HERE_PLAN.md](RUN_TO_HERE_PLAN.md) 第 6 步）。Agent 的只读工具 `get_pipeline_runs` 也一起删了，否则就成了只有 Agent 能看整条运行历史。
+
 | 删什么 | 原因 | 前提 |
 |---|---|---|
 | Pipeline 卡片上的 Run Pipeline、Stop、Resume 按钮 | 由"运行到这里"代替 | "运行到这里"先上线 |

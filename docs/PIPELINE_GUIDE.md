@@ -29,12 +29,16 @@ does not follow the step it was saved from.
 In Current Pipeline, choose any Prompt version or Run alternative shown by the route. A Process's
 branches are drawn as lanes; a branch nothing reads is an empty lane.
 
-## Run Pipeline
+## Run to here
 
-**Run Pipeline** lists the Datasets the route starts from, checks that the route compiles, and runs
-it in dependency order. A run can be stopped and resumed. When it ends, the results of every step
-that finished are added to that step's History and each step shows them; no Datasets are added.
-**Run History** lists earlier runs of the pipeline.
+**Run to here** (a step's right-click menu, or its Run button when an input has no result yet) runs
+that step and every step before it that has no current result, reusing the steps that have one. A
+plan shows first: the Datasets it reads, the results it reuses and the steps it runs, in order. To
+run a whole pipeline, run to its last step. The **Executions** tab lists these runs; a running one
+can be stopped, and a stopped or failed one resumed. Each step's result goes into its History.
+
+A step whose inputs changed since its last run shows **Needs update**; its window still shows the
+earlier result. Running it, or changing its inputs back, clears the mark.
 
 ## Python export
 

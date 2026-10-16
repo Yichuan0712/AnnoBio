@@ -1,11 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {
-  buildPipelineCompileRequest,
-  buildPipelineStartRequest,
-  pipelineInputHasAssets,
-  pipelineRouteKey,
-} from '../src/pipelineRunDefinition.js';
+import { buildPipelineCompileRequest, pipelineRouteKey } from '../src/pipelineRunDefinition.js';
 
 function fixture() {
   const state = { nodes: [
@@ -27,13 +22,12 @@ function fixture() {
   return { state, route };
 }
 
-test('start freezes rows only for explicit inputs and never sends stale intermediate rows', () => {
+test('compile sends rows only for explicit inputs and never stale intermediate rows', () => {
   const { state, route } = fixture();
   const before = structuredClone(state);
-  const request = buildPipelineStartRequest({ projectId: 'project-a', canvasState: state, route });
+  const request = buildPipelineCompileRequest({ canvasState: state, route });
   const raw = request.canvas_state.nodes.find((node) => node.nodeId === 'raw');
   const out = request.canvas_state.nodes.find((node) => node.nodeId === 'out');
-  assert.equal(request.project_id, 'project-a');
   assert.deepEqual(request.input_dataset_ids, ['raw']);
   assert.equal(raw.datasetContent.rows[0][0], 'PRIVATE_INPUT');
   assert.deepEqual(raw.datasetContent.rowIds, ['row-a']);
@@ -54,15 +48,10 @@ test('an ordinary empty Dataset remains a valid input', () => {
   assert.deepEqual(request.canvas_state.nodes[0].datasetContent.rows, []);
 });
 
-test('compile and start share the same selected graph and asset detection', () => {
-  const { state, route } = fixture();
-  const compiled = buildPipelineCompileRequest({ canvasState: state, route });
-  const started = buildPipelineStartRequest({ projectId: 'p', projectSessionId: 'assets', canvasState: state, route });
-  assert.deepEqual(started.canvas_state, compiled.canvas_state);
-  assert.deepEqual(started.route, compiled.route);
-  assert.equal(started.project_session_id, 'assets');
-  assert.equal(pipelineInputHasAssets(state, route), true);
+test('the route key is stable for the same route', () => {
+  const { route } = fixture();
   assert.equal(pipelineRouteKey(route), pipelineRouteKey(structuredClone(route)));
+  assert.notEqual(pipelineRouteKey(route), pipelineRouteKey(route.slice(1)));
 });
 
 test('all selected source datasets are frozen for a multi-input Process', () => {

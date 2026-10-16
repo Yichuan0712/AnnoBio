@@ -1,5 +1,6 @@
 import { reviewSettingsOverrides } from './nodeSettings.js';
 import { datasetColorAt, promptColorAt } from './workflowNodeColors.js';
+import { isTaskLocked } from './runTaskLocks.js';
 import { sourceKey } from './stepInputs.js';
 import { readSavedFrom } from './savedDatasets.js';
 import { iconDataset, iconEvaluate, iconPrompt, iconRun, iconTrash } from './icons.js';
@@ -72,6 +73,8 @@ export function createWorkflowNodeFactories(deps = {}) {
     openPromptDetailModal,
     openRunDetailModal,
     startRunNode,
+    runToHere,
+    loadStaleRecord,
     resumeReviewNode,
     openSamplerDetailModal,
     openDatasetDetailModal,
@@ -437,6 +440,11 @@ export function createWorkflowNodeFactories(deps = {}) {
         readOnly,
         saveContent: (content) => {
           const id = node.dataset.nodeId;
+          // A run in progress reads it (runTaskLocks.js); the window may have opened before it started.
+          if (isTaskLocked(id)) {
+            showAlert('This Dataset is read by a run in progress. Stop the run before changing it.', { title: 'Dataset' });
+            return false;
+          }
           datasetContentByNodeId.set(id, content);
           emitCanvasChanged();
         },
@@ -558,6 +566,9 @@ export function createWorkflowNodeFactories(deps = {}) {
         isRunNameAlreadyUsedForPrompt,
         getInputSource: () => readRunInputSource(node),
         getInputStatus: () => readStepInputStatus(node),
+        // Clicking Run while an input has no result runs the steps before it too (Run to here).
+        runToHere: (options) => runToHere(node.dataset.nodeId, options),
+        loadStaleRecord: () => loadStaleRecord(node.dataset.nodeId),
         getRunMappingsFromCanvas: () => Array.from(nodesLayer.querySelectorAll('.workflow-node--run')).map((n) => {
           try {
             const raw = n.dataset.runInputToColumn;
@@ -672,6 +683,8 @@ export function createWorkflowNodeFactories(deps = {}) {
         getInputRows: (code) => readProcessInputRows(node, code),
         revealNode,
         getInputStatus: () => readStepInputStatus(node),
+        runToHere: (options) => runToHere(processNodeId, options),
+        loadStaleRecord: () => loadStaleRecord(processNodeId),
         history: getHistoryForNode?.(processNodeId),
       });
     });
@@ -850,6 +863,20 @@ export function createWorkflowNodeFactories(deps = {}) {
       openScoreDetailModal({
         node,
         revealNode,
+        // A Run with results (also part way through) can be scored; one without cannot yet.
+        getRunState: () => (runNode ? {
+          ready: runNode.dataset.runCompleted === '1' || (() => {
+            try { return JSON.parse(runNode.dataset.runResults || '[]').length > 0; } catch (_) { return false; }
+          })(),
+          stale: !!runNode.dataset.historyStaleRecordId,
+          // Named as elsewhere: its own name once renamed, else its Prompt's (stepInputs.js runLabel).
+          name: (() => {
+            const own = (runNode.dataset.runName || '').trim();
+            if (own && own !== 'Run') return own;
+            const promptId = getConnectionsList().find((c) => c.type === 'prompt-to-run' && c.toId === runNode.dataset.nodeId)?.fromId;
+            return (getNodeById(promptId)?.dataset.promptName || '').trim() || 'Run';
+          })(),
+        } : null),
         getWorkingSets: () => workingSets,
         getRunResultColumns,
         getGroundTruthHeaders,

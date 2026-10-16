@@ -959,7 +959,7 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
   }
 }
 
-export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSets, getRunResultColumns, getGroundTruthHeaders, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getReviewPayload, autoTriggerReview, getScoreMappingsFromCanvas, getRunInputColsCollapsed, setRunInputColsCollapsed, getScoreOutputColsCollapsed, setScoreOutputColsCollapsed, getScoreGtColsCollapsed, setScoreGtColsCollapsed }) {
+export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSets, getRunResultColumns, getGroundTruthHeaders, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getReviewPayload, autoTriggerReview, getScoreMappingsFromCanvas, getRunInputColsCollapsed, setRunInputColsCollapsed, getScoreOutputColsCollapsed, setScoreOutputColsCollapsed, getScoreGtColsCollapsed, setScoreGtColsCollapsed, getRunState = null }) {
   getWorkingSets = getWorkingSets || (() => []);
   getRunResultColumns = getRunResultColumns || (() => []);
   getGroundTruthHeaders = getGroundTruthHeaders || (() => []);
@@ -1508,10 +1508,19 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
     else rulesSectionEl.setAttribute('hidden', '');
   }
 
+  /** Why there is nothing to score: the Run it reads has no current result yet ('' when it has one). */
+  function runNotReadyMessage() {
+    const run = getRunState?.();
+    if (!run || run.ready) return '';
+    return run.stale
+      ? `No result yet: "${run.name}" needs updating, so there is nothing to compare. Run it to see the scores.`
+      : `No result yet: "${run.name}" has not run. Run it to see the scores.`;
+  }
+
   function syncScoreResultsFooterVisibility() {
     if (resultsFooterRightEl) resultsFooterRightEl.hidden = false;
     if (!resultsFooterRowEl) return;
-    const show = activePanelMode === 'code'
+    const show = runNotReadyMessage() ? false : activePanelMode === 'code'
       ? !!(selectedNodeId && lastCodeMatchResult && !lastCodeMatchError)
       : !!(selectedNodeId && hasScoreInputRules());
     if (show) resultsFooterRowEl.removeAttribute('hidden');
@@ -2497,6 +2506,13 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
     }
     if (!selectedNodeId) {
       resultsBody.innerHTML = '<p class="score-detail-placeholder">Select ground truth and add rules to see comparison results.</p>';
+      if (resultsToolbar) { resultsToolbar.style.display = 'none'; resultsToolbar.innerHTML = ''; }
+      return;
+    }
+    // Without a current Run result there is nothing to score; a row of 0% would read as a real score.
+    const notReady = runNotReadyMessage();
+    if (notReady) {
+      resultsBody.innerHTML = `<p class="score-detail-placeholder">${escapeHtml(notReady)}</p>`;
       if (resultsToolbar) { resultsToolbar.style.display = 'none'; resultsToolbar.innerHTML = ''; }
       return;
     }

@@ -1473,7 +1473,14 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
 
   function persistContent() {
     if (readOnly) return;
-    saveContent({ headers, columnTypes, rowIds, rows });
+    if (saveContent({ headers, columnTypes, rowIds, rows }) !== false) return;
+    // Refused (a run in progress reads this Dataset): undo the edit by showing what is stored.
+    const stored = normalizeDatasetContent(getContent());
+    headers = stored.headers;
+    rows = stored.rows;
+    columnTypes = stored.columnTypes;
+    rowIds = stored.rowIds;
+    render();
   }
 
   function close() {

@@ -12,6 +12,9 @@ import { buildCodeMatchInputs } from '../../scoreCodeRunClient.js';
 import { formatScoreMetrics } from '../canvas/scoreComparisonPrf.js';
 import { hasNodeExecution, nodeExecutionIdentity } from '../../nodeExecutionControl.js';
 import { reviewNeedsResume } from '../../executionResumeState.js';
+import { currentNode, executeProcessStep, executeRunStep, waitWhile } from '../../stepExecution.js';
+import { planRunTo } from '../../runPlan.js';
+import { runTo } from '../../runTo.js';
 import {
   datasetContentOf,
   inspectWorkflowNode,
@@ -23,10 +26,6 @@ import {
 const CHARS_PER_TOKEN = 4;
 const OUTPUT_TOKENS_PER_FIELD = 40;
 const TABLE_ROWS_GUESS = 3;
-const POLL_MS = 1500;
-// A stopped Run finishes the rows it already sent to the model before it reports cancelled.
-const STOP_WAIT_MS = 90000;
-
 class RunRequestError extends Error {}
 
 function fail(message) {
@@ -47,10 +46,6 @@ function loadCatalog() {
 async function loadSettings() {
   const res = await fetch(`${BACKEND_API_BASE}/api/settings`);
   return res.ok ? res.json() : {};
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
 function formatUsd(value) {
@@ -248,16 +243,53 @@ function previewStop(job, ctx) {
     lines: ['Requests cancellation of the active node task. Already issued model requests may finish first.'], usd: 0, calls: 0, priced: true };
 }
 
+const formatRows = (rows) => (rows == null ? 'unknown rows' : `${rows.toLocaleString('en-US')} row${rows === 1 ? '' : 's'}`);
+
+/** run_to: the plan for a Run or Process, as the user's Run to here shows it (runPlan.js). */
+function previewRunTo(job, ctx) {
+  const target = ctx.state.nodes.find((n) => n.nodeId === String(job.node || '').trim());
+  if (!target) fail(`node "${job.node}" is not a node on the canvas.`);
+  if (!['run', 'process'].includes(target.type)) fail(`node "${job.node}" is a ${target.type}; run_to works on a Run or a Process.`);
+  const plan = planRunTo(ctx.state, target.nodeId, { settings: ctx.settings, credentialIds: new Set(ctx.credentialsById.keys()) });
+  if (plan.problems.length) fail(plan.problems.map((problem) => problem.message).join(' '));
+  const name = plan.steps.at(-1)?.name || nodeTitle(target);
+  if (!plan.toRun) fail(`Everything up to "${name}" already has current results; nothing to run.`);
+  const reused = plan.steps.filter((step) => step.action === 'reuse');
+  const running = plan.steps.filter((step) => step.action !== 'reuse');
+  const lines = [
+    `Inputs: ${plan.inputs.map((input) => `${input.name} (${formatRows(input.rows)})`).join(', ') || 'none'}`,
+    ...(reused.length ? [`Uses existing results: ${reused.map((step) => step.name).join(', ')}`] : []),
+    `Runs, in order: ${running.map((step) => `${step.name}${step.action === 'resume' ? ' (continues)' : ''}`).join(' → ')}`,
+    plan.calls == null ? 'Model calls: unknown until the steps before them have run.' : `Model calls: ${plan.calls.toLocaleString('en-US')}`,
+  ];
+  return { kind: 'run_to', title: `Run to "${name}"`, nodeIds: running.map((step) => step.nodeId), lines, usd: null, calls: plan.calls,
+    priced: false, targetId: target.nodeId, planSteps: plan.steps.map(({ nodeId, action }) => ({ nodeId, action })) };
+}
+
+async function executeRunTo(item, env, ctx, { signal, onStatus, approvedSteps }) {
+  const options = {
+    context: { settings: ctx.settings, credentialIds: new Set(ctx.credentialsById.keys()) },
+    signal,
+    approvedPlan: { steps: approvedSteps || item.planSteps },
+    onStep: (step) => onStatus(`${step.name}: ${step.status}`),
+  };
+  // The canvas keeps a record of it in Executions, as for the user's Run to here.
+  const task = env.runPlanned ? await env.runPlanned(item.targetId, options) : await runTo(item.targetId, env, options);
+  const lines = task.steps.filter((step) => step.status !== 'reused').map((step) => `${step.name}: ${step.status}${step.errorRows ? `, ${step.errorRows} rows with errors` : ''}${step.message && step.status !== 'completed' ? ` (${step.message})` : ''}`);
+  return { status: task.status, lines: task.error ? [`${item.title}: ${task.error}`, ...lines] : lines };
+}
+
 function previewJob(job, ctx) {
   switch (job?.kind) {
     case 'run': return previewRun(job, ctx);
+    case 'run_to': return previewRunTo(job, ctx);
     case 'process': return previewProcess(job, ctx);
     case 'score': return previewScore(job, ctx);
     case 'review': case 'resume_review': return previewReview(job, ctx);
     case 'verify': return previewVerify(job, ctx);
     case 'optimize_suggestion': return previewSuggestionOptimization(job, ctx);
     case 'stop': return previewStop(job, ctx);
-    default: fail('Unknown job kind. Use run, process, score, review, resume_review, verify, optimize_suggestion or stop.');
+    default: fail('Unknown job kind. Use run, run_to, process, score, review, resume_review, verify, optimize_suggestion or stop.');
   }
 }
 
@@ -322,7 +354,7 @@ export async function previewRunRequest(request, env) {
       : priced
       ? `Estimated cost: about ${formatUsd(usd)}`
       : `Estimated cost: ${usd > 0 ? `at least ${formatUsd(usd)}; ` : ''}the rest cannot be priced in advance (reviews, verification, or models without OpenRouter pricing)`;
-    return { ok: true, items: items.map(({ kind, title, lines, nodeIds }) => ({ kind, title, lines, nodeIds })), total,
+    return { ok: true, items: items.map(({ kind, title, lines, nodeIds, planSteps }) => ({ kind, title, lines, nodeIds, ...(planSteps ? { planSteps } : {}) })), total,
       stopGuards: items.filter((item) => item.kind === 'stop').map((item) => ({ nodeId: item.nodeIds[0], taskId: item.taskId })),
       projectIdentity: env.getAssetProjectId?.() ?? null };
   } catch (error) {
@@ -332,26 +364,6 @@ export async function previewRunRequest(request, env) {
 }
 
 // ---------- execution ----------
-
-async function waitWhile(isBusy, { signal, onTick, onStop }) {
-  let stopRequested = false;
-  for (;;) {
-    if (signal?.aborted && !stopRequested) {
-      stopRequested = true;
-      await onStop();
-      const deadline = Date.now() + STOP_WAIT_MS;
-      while (isBusy() && Date.now() < deadline) await sleep(500);
-      return 'stopped';
-    }
-    if (!isBusy()) return 'finished';
-    onTick?.();
-    await sleep(POLL_MS);
-  }
-}
-
-function currentNode(env, id) {
-  return env.getCanvasState().nodes.find((n) => n.nodeId === id) || null;
-}
 
 async function scoreSummaries(env, runNodeId) {
   const state = env.getCanvasState();
@@ -365,54 +377,14 @@ async function scoreSummaries(env, runNodeId) {
   return out;
 }
 
-async function executeRun(item, env, { signal, onStatus }) {
-  const id = item.nodeIds[0];
-  const started = await env.startRunNode({ runNodeId: id });
-  if (started.waitRequired) {
-    const outcome = await waitWhile(() => currentNode(env, id)?.runPending === true, {
-      signal,
-      onTick: () => {
-        const node = currentNode(env, id);
-        const input = runInputContentOf(node || {});
-        const done = new Set(runResultsOf(node || {}).map((r) => r?.input_row_index)).size;
-        onStatus(`Running "${nodeTitle(node)}": ${done}/${(input.rows || []).length} rows...`);
-      },
-      onStop: () => {
-        onStatus('Stopping: the rows already sent to the model finish first...');
-        return env.stopRunNode(id);
-      },
-    });
-    if (outcome === 'stopped') {
-      const node = currentNode(env, id);
-      const done = new Set(runResultsOf(node || {}).map((r) => r?.input_row_index)).size;
-      return {
-        status: 'stopped',
-        lines: [node?.runPending
-          ? `${item.title}: stop requested; it finishes the rows already sent to the model, then stops (${done} rows done so far)`
-          : `${item.title}: stopped by the user after ${done} rows; running it again continues from there`],
-      };
-    }
-  }
-  const inspection = await env.inspectNode(id);
-  const d = inspection.details;
-  const errors = d.errorRows ? `, ${d.errorRows} with errors` : '';
-  return {
-    status: d.status === 'completed' ? 'completed' : 'stopped',
-    lines: [`${item.title}: ${d.status}, ${d.inputRowsDone}/${d.inputRows} input rows${errors}`, ...(await scoreSummaries(env, id))],
-  };
+/** A Run job, with the Evaluate scores that read it once it has finished. */
+async function executeRun(item, env, options) {
+  const outcome = await executeRunStep(item, env, options);
+  return outcome.inspected ? { ...outcome, lines: [...outcome.lines, ...(await scoreSummaries(env, item.nodeIds[0]))] } : outcome;
 }
 
-async function executeProcess(item, env, { signal, onStatus }) {
-  onStatus(`Running ${item.title}...`);
-  const id = item.nodeIds[0];
-  try {
-    const { outputs, cancelled } = await env.runProcessNode(id, { signal });
-    const branches = Object.entries(outputs).map(([name, branch]) => `${name}: ${branch.rows.length} rows`);
-    return { status: cancelled ? 'stopped' : 'completed', lines: [`${item.title}: ${branches.join('; ') || 'returned nothing'}`] };
-  } catch (error) {
-    if (signal?.aborted || error?.name === 'AbortError') return { status: 'stopped', lines: [`${item.title}: stopped by the user`] };
-    return { status: 'failed', lines: [`${item.title} failed: ${error instanceof Error ? error.message : String(error)}`] };
-  }
+async function executeProcess(item, env, options) {
+  return executeProcessStep(item, env, options);
 }
 
 async function executeReview(item, env, { signal, onStatus, job }) {
@@ -503,6 +475,11 @@ export async function executeRunRequest(request, env, { signal, onStatus = () =>
       if (signal?.aborted) { status = 'stopped'; break; }
       item = await previewJob(job, ctx);
       if (item.kind === 'run') outcome = await executeRun(item, env, { signal, onStatus });
+      else if (item.kind === 'run_to') {
+        // The plan the user confirmed on the card, not the one just made again.
+        const approvedSteps = approvedPreview?.items?.[request.jobs.indexOf(job)]?.planSteps;
+        outcome = await executeRunTo(item, env, ctx, { signal, onStatus, approvedSteps });
+      }
       else if (item.kind === 'process') outcome = await executeProcess(item, env, { signal, onStatus });
       else if (item.kind === 'score') outcome = await executeScore(item, env, { signal, onStatus });
       else if (item.kind === 'review' || item.kind === 'resume_review') outcome = await executeReview(item, env, { signal, onStatus, job });

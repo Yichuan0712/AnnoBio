@@ -134,3 +134,30 @@ test('desktop history deletion removes exactly the confirmed dependency closure'
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test('desktop .yc keeps Run to here records through canvas saves, Save As and merge', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'annobio-run-records-test-'));
+  try {
+    const original = path.join(root, 'original.yc');
+    const copy = path.join(root, 'copy.yc');
+    const source = path.join(root, 'source.yc');
+    const assets = newAssets();
+    const state = { nodes: [{ nodeId: 'run-1', type: 'run' }], connections: [] };
+    const runRecord = (id) => ({ id, targetNodeId: 'run-1', status: 'completed', steps: [] });
+    await assets.save(original, state);
+    assert.deepEqual(await assets.loadRunRecords(original), []);
+    await assets.saveRunRecords(original, [runRecord('a')]);
+    await assets.save(original, state);
+    assert.deepEqual(await assets.loadRunRecords(original), [runRecord('a')]);
+    await assets.save(copy, state, { copySessionFromCurrent: true });
+    assert.deepEqual(await assets.loadRunRecords(copy), [runRecord('a')]);
+
+    const sourceAssets = newAssets();
+    await sourceAssets.save(source, { nodes: [{ nodeId: 'run-2', type: 'run' }], connections: [] });
+    await sourceAssets.saveRunRecords(source, [runRecord('a'), runRecord('b')]);
+    await assets.merge(copy, source);
+    assert.deepEqual((await assets.loadRunRecords(copy)).map((item) => item.id), ['a', 'b']);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

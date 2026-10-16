@@ -2,6 +2,8 @@
 
 日期：2026-09-30。代码基线：`main` / `0b257f9`。
 
+更新（2026-10-16）：界面上的整条运行入口（Run Pipeline、Stop、Resume、Run History、Prepare inputs 窗口）和 Agent 的整条运行操作已删除，改由 Run to here 和 Executions 页签代替，见 [RUN_TO_HERE_PLAN.md](RUN_TO_HERE_PLAN.md)。编译器和导出器照常使用；后端 Runner 和 `/api/pipeline/runs*` 接口保留，界面不再调用。下面是删除前的状态。
+
 状态：编译器、导出器、后端 Runner 和 Current Pipeline 面板运行入口已实现；运行记录在每个 Pipeline 卡片的 Run History 窗口中查看（只读，界面上没有删除入口），运行结束后结果导入各步骤的节点 History（见 2026-10-08 补充），自动保留规则尚未实现，Agent 仍不能启动整条 Pipeline。多起点 Dataset 的 Python 导出已支持命名输入。其余 Phase 2 工作待实现。
 
 本文记录实施范围、执行语义、阶段顺序和验收标准。勾选表示实际完成并验证，不表示仅完成讨论。按里程碑逐步实施代码。

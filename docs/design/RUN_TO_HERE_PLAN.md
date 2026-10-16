@@ -2,7 +2,18 @@
 
 日期：2026-10-16
 设计：[ANNOBIO_V2_FUNCTIONAL_DESIGN.md](ANNOBIO_V2_FUNCTIONAL_DESIGN.md)（先读第 1、3、4、7 节）
-状态：未开始。每做完一步，在本文对应步骤下写"实现记录"：改了哪些文件、测试结果、已知问题。
+状态见下面的进度表。每做完一步：在表里把那一步改成"✅ 已完成"并写上日期，在那一步的标题后面加"✅"，在那一步下面写"实现记录"（改了哪些文件、测试结果、已知问题）。
+
+## 进度
+
+| 步骤 | 内容 | 状态 |
+|---|---|---|
+| 1 | 规划函数 | ✅ 已完成（2026-10-16，未提交） |
+| 2 | 执行 | ✅ 已完成（2026-10-16，未提交） |
+| 3 | 入口和计划窗口 | ✅ 已完成（2026-10-16，未提交） |
+| 4 | 运行记录页签（Executions） | ✅ 已完成（2026-10-16，未提交） |
+| 5 | "需要更新"的显示 | ✅ 已完成（2026-10-16，未提交） |
+| 6 | 删除整条运行的旧入口 | ✅ 已完成（2026-10-16，未提交） |
 
 本文写给接手实现的人。每一步写了：要先读的代码、要改的文件和函数、具体做法、测试和验收标准。行号是 2026-10-16 的，代码改过以后以函数名为准。
 
@@ -59,7 +70,7 @@
 | 要删的整条运行界面 | `pipelineOverviewModal.js`、`pipelineRunDialog.js`、`pipelineRunInputs.js`、`pipelineRunClient.js`、`pipelineHistoryImport.js` |
 | Agent 的整条运行操作 | `agent/pipeline/pipelineActions.js`、`agent/tools/agentTools.js` 的 `pipeline_action`、`backend/agent/system_prompt.py` |
 
-## 第 1 步：规划函数
+## 第 1 步：规划函数 ✅
 
 **目标**：给一个目标节点，算出哪些步骤复用、哪些要跑、读哪些输入、有什么问题、大概多少行。纯函数，不碰界面、不发请求。用户看不到变化。
 
@@ -119,7 +130,19 @@ export function planRunTo(state, targetId, context) {}
 
 **验收**：测试全过；函数里没有 DOM、fetch、对画布的修改。
 
-## 第 2 步：执行
+**实现记录（2026-10-16）**
+
+- 新文件 `app/src/runPlan.js`，导出 `planRunTo(state, targetId, { settings, credentialIds })`。和上面的接口相比：
+  - 没有 `extractInputFields` 参数，直接从 `promptText.js` 引入。
+  - Run 的步骤多了 `credentialId`（实际会用的模型，没有就是 Settings 里选中的）。
+  - 计划多了总调用次数 `calls`，有任何一步未知就是 `null`。
+- 一个步骤的状态直接读节点上的字段：Run 看 `runPending` / `runCompleted` / `runResumable`；Process 看 `processPending` / `processResumable` / `dfResults`。不用 `stepOutputTable` 判断，因为 Process 的输出可能不叫 `result`。`stepOutputTable` 只用来检查下游读的分支存不存在、Dataset 有没有内容、已有结果的实际行数。
+- Process 的输入用 `processRequiredInputs`，和它运行、签名用的是同一份，包括代码里用别名引用的输入。
+- `inputs` 按读它的步骤的执行顺序排。
+- 还没做的检查：Process 代码里引用了、但画布上没连的别名（Agent 的 `previewProcess` 通过 `inspectWorkflowNode` 检查这一项）。现在这种情况会在那一步运行时报错。第 2 步如果改用共享检查，可以一并补上。
+- 测试 `app/tests/runPlan.test.mjs`，13 项，覆盖上面列的所有情况。前端全部 376 项通过。
+
+## 第 2 步：执行 ✅
 
 **目标**：按计划依次运行，处理停止和失败。Agent 改用同一段代码。用户看不到变化。
 
@@ -163,7 +186,37 @@ export async function runTo(targetId, env, options) {}
 
 **验收**：测试全过；用 Agent 在示例项目上跑一次 `run_to`（用本地失败的假凭据即可看到第一步失败、后续不开始）。
 
-## 第 3 步：入口和计划窗口
+**实现记录（2026-10-16）**
+
+- **共用执行代码**：新文件 `app/src/stepExecution.js`，从 `agent/execution/runJobs.js` 移过来 `waitWhile`、`currentNode`，以及执行函数 `executeRunStep`、`executeProcessStep`（原来叫 `executeRun`、`executeProcess`）。
+  - `executeRunStep` 多返回两项：`inspected`（跑到了结尾）和 `errorRows`。
+  - Evaluate 分数的汇总留在 `runJobs.js` 自己的 `executeRun` 里，Agent 的行为不变。
+- **执行**：新文件 `app/src/runTo.js`。
+  - `runTo(targetId, env, { context, signal, approvedPlan, onStep })` 按上面的做法执行。
+  - 另外导出 `planHeldNodeIds`（任务要占用哪些节点）和 `samePlanSteps`（比较两份计划）。
+  - 一个 Run 不是被用户停下、却没跑完所有行，算失败。`executeRunStep` 对这种情况返回 `stopped`，`runTo` 根据有没有 abort 区分。
+- **占用**：新文件 `app/src/runTaskLocks.js`（`holdNodes`、`isTaskLocked`、`taskLockedIds`），占用变化时发出 `workflow:run-task-locks-changed` 事件。接入了这几处：
+  - `nodePorts.js` 的 `changeBlocked`：被占用的节点不能改输入，提示 "is part of a run in progress"。拖线、断开、Agent 改连线都经过这里。
+  - `workflowCanvas.js` 的 `getContentLocksForCanvas`：被占用的节点算内容锁定，Prompt、Dataset 窗口和 Agent 改内容都受它管。拿到的锁表先复制一份再加，因为 History 会话可能缓存这张表。
+  - `agent/operations/changeSet.js` 的 `update`：被占用的节点，除了改名和备注，什么都不能改。
+  - Run 窗口（`runDetailModal.js` 的 `applyTaskHold`）、Process 窗口（`processDetailModal.js` 的 `applyTaskHold`）：被占用、自己又没在跑时，输入或代码只读，Run 按钮不可用，悬停说明原因；占用变化时自动刷新。按钮文字不变。
+- **Agent**：`run_nodes` 加了 `run_to` 这种 job。
+  - 卡片列出输入、复用、执行顺序和调用次数。
+  - 执行时用卡片上确认过的计划（`planSteps` 随卡片的 preview 一起保存）去比较，计划变了就拒绝。
+  - `agentTools.js` 的说明和 `backend/agent/system_prompt.py` 都已更新。
+- **测试**：新文件 `app/tests/runTo.test.mjs`，10 项，用一个假的画布接口，覆盖：
+  - 全部成功、中途失败、再次运行时跳过已完成的步骤；
+  - Run 没跑完算失败、用户停止；
+  - 计划变了被拒绝、有 problem 被拒绝、没什么要跑；
+  - 占用和释放、被另一个任务占用时拒绝、占用时不能改输入；
+  - Agent 卡片的内容。
+  - 前端 386 项、后端 145 项全过，构建通过。
+- **已知问题**：
+  - 还没在真实界面里跑过：这一步没有界面入口，Agent 的 `run_to` 需要真实的 Agent 模型才能在界面里试。第 3 步做完入口后一起实测。
+  - 任务开始前就已经打开的 Prompt / Dataset 窗口不会变成只读：它们只在打开时判断一次锁定，之后边输入边保存，不再检查。这样任务进行中仍能改到还没开始的步骤读的 Prompt。第 3 步要让这两个窗口也监听 `workflow:run-task-locks-changed`（做法同 Run 窗口的 `applyTaskHold`）。Agent 改内容时会再检查，不受影响。
+  - 第 1 步记下的"代码里引用了但没连线的别名"检查还没补。
+
+## 第 3 步：入口和计划窗口 ✅
 
 **目标**：用户可以在窗口和右键菜单里连同上游一起跑。
 
@@ -189,7 +242,44 @@ export async function runTo(targetId, env, options) {}
 
 **验收**：只跑一步时和现在完全一样；连同上游时先看到计划；有问题时能定位到节点。
 
-## 第 4 步：运行记录页签
+**实现记录（2026-10-16）**
+
+- **计划窗口**：新文件 `app/src/runPlanDialog.js`。
+  - `runPlanView(plan, { modelLabel })` 是纯函数，生成窗口里的文字：Reads、Uses existing results、Runs, in order、调用次数，以及各条 problem 的位置。
+  - `openRunPlanDialog({ plan, modelLabel, showNode })` 返回是否开始。
+  - 样式是 `modals.css` 里的 `.run-plan-dialog*`，没有用 `pipelineRunDialog` 的样式，因为第 6 步要删掉它。
+  - 只跑 Process 的计划不显示调用次数那一行。
+- **画布入口**：`workflowCanvas.js` 的 `runToHere(nodeId, { single, onShowNode })`。
+  - 读 Settings 和凭据，算计划。全部是最新的就提示 "Everything up to here already has current results."。
+  - 只有这一步要跑：`single: 'skip'` 时交回窗口按原来的方式跑，否则直接跑。
+  - 其余情况弹计划窗口，确认后调 `runTo`，失败时弹提示。
+  - `onShowNode` 让发起的窗口在定位节点前先关掉，免得挡住节点。
+- **Run / Process 窗口**：上游没结果时，按钮不再变成灰的 "Waiting for upstream"，文字不变，可以点；点了走 `runToHere`。传入的参数是 `runToHere`（`workflowNodeFactories.js`）。
+- **右键菜单**：Run 和 Process 的菜单最前面加了 "Run" 组和 "Run to here"。节点被占用时这一项不可用。
+- **停止**：计划跑到某一步、这一步的 Run 窗口开着时，Run 窗口会接管这个任务（`onRunResultsUpdated` 里拿 `getPendingRunId()`），所以窗口里的 Stop 能停下这一步，整个计划也就停了。为此 `runTo.js` 改成：Run 没跑完所有行一律算 `stopped`，不算 `failed`，再运行一次会接着跑；只有报错才算 `failed`。
+- **补上第 2 步的已知问题**：
+  - Prompt 窗口（`promptDetailModal.js` 的 `heldByRun`）在占用期间不能编辑，任务开始前就打开的窗口也一样。
+  - Dataset 窗口：保存被拒绝时弹提示，并立即把窗口内容恢复成已保存的内容（`datasetDetailModal.js` 的 `persistContent`）。
+- **规划函数补充**：从来没打开过的 Process 没有代码，提示改为 "has no code yet. Open it to write its code."。
+- **测试**：
+  - 新文件 `app/tests/runPlanDialog.test.mjs`，4 项。
+  - `runPlan.test.mjs` 加 1 项，`runTo.test.mjs` 改 1 项。
+  - 前端全部 391 项通过，构建通过。
+- **界面实测（无头浏览器，示例项目 direct connections，假凭据）**，通过的有：
+  - 改了上游 Process 的代码后，下游窗口的按钮仍可点，计划正确；
+  - 取消后什么都没跑；点步骤卡片能定位节点，并关掉发起的窗口；
+  - 依次运行，Process 用 Python 跑，Run 在模型全部失败时以出错行完成；
+  - 占用期间改连线被拒，Prompt 不能编辑，Dataset 的修改被拒并恢复，菜单项不可用，结束后全部释放；
+  - 全部是最新时给出提示；没设 Python 时 problem 标红、Start 不可用；
+  - 深色模式正常，控制台没有错误。
+- **已知问题（都不是这一步引入的）**：
+  - Run 步骤用 Prompt 的名字称呼，和 Current Pipeline、Agent 一致。几个 Run 共用一个 Prompt 时，计划里分不清是哪一个；要不要改用 Run 自己的名字，待用户定。
+  - 输入 0 行的 Run 完成后，窗口仍显示 "Run to see results"。
+  - 凭据不通时每行都要重试多次，8 行跑了约 3.5 分钟，计划里的节点在这段时间里一直被占用。
+  - 计划跑到某一步的 Process 时，Process 窗口没法停下它，第 4 步的 Executions 页签会提供 Stop。
+  - 含图片 / PDF 列的数据进入 Process 时报 "Image/PDF inputs require a project session."，从 Process 窗口直接运行也一样，是现有问题。
+
+## 第 4 步：运行记录页签 ✅
 
 **目标**：每次连同上游的运行（`runTo`）留一条记录，在底部面板查看、停止、继续。只跑一步的运行不进这里（它在节点 History 里已经有记录）。如果用户要求单步也进，再加。
 
@@ -225,7 +315,49 @@ export async function runTo(targetId, env, options) {}
 
 **测试**：后端接口的单元测试（参考 `backend/test_project_history.py`）；前端记录更新逻辑写成纯函数测；界面实测：跑一次、停一次、继续一次、关掉再打开项目。
 
-## 第 5 步："需要更新"的显示
+**实现记录（2026-10-16）**
+
+- **存储**：
+  - 网页版：`backend/project_store.py` 新增 `GET / PUT /{project_id}/run-records`，记录存在 `project.json` 的 `runRecords`。新建、复制（History 也一起复制，所以记录也复制）、合并（加上源项目里目标没有的记录）、导出 `.yc`、导入 `.yc` 都处理了这个字段。画布保存（`save_project`）本来就不碰别的字段。
+  - 桌面版：`app/src/projectAssets.js` 新增 `loadRunRecords`、`saveRunRecords`。`.yc` 包里多一个 `runRecords` 字段，跟着 History 走：另存时复制，新项目为空，合并时加上源项目的。
+  - IPC 是 `run-records:load` / `run-records:save`（`main.js`、`preload.js`）。
+  - 旧的 `.json` 项目没有记录。
+- **记录**：新文件 `app/src/executionRecords.js`。
+  - 读写：`loadExecutionRecords`、`saveExecutionRecords`。桌面用 `electronAPI`，网页用接口。
+  - 纯函数：`newExecutionRecord`、`updateExecutionRecord`、`endInterruptedRecords`、`executionCounts`、`executionSummary`。
+  - 格式和上面写的一样。另外多一个步骤状态 `interrupted`：窗口关闭或刷新时正在跑的那一步。网页版刷新不会停掉服务器上的任务，这一步可能其实已经跑完了，所以不说它停了。记录里的说明是 "The window closed before this run finished…"。
+- **画布**：`workflowCanvas.js` 新增 `runPlanned(nodeId, { context, approvedPlan, signal, source, onStep })`。
+  - 包着 `runTo`：第一步开始时新建记录，每步结束时更新，结束时写入最终状态。开始前就被拒绝的运行不留记录。
+  - Run to here 和 Agent 的 `run_to` 都走它（Agent 的 workspace 里有 `runPlanned`，记录的 `source` 是 `agent`）。
+  - 记录按项目加载（`ensureExecutionRecords`，项目切换时重新加载）。保存按顺序排队，切换项目后不会写错项目。
+- **页签**：新文件 `app/src/executionsPanel.js`、`executionsPanel.css`。
+  - 页签 ID 是 `executions`，名字是 Executions，放在 Prompt Version 和 Log 之间。
+  - 最新的记录在上面，正在跑的那条自动展开；点一步会在画布上定位节点。
+  - Stop 会 abort 这次运行，Process 步骤也能停。Resume 会对同一个目标重新走 `runToHere`，有计划窗口，并新增一条记录。
+  - 停止、中断的说明用灰色，失败的用红色。
+- **测试**：
+  - 新文件 `app/tests/executionRecords.test.mjs`，3 项。
+  - `app/tests/runHistoryStorage.test.mjs` 加 1 项：桌面 `.yc` 在保存、另存、合并时都保留记录。
+  - 新文件 `backend/test_run_records.py`，3 项。
+  - 前端全部 395 项、后端全部测试通过，构建通过。
+- **界面实测（网页版，无头浏览器）**，10 项全部通过：
+  - 页签和空状态；
+  - 运行中的记录实时更新，服务器上也有；
+  - Stop 后后面的步骤 Not started，后端没有再收到运行请求；
+  - Resume 新增一条记录并完成，旧的保持 Stopped；
+  - 点步骤定位节点、展开和收起；
+  - 单独一步的 Run to here 也留记录，从窗口直接运行的不留；
+  - 刷新后记录还在，运行中刷新会把那条标为中断；
+  - 复制项目后记录一致；
+  - 深色模式正常，控制台没有错误。
+  - 另外验证了：失败的记录显示 traceback；同一步正在跑时，新的计划显示 "already running"，Start 不可用。
+  - 实测后改了几处小问题（中断的说法、"1 rows" 的单复数、失败提示里重复的步骤名、停止说明的颜色），只跑了单元测试，没有再次实测。
+- **已知问题**：
+  - 停下后 Resume 时，停在一半的 Run 会接着写同一条 History 记录（这是现有的单步运行行为）。所以停止那条记录里，这一步链接到的 History 最后显示的是"已完成"。界面上目前不显示这个链接。
+  - 单独一步的 Run to here 记录也会列出上游被复用的步骤（"1 ran · 4 reused"），这是有意的，记录完整的计划。
+  - 桌面版没有界面实测，只有存储的单元测试。
+
+## 第 5 步："需要更新"的显示 ✅
 
 **目标**：输入变了以后，节点继续显示上一次的结果并标"需要更新"，而不是显示"没有结果"。
 
@@ -247,7 +379,50 @@ export async function runTo(targetId, env, options) {}
 
 **验收**：示例项目里改一个 Process 的代码，它和下游都显示旧结果加 "Needs update"；改回去，标记消失。
 
-## 第 6 步：删除整条运行的旧入口
+**实现记录（2026-10-16）**
+
+和上面的做法相比，改成了一种更保守的方式。
+
+上面原本打算把过期的旧结果写回节点的结果字段，再用 `historyStale` 区分。但读结果的地方太多（Evaluate 算分、保存结果、Agent、按钮状态、内容锁定……），每处都要认得"过期"，容易漏。
+
+现在的做法是：节点的结果字段照旧清空，所有读结果的地方看到的仍是"没有结果"，行为和以前完全一样。另外记一个指针 `historyStaleRecordId`，只给"显示"用。
+
+- **`runHistoryResolver.js`**：
+  - 签名对不上时，如果节点上一次显示的记录（`historyRecordId`，或者已有的 `historyStaleRecordId`）是这个节点自己的、已完成的记录，就把它记成 `historyStaleRecordId`，然后照旧 `clearResult`。
+  - 对上了就删掉这个字段。
+  - 记录被删除后，这个字段也随之消失。
+  - 它不进 `currentRecordIds`，所以下游照旧等待，Evaluate 和 Optimize 的分析键也不会用到它。
+- **`stepOutputs.js`**：节点没有当前结果、但有这个指针时，返回 `waiting: 'stale'`。`stepInputs.js` 的 `stepInputWaitingMessage` 为它生成 `"X" needs updating: its inputs changed since its last run.`。规划函数把它当作要跑的步骤，不用改。
+- **画布（`workflowCanvas.js`）**：
+  - 保存：`getCanvasState` / `loadCanvasState` 保存并读回这个字段，所以刷新后还在。
+  - 写回：History 解析后由 `setHistoryStale` 写回节点，加上 `workflow-node--stale` 类；`workflowCanvas.css` 用它画 "Needs update" 小标签，并设置悬停说明。
+  - 读状态：`liveInputState` 也带上了这个字段，窗口顶部的提示、变淡节点的悬停说明才会用上"需要更新"的说法。界面实测时发现漏了这一处，已修好。
+  - `loadStaleRecord(nodeId)` 用来读那条旧记录，传给 Run / Process 窗口。
+  - `undoHistory.js` 把它列为易变字段，不进撤销快照。
+- **窗口**：
+  - Run 窗口（`showStaleResults`）没有当前结果时，显示旧记录的结果表和说明。Save to workspace / Create Evaluate 是针对当前结果的，所以隐藏。
+  - Process 窗口（`showStaleResults`）显示旧记录的各分支和说明。Save to workspace 仍可用，保存出来的 Dataset 的 `savedFrom.recordId` 是那条旧记录。
+- **Agent**：`inspect_node` 的 details 多了 `needsUpdate` 说明（`agent/canvas/workflowNodeInspector.js`）。
+- **测试**：
+  - `runHistoryResolver.test.mjs` 加 1 项：过期时指向旧记录、下游读不到、刷新后还在、改回去恢复、记录删除后消失。
+  - `runPlan.test.mjs` 加 1 项。
+  - 测试数据 `historyGraphFixture.mjs` 的 History 索引补上了 `status`，和真实存储一致。
+  - 前端全部 397 项通过，构建通过。
+- **界面实测（网页版，无头浏览器）全部通过**：
+  - 改了 Process 代码后，它和下游有结果的步骤都显示 "Needs update"，下游同时变淡（在等上游）。
+  - 窗口里显示旧结果和说明，Run 窗口隐藏 Save / Create Evaluate。
+  - 依赖这个 Run 的 Evaluate 不用旧结果算分。
+  - 撤销代码修改后，旧结果恢复为当前结果，没有调用任何运行。
+  - 刷新后标签还在；Run to here 时，每一步开始运行时标签消失。
+  - 下游窗口的提示和悬停说明都用"需要更新"的说法（修复后复查通过）。
+  - 深色模式可读，控制台没有错误。
+- **实测后按用户决定补的（2026-10-16）**：
+  - Evaluate 读的 Run 没有当前结果时，Evaluate 窗口不再显示一排 0%，改成 `No result yet: "<Run>" needs updating…` 或 `… has not run…`，并隐藏 Save to workspace / Optimize prompt（`scoreDetailModal.js` 的 `runNotReadyMessage`；由 `workflowNodeFactories.js` 传入 `getRunState`）。正在跑、已有部分结果的 Run 照旧实时打分。Run 的名字和其他地方一样：改过名用它自己的名字，否则用 Prompt 的名字。
+  - Process 窗口的说明条加了左右边距，和 Run 窗口一样（`.run-detail-stale-note--outside`）。
+  - Process 窗口另存旧结果时不额外标注，用户决定不改。
+  - 实测通过（"has not run" 的情况没有可用的示例，没测）。
+
+## 第 6 步：删除整条运行的旧入口 ✅
 
 **前提**：第 3、4 步已经上线。
 
@@ -261,6 +436,41 @@ export async function runTo(targetId, env, options) {}
 6. **用户指南**：`hub/templates/guide.html` 和 `docs/PIPELINE_GUIDE.md` 里讲 Run Pipeline 的地方，改成讲 Run to here 和 Executions 页签。
 
 **验收**：全局搜 `Run Pipeline`、`Run History`、`pipeline-run-action`，界面代码里不再出现；前后端测试全过；界面实测 Current Pipeline 卡片只有导出，导出照常可用。
+
+**实现记录（2026-10-16）**
+
+- **`pipelineOverviewModal.js` 重写**：只保留路线显示、选择器、悬停高亮和点击定位节点、Export Python Project，以及给 Agent 读的 `getPipelineSelections`。
+  - 删除了 Run / Stop / Resume、Run History 按钮和窗口、运行状态轮询、运行结束后导入 History 的代码，还有 localStorage 里的运行记录。
+  - 打开它的参数只剩 `host`、`getCanvasState`、`highlightCanvasNodes`、`focusCanvasNodes`。
+- **删除的文件**：
+  - `pipelineRunDialog.js`、`pipelineRunInputs.js`、`pipelineHistoryImport.js`；
+  - 测试 `pipelineRunInputs.test.mjs`、`pipelineHistoryImport.test.mjs`。
+- **精简的文件**：
+  - `pipelineRunClient.js` 只留导出前用的 `compileCurrentPipeline`。
+  - `pipelineRunDefinition.js` 只留 `buildPipelineCompileRequest`、`pipelineRunCanvasDefinition`、`pipelineRouteKey`。
+  - 相应的测试改成只测这些。
+  - `pipelineInputAvailability.js` 导出还在用，保留。
+- **画布（`workflowCanvas.js`）**：打开 Current Pipeline 时不再传 `publishPipelineRun` 等参数。Agent workspace 去掉了 `registerPipelineRun`、`getPipelineRunNeedsAssets`、`getPipelineProjectId`、`showPipelinePanel`。
+- **Agent**：
+  - `pipeline_action` 只剩 `export`；传 run / stop / resume 会报错，并提示改用 `run_nodes` 的 `run_to`。
+  - 只读工具 `get_pipeline_runs` 删除。Run History 没有了，留着它就成了只有 Agent 能看的整条运行历史。
+  - 已同步：`agentTools.js` 的工具定义、`agentChatSession.js` 的按钮文字、`backend/agent/system_prompt.py`、Agent guide `pipeline-building.md`。
+  - 测试 `agentPipelineActions.test.mjs` 改为测导出，以及 run / stop / resume 被拒。
+- **样式**：`modals.css` 删掉了旧 Run Pipeline 窗口、Run History 窗口、运行按钮和运行状态的样式。这次新加的计划窗口、说明条样式保留。
+- **文档**：
+  - 用户文档：`docs/PIPELINE_GUIDE.md` 改讲 Run to here 和 Executions，`docs/AGENT_CAPABILITIES.md` 同步更新。
+  - 设计文档：`PIPELINE_EXECUTION_PLAN.md` 加了更新说明，`NODE_PORTS_DESIGN.md` §11 标为已取代，v2 设计第 4 节标为已删除。
+  - 用户指南 `hub/templates/guide.html` 里本来就没有讲 Run Pipeline。
+- **后端**：Pipeline Runner 和 `/api/pipeline/runs*` 接口保留，界面不再调用。编译器和导出照常使用。
+- **测试**：前端 387 项通过（删掉的旧测试和旧功能一起删了），后端全部通过，构建通过。
+- **界面实测（网页版）全部通过**：
+  - Current Pipeline 卡片只有导出；选择器、悬停高亮、点击定位节点正常；
+  - 导出成功下载 zip（21 个文件）；
+  - 开了约 10 个窗口和菜单，页面里都找不到 "Run Pipeline" "Run History" "Prepare inputs"；
+  - Run to here 从计划到完成正常，Executions 记录完整；
+  - 底部页签是 Current Pipeline | Prompt Version | Executions；
+  - 控制台没有错误。
+- **已知问题**：示例项目 `examples/Kinase–Substrate Evidence Curation - direct connections.yc` 里存着一段旧的 Agent 对话，说 Agent 能运行、停止整条 Pipeline，现在已经过时。这是项目文件里的聊天内容，不是界面文字，没有改。
 
 ## 以后再做
 

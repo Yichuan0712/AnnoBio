@@ -8855,8 +8855,7 @@ body.wd-image-dragging .wd-image-thumb { cursor: grabbing; }
 .pipeline-overview-card-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; }
 .pipeline-overview-card-title { font-size: 14px; margin: 0; }
 .pipeline-overview-card-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
-.pipeline-overview-export,
-.pipeline-run-history { flex: 0 0 auto; padding: 5px 10px; font-size: 12px; }
+.pipeline-overview-export { flex: 0 0 auto; padding: 5px 10px; font-size: 12px; }
 .pipeline-overview-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 100%; margin: 0; padding: 0; list-style: none; }
 .pipeline-overview-step {
   display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; box-sizing: border-box;
@@ -8900,80 +8899,39 @@ body.wd-image-dragging .wd-image-thumb { cursor: grabbing; }
   font-size: 12.5px; padding: 2px 4px; border: 1px solid var(--border);
   border-radius: var(--control-radius, 6px); background: var(--bg); color: var(--text); font-family: inherit;
 }
-.pipeline-run-action { flex: 0 0 auto; padding: 5px 10px; font-size: 12px; }
-.pipeline-run-validation {
-  margin-top: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
-  background: var(--bg-bar); color: var(--text-muted); font-size: 12px;
-}
-.pipeline-run-validation--error { border-color: rgba(192, 57, 43, 0.5); }
-/* Run Pipeline dialog: a card per step that reads a Dataset from outside the Pipeline. Clicking a
-   card opens that node, like a Current Pipeline step; a problem found on Run sits on its card. */
-.modal-panel.pipeline-run-dialog { width: min(460px, 92vw); }
-.pipeline-run-dialog__body { min-height: 0; padding: 16px 20px 8px; max-height: min(65vh, 560px); overflow-y: auto; }
-.pipeline-run-dialog__intro { margin: 0 0 12px; font-size: 12.5px; color: var(--text-muted); }
-.pipeline-run-dialog__steps { display: flex; flex-direction: column; gap: 8px; }
-.pipeline-run-dialog__step {
-  display: flex; flex-direction: column; gap: 7px; width: 100%; padding: 10px 12px;
+/* Run / Process window: the results shown are from before the step's inputs changed. */
+/* Same look as the "needs updating" / waiting banner above the inputs (.run-detail-waiting-banner). */
+.run-detail-stale-note { margin: 12px 0 8px; padding: 6px 10px; border: 1px solid var(--status-warning);
+  border-radius: var(--control-radius, 3px); font-size: 12px; color: var(--status-warning); }
+.run-detail-stale-note[hidden] { display: none; }
+/* 12px below the pane's title bar, like the banner in the left pane (.run-detail-main gap). */
+.run-detail-stale-note--outside { margin: 12px 20px 8px; }
+.run-detail-results-footer-actions[hidden] { display: none; }
+/* Run to here: the plan shown before steps upstream of the one asked for run (runPlanDialog.js). */
+.modal-panel.run-plan-dialog { width: min(480px, 92vw); }
+.run-plan-dialog__body { min-height: 0; padding: 14px 20px 8px; max-height: min(65vh, 560px); overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+.run-plan-dialog__section { display: flex; flex-direction: column; gap: 8px; }
+.run-plan-dialog__heading { margin: 0; font-size: 12px; font-weight: 600; color: var(--text-muted); }
+.run-plan-dialog__inputs { margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.5; }
+.run-plan-dialog__input { display: list-item; }
+.run-plan-dialog__step {
+  display: flex; flex-direction: column; gap: 6px; width: 100%; padding: 10px 12px;
   border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text);
   font: inherit; text-align: left; cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s;
 }
-.pipeline-run-dialog__step:hover,
-.pipeline-run-dialog__step:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-.pipeline-run-dialog__step.has-problem { border-color: color-mix(in srgb, var(--status-danger) 60%, var(--border)); }
-.pipeline-run-dialog__step-head { display: flex; align-items: center; gap: 8px; }
-.pipeline-run-dialog__step-head .pipeline-step-kind { flex-shrink: 0; }
-.pipeline-run-dialog__step-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
-.pipeline-run-dialog__open { flex-shrink: 0; font-size: 18px; line-height: 1; color: var(--text-muted); }
-.pipeline-run-dialog__step:hover .pipeline-run-dialog__open { color: var(--accent); }
-.pipeline-run-dialog__datasets { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; }
-.pipeline-run-dialog__dataset { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.pipeline-run-dialog__problem { font-size: 12px; line-height: 1.45; color: var(--status-danger); }
-.pipeline-run-dialog__errors { margin: 12px 0 0; padding-left: 18px; font-size: 12.5px; line-height: 1.5; color: var(--status-danger); }
-/* Run History window, opened from a pipeline card: that pipeline's runs, one row each. */
-.modal-panel--pipeline-runs {
-  width: min(720px, 94vw);
-  max-height: 80vh;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-}
-.modal-panel--pipeline-runs .modal-body { flex: 1; min-height: 0; overflow: auto; }
-/* Modal: above the Agent window (2000) and the floating Current Pipeline (2100). */
-.pipeline-runs-overlay { z-index: 2200; }
-.pipeline-runs-overlay[hidden] { display: none; }
-.pipeline-runs { font-size: 12px; color: var(--text); }
-.pipeline-runs-table {
-  width: 100%;
-  table-layout: fixed;
-  border-collapse: separate;
-  border-spacing: 0;
-  border-top: 1px solid var(--border);
-  border-left: 1px solid var(--border);
-}
-.pipeline-runs-table th,
-.pipeline-runs-table td {
-  padding: 4px 8px;
-  text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  border-right: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-}
-.pipeline-runs-table th { position: sticky; top: 0; font-weight: 600; color: var(--text-muted); background: var(--hover); }
-.pipeline-runs-muted { color: var(--text-muted); }
-.pipeline-run-status {
-  display: inline-flex; align-items: center; border-radius: 999px; padding: 2px 7px;
-  background: rgba(100, 116, 139, 0.14); color: var(--text-muted); font-size: 10.5px;
-  font-weight: 700; text-transform: uppercase; letter-spacing: 0.035em;
-}
-.pipeline-run-status--running,
-.pipeline-run-status--pending { background: rgba(37, 99, 235, 0.14); color: var(--accent); }
-.pipeline-run-status--succeeded { background: color-mix(in srgb, var(--status-success) 16%, transparent); color: var(--status-success); }
-.pipeline-run-status--failed,
-.pipeline-run-status--interrupted { background: color-mix(in srgb, var(--status-danger) 16%, transparent); color: var(--status-danger); }
-.pipeline-run-status--cancelled,
-.pipeline-run-status--cancelling { background: color-mix(in srgb, var(--status-warning) 16%, transparent); color: var(--status-warning); }
+.run-plan-dialog__step:hover,
+.run-plan-dialog__step:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.run-plan-dialog__step.has-problem { border-color: color-mix(in srgb, var(--status-danger) 60%, var(--border)); }
+.run-plan-dialog__step-head { display: flex; align-items: center; gap: 8px; }
+.run-plan-dialog__step-head .pipeline-step-kind { flex-shrink: 0; }
+.run-plan-dialog__step-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.run-plan-dialog__open { flex-shrink: 0; font-size: 18px; line-height: 1; color: var(--text-muted); }
+.run-plan-dialog__step:hover .run-plan-dialog__open { color: var(--accent); }
+.run-plan-dialog__detail { font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere; }
+.run-plan-dialog__problem { display: block; font-size: 12px; line-height: 1.45; color: var(--status-danger); }
+.run-plan-dialog__errors { margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.5; color: var(--status-danger); }
+.run-plan-dialog__calls,
+.run-plan-dialog__note { margin: 0; font-size: 12.5px; color: var(--text-muted); }
 
 /* 右栏：结果表格 + 搜索 + 分页 + Save to workspace，全部复用 run-detail-results-* 系列
    （与 Run/Dataset 详情页一致的表格习惯，状态文字也保持同一套纯色风格，不单独染色） */
