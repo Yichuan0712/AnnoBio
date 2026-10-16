@@ -12,7 +12,7 @@ Every project contains:
 - `pipeline.json`, the portable description of the route; `DATA.md`, the required input columns and
   their types (text, image, pdf); `README.md`; `requirements.txt`.
 
-When the route has a Prompt Run, it also contains `prompt/` (one module per Prompt/Run pair with its
+When the route has a Prompt/Generate step, it also contains `prompt/` (one module per Prompt/Generate pair with its
 input mapping, output schema and model), `engine/` (LLM access through LiteLLM or OpenRouter) and
 `.env.example` (the API keys to set). A route of only Processes has none of these and needs no API key.
 
@@ -23,12 +23,12 @@ input mapping, output schema and model), `engine/` (LLM access through LiteLLM o
 - No data is included: no Dataset rows, images or pdfs.
 
 Only the chosen route is exported. Alternatives visible on the canvas but not chosen (other prompt
-versions, other Runs, other Processes) are left out, as are Evaluate and Optimize nodes. Datasets saved
+versions, other Generate nodes, other Processes) are left out, as are Evaluate and Optimize nodes. Datasets saved
 from a step are not part of the route: the export follows the steps' direct connections.
 
 A route exports only if:
 - every step it reads is in the route (a step reading one left out is reported by name);
-- every Prompt has content and at least one output field, and every Run maps each Prompt input to an
+- every Prompt has content and at least one output field, and every Generate maps each Prompt input to an
   existing column of the right type (an unmapped input is matched to a column of the same name when
   there is exactly one);
 - every Process defines `process(df, ...)`, with one parameter per other input, and returns every

@@ -44,7 +44,7 @@ const canvas = () => ({
 const plan = (operations, state = canvas()) => planChangeSet(state, operations, { extractInputFields });
 const addJudge = (extra) => ({ op: 'add_run', ref: '$judge', prompt: 'judge', ...extra });
 
-test('a Run the Agent adds can read a Run\'s results, mapped to the columns its readers get', () => {
+test('a Generate the Agent adds can read a Generate\'s results, mapped to the columns its readers get', () => {
   const result = plan([addJudge({ input: 'r', input_mapping: { answer: 'Output: answer' } })]);
   const id = result.refs.$judge;
   assert.deepEqual(runInputSource(result.state, id), { nodeId: 'r', port: 'result', kind: 'run' });
@@ -69,7 +69,7 @@ test('a Process branch is read by name, once the Process\'s branches are known',
   assert.deepEqual(runInputSource(result.state, result.refs.$judge), { nodeId: 'split', port: 'kept', kind: 'process' });
   assert.equal(result.items[0].lines[0], 'Prompt "Judge" on "Split · kept"');
   assert.throws(() => plan([addJudge({ input: 'dyn' })]), /Process "Dynamic" has no known branches yet: its code builds them at run time, so run it first/);
-  assert.throws(() => plan([addJudge({ input: 'raw', input_branch: 'kept' })]), /a dataset with one output; it has no branch "kept"/);
+  assert.throws(() => plan([addJudge({ input: 'raw', input_branch: 'kept' })]), /a Dataset with one output; it has no branch "kept"/);
 });
 
 test('a Process added or rewritten in the same proposal cannot be read until its branches are checked', () => {
@@ -114,7 +114,7 @@ test('removing a step preserves downstream readers unless they are also explicit
   state.connections.splice(state.connections.findIndex((edge) => edge.fromId === 'raw' && edge.toId === 'idle'), 1);
   assert.throws(() => plan([{ op: 'remove', node: 'split' }], state), /connected to downstream nodes/);
   const result = plan([{ op: 'remove', node: 'split' }, { op: 'remove', node: 'idle' }], state);
-  assert.deepEqual(result.items[0].lines, ['Run "Idle" loses its input']);
+  assert.deepEqual(result.items[0].lines, ['Generate "Idle" loses its input']);
   assert.equal(result.state.nodes.some((node) => ['idle', 'split'].includes(node.nodeId)), false);
   assert.throws(() => plan([{ op: 'remove', node: 'r' }]), /connected to downstream nodes/);
   assert.deepEqual(plan([{ op: 'remove', node: 'r' }, { op: 'remove', node: 'split' }]).items[0].lines, ['Process "Split" loses its input df']);
@@ -130,8 +130,8 @@ test('inspect_node describes step inputs, branches, readers and what a step wait
   assert.equal(idle.inputRows, 1);
 
   const split = inspectWorkflowNode(state, 'split', {}).details;
-  assert.deepEqual(split.primaryInput, { nodeId: 'r', type: 'run', title: 'Run' });
-  assert.deepEqual(split.inputs, [{ nodeId: 'r', type: 'run', title: 'Run', alias: 'df' }]);
+  assert.deepEqual(split.primaryInput, { nodeId: 'r', type: 'run', title: 'Generate' });
+  assert.deepEqual(split.inputs, [{ nodeId: 'r', type: 'run', title: 'Generate', alias: 'df' }]);
   assert.deepEqual(split.branches, { names: ['kept', 'dropped'], known: true, dynamic: false, from: 'last run' });
   assert.deepEqual(split.readBy, [{ nodeId: 'idle', type: 'run', title: 'Idle', branch: 'kept', alias: null }]);
   assert.ok(split.availableInputs.some((input) => input.nodeId === 'raw' && input.alias === 'df_raw' && input.isInput === false));
@@ -150,8 +150,8 @@ test('the workspace summary describes steps reading each other, with branches an
   state.connections.push(data('split', 'idle', undefined, 'kept'));
   state.connections.splice(state.connections.findIndex((edge) => edge.fromId === 'raw' && edge.toId === 'idle'), 1);
   const summary = await buildWorkspaceSummary(state, { extractInputFields });
-  assert.match(summary, /"Split" \[split\]: reads the output of run "Run" \[r\] as df; branches kept, dropped; last output kept \(1 rows\), dropped \(0 rows\)/);
-  assert.match(summary, /"Idle" \[idle\]: prompt "Extract" \[p\] on the output of process "Split" \[split\] branch "kept"/);
+  assert.match(summary, /"Split" \[split\]: reads the output of Generate "Generate" \[r\] as df; branches kept, dropped; last output kept \(1 rows\), dropped \(0 rows\)/);
+  assert.match(summary, /"Idle" \[idle\]: prompt "Extract" \[p\] on the output of Process "Split" \[split\] branch "kept"/);
   assert.match(summary, /"Dynamic" \[dyn\]: reads "Raw" \[raw\] as df; branches are built at run time/);
 });
 
@@ -190,7 +190,7 @@ test('run_nodes refuses a Process whose upstream has no result, with its window\
   }
 });
 
-test('select_history through the Agent switches a Process and the Run it read together', async () => {
+test('select_history through the Agent switches a Process and the Generate it read together', async () => {
   const recorded = await recordGraph(graph);
   const records = new Map(recorded.records.map((record) => [record.id, record]));
   const session = new RunHistorySession({

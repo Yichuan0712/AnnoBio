@@ -47,7 +47,7 @@ export function openAddPromptModal(workflowCanvasApi) {
           </div>
           <div class="prompt-step prompt-step-2">
             <p class="prompt-step-label">Step 2 of 3 — Prompt</p>
-            <p class="prompt-hint">Write the prompt. Use <code>{variable}</code> for each input a Run fills from a dataset column; <code>{{</code> for a literal brace.</p>
+            <p class="prompt-hint">Write the prompt. Use <code>{variable}</code> for each input a Generate fills from a dataset column; <code>{{</code> for a literal brace.</p>
             <div class="prompt-step-scroll prompt-step-2-scroll">
               <textarea id="prompt-text-input" class="dataset-meta-input dataset-meta-textarea prompt-text-input" aria-label="Prompt text" spellcheck="false"></textarea>
             </div>

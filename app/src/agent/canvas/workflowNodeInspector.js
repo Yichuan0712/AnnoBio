@@ -3,6 +3,7 @@
  * inspectWorkflowNode gives one node's full configuration plus a short preview; readNodeRows pages
  * through a node's table (dataset rows, run results, process outputs, score comparisons).
  */
+import { generateDisplayName, nodeTypeLabel } from '../../nodeLabels.js';
 import { buildFullScoreMetricsFromComparisonRows, mergeScoreMetricsWithPrf } from './scoreComparisonPrf.js';
 import { cloneCell, displayCell, isAssetCell, normalizeDatasetContent } from '../../datasetContent.js';
 import { sampledOutputs, samplerQuota } from '../../samplerQuota.js';
@@ -51,7 +52,7 @@ export function nodeTitle(node) {
     case 'dataset': return String(node.name || 'Dataset');
     case 'sampler': return String(node.name || 'Sample');
     case 'process': return String(node.name || 'Process');
-    case 'run': return String(node.runName || 'Run');
+    case 'run': return generateDisplayName(node.runName);
     case 'score': return String(node.scoreName || 'Evaluate');
     case 'promptReview': return String(node.promptReviewName || 'Optimize');
     default: return String(node.name || node.nodeId || 'Node');
@@ -86,7 +87,7 @@ export function runInputContentOf(node) {
   return parseJsonObject(node?.runInputContent, { headers: [], rows: [] });
 }
 
-/** The Datasets saved from a Run or Process, with the `savedFrom` each records. */
+/** The Datasets saved from a Generate or Process, with the `savedFrom` each records. */
 function savedFromNode(canvasState, nodeId) {
   return safeArray(canvasState?.nodes)
     .map((dataset) => ({ dataset, savedFrom: dataset?.type === 'dataset' ? readSavedFrom(dataset.savedFrom) : null }))
@@ -193,8 +194,8 @@ function credentialLabel(credentialId, options) {
   if (id) return 'a credential that no longer exists';
   const fallback = options.defaultRunCredential;
   return fallback
-    ? `default Run credential (${[fallback.provider, fallback.model].filter(Boolean).join(' / ')})`
-    : 'default Run credential (none set)';
+    ? `default Generate credential (${[fallback.provider, fallback.model].filter(Boolean).join(' / ')})`
+    : 'default Generate credential (none set)';
 }
 
 function inspectPrompt(node, ctx, options) {
@@ -319,7 +320,7 @@ function inspectProcess(node, ctx) {
   };
 }
 
-/** The steps reading a Run or Process, with the branch and alias each reads under. */
+/** The steps reading a Generate or Process, with the branch and alias each reads under. */
 function readersOf(ctx) {
   return safeArray(ctx.canvasState?.connections)
     .filter((edge) => edge?.type === 'data' && normalizeNodeId(edge.fromId) === ctx.nodeId)
@@ -410,7 +411,7 @@ function describeMatch(rule) {
   return parts.length ? parts.join(', ') : 'exact';
 }
 
-/** Score rules as {pairing, comparison} lists: pairing rules match Run rows to ground-truth rows,
+/** Score rules as {pairing, comparison} lists: pairing rules match model output rows to ground-truth rows,
  * comparison rules judge the outputs. Accepts the v2 {input, output} bundle getCanvasState saves. */
 function describeScoreRules(scoreMapping) {
   const { inputRoot, outputRoot } = parseScoreMappingBundle(scoreMapping);
@@ -464,7 +465,7 @@ function inspectScore(node, ctx) {
   const ruleCount = rules.count;
   const usesCode = node.scoreActiveMatchMode === 'code';
   const diagnostics = [];
-  if (!run) diagnostics.push('The Evaluate node is not connected to a Run.');
+  if (!run) diagnostics.push('The Evaluate node is not connected to a Generate.');
   if (!groundTruth) diagnostics.push('The Evaluate node has no ground-truth dataset.');
   if (!usesCode && ruleCount === 0) diagnostics.push('The Evaluate node has no mapping rules.');
   return {
@@ -697,11 +698,11 @@ export function readNodeRows(canvasState, nodeId, options = {}) {
     };
   }
 
-  return { title: nodeTitle(node), error: `A ${node.type} node has no rows to read. Use inspect_node instead.` };
+  return { title: nodeTitle(node), error: `A ${nodeTypeLabel(node.type)} node has no rows to read. Use inspect_node instead.` };
 }
 
 /**
- * Follow one input row of a Run: its input values, every result produced for it, and how each
+ * Follow one input row of a Generate: its input values, every result produced for it, and how each
  * downstream Score judged it.
  * @param {Map<string, object[]>} comparisonRowsByScoreId live comparison rows per score id
  */
@@ -709,7 +710,7 @@ export function traceRunRow(canvasState, runNodeId, inputRow, comparisonRowsBySc
   const id = normalizeNodeId(runNodeId);
   const lookup = buildNodeLookup(canvasState);
   const node = lookup.get(id);
-  if (!node || node.type !== 'run') return { error: 'trace_row needs the id of a Run node.' };
+  if (!node || node.type !== 'run') return { error: 'trace_row needs the id of a Generate node.' };
   const index = normalizePositiveInteger(inputRow, 0) - 1;
   if (index < 0) return { error: 'input_row must be a 1-based row number.' };
   const input = runInputContentOf(node);

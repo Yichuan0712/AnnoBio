@@ -101,7 +101,7 @@ export async function verifyReviewSuggestion({
     const runWs = reviewPayload?.runWs || { headers: [], rows: [] };
     const gtContent = reviewPayload?.gtContent || { headers: [], rows: [] };
 
-    if (!credentialId) throw new Error('No run credential configured on the upstream Run node.');
+    if (!credentialId) throw new Error('No run credential configured on the upstream Generate node.');
     if (!outputSchema) throw new Error('No output schema configured on the upstream Prompt node.');
     if (!scoreMapping) throw new Error('No Evaluate mapping configured on the upstream Evaluate node.');
 

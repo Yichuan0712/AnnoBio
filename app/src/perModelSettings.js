@@ -1,5 +1,5 @@
 /**
- * Settings → Run / Optimize / Agent: the model chosen at the top of a tab is that tab's default
+ * Settings → Generate / Optimize / Agent: the model chosen at the top of a tab is that tab's default
  * model, and the fields that depend on the model show and edit that model's own values
  * (backend/model_settings.py). With None chosen they edit the values every model without its own
  * uses. Other fields on the tab apply to every model.

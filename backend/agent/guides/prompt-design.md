@@ -4,11 +4,11 @@
 
 A Prompt node holds one prompt text (headings such as Role, Task, Rules, Examples and Input are just
 part of the text). The text can contain `{variable}` placeholders; every distinct placeholder becomes an
-input the Run must map to a Dataset column. Text in doubled braces, such as `{{example}}`, is not
+input the Generate must map to a Dataset column. Text in doubled braces, such as `{{example}}`, is not
 treated as a variable.
 
 Each input has a type: text, image or pdf. An image or pdf input sends the files in that cell to the
-model, so the Run's model must support that modality (in the OpenRouter catalog: vision for images,
+model, so the Generate's model must support that modality (in the OpenRouter catalog: vision for images,
 file input for pdf).
 
 ## Output schema
@@ -22,7 +22,7 @@ list of strings or list of numbers), a description and optional examples. The re
 New Prompts default to Multiple rows (`table`), matching the creation window. A schema edit that
 only changes fields keeps the existing return shape.
 
-The Run parses the model's structured output against this schema; rows that fail to parse are recorded
+The Generate parses the model's structured output against this schema; rows that fail to parse are recorded
 as errors on that row.
 
 Each field also has **Allow None** (`allow_none` in proposals). It allows a null value when evidence
@@ -34,7 +34,7 @@ The creation window expands in three steps: name and description, the prompt tex
 Field editors open inside that window. In an existing Prompt's window, clicking the prompt text edits it
 in place and changes save as you type; a prompt that already has results is locked. **Edit schema** is
 at the bottom right of the Output schema pane; **Output rows** uses the **One row / Multiple rows**
-pills. **Save as file** comes before **Create Run** at the bottom right.
+pills. **Save as file** comes before **Create Generate** at the bottom right.
 
 To change part of a prompt, use `text_edits`: each `old` must be text that appears exactly once in the
 prompt, so include enough of the surrounding words to make it unique.
@@ -54,11 +54,11 @@ prompt, so include enough of the surrounding words to make it unique.
 ## Versions
 
 Editing a prompt that already has results is best done as a new version, linked by a `prompt-to-prompt`
-connection, so earlier Runs and Evaluate nodes stay comparable. Optimize nodes create new versions this way.
+connection, so earlier Generate nodes and Evaluate nodes stay comparable. Optimize nodes create new versions this way.
 
-## Runs
+## Generate nodes
 
-A Run needs: the Prompt, one input (a Dataset or another step's output), and a mapping from every
-input variable to a column. It uses the Run model chosen in Settings → Run. Runs
-process rows concurrently and can be stopped and resumed. The next step reads a Run's results
+A Generate needs: the Prompt, one input (a Dataset or another step's output), and a mapping from every
+input variable to a column. It uses the Generate model chosen in Settings → Generate. Generate nodes
+process rows concurrently and can be stopped and resumed. The next step reads a Generate's results
 directly; save them to the workspace only to freeze or hand-edit them as a Dataset.

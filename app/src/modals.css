@@ -3691,7 +3691,7 @@
   flex-shrink: 0;
 }
 
-/* Model picker beside Create Run and Optimize prompt (modelPicker.js): as tall as the button next to it. */
+/* Model picker beside Create Generate and Optimize prompt (modelPicker.js): as tall as the button next to it. */
 .model-picker {
   align-self: stretch;
   box-sizing: border-box;
@@ -5348,7 +5348,7 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
   margin: 12px;
 }
 
-/* Run detail modal：默认双栏全宽（与原先 expanded 一致，无展开动画） */
+/* Generate detail modal：默认双栏全宽（与原先 expanded 一致，无展开动画） */
 .modal-panel--run-detail {
   width: 88%;
   min-width: min(960px, 85%);

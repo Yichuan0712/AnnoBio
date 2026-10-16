@@ -21,7 +21,7 @@ test('new execution captures current upstream record IDs and a frozen input snap
   assert.notEqual(runCapture.inputs.dataset.content.rows[0][0], 'changed');
 });
 
-test('capture blocks a Process whose upstream Run has no result for its current input', async () => {
+test('capture blocks a Process whose upstream Generate has no result for its current input', async () => {
   const migrated = await recordGraph(graph);
   const records = Object.fromEntries(migrated.records.map((record) => [record.id, record]));
   const index = { records: migrated.records.map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature })) };

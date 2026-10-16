@@ -4,6 +4,7 @@
  * confirms; executeRunRequest runs them in order once confirmed, reporting progress, and returns the
  * results the Agent sees. Execution goes through the same canvas functions the node views use.
  */
+import { nodeTypeLabel } from '../../nodeLabels.js';
 import { BACKEND_API_BASE } from '../../backendConfig.js';
 import { displayCell } from '../../datasetContent.js';
 import { processPrimarySource, runInputSource, stepInputWaitingMessage, stepSourceLabel } from '../../stepInputs.js';
@@ -69,7 +70,7 @@ function priceFor(credential, catalog) {
 function findNode(state, id, type, label) {
   const node = state.nodes.find((n) => n.nodeId === String(id || '').trim());
   if (!node) fail(`${label} "${id}" is not a node on the canvas.`);
-  if (node.type !== type) fail(`${label} "${id}" is a ${node.type}, not a ${type}.`);
+  if (node.type !== type) fail(`${label} "${id}" is a ${nodeTypeLabel(node.type)}, not a ${nodeTypeLabel(type)}.`);
   return node;
 }
 
@@ -83,7 +84,7 @@ function runInputTable(state, run) {
   if (runResultsOf(run).length && Array.isArray(saved.rows) && saved.rows.length) return saved;
   const source = runInputSource(state, run.nodeId);
   if (source && source.kind !== 'dataset') {
-    // Another step's output: like the Run window, wait until that step has a complete result.
+    // Another step's output: like the Generate window, wait until that step has a complete result.
     const output = stepOutputTable(state, source);
     if (output.waiting) fail(stepInputWaitingMessage(state, source, output.waiting));
     return output.table;
@@ -96,21 +97,21 @@ function runInputTable(state, run) {
 
 function previewRun(job, ctx) {
   const run = findNode(ctx.state, job.node, 'run', 'node');
-  if (run.runPending) fail(`Run "${nodeTitle(run)}" is already running.`);
+  if (run.runPending) fail(`Generate "${nodeTitle(run)}" is already running.`);
   const prompt = upstream(ctx.state, run.nodeId, 'prompt-to-run');
-  if (!prompt) fail(`Run "${nodeTitle(run)}" is not connected to a prompt.`);
+  if (!prompt) fail(`Generate "${nodeTitle(run)}" is not connected to a prompt.`);
   if (!(prompt.outputFormat?.fields || []).length) fail(`Prompt "${nodeTitle(prompt)}" has no output fields.`);
   const inspection = inspectWorkflowNode(ctx.state, run.nodeId, { extractInputFields: ctx.extractInputFields });
   const problem = inspection.diagnostics.find((d) => /has no input|without a column|not connected/.test(d));
-  if (problem) fail(`Run "${nodeTitle(run)}": ${problem}`);
+  if (problem) fail(`Generate "${nodeTitle(run)}": ${problem}`);
   const credentialId = String(run.runCredentialId || ctx.settings.default_run_credential_id || '').trim();
   const credential = ctx.credentialsById.get(credentialId);
-  if (!credential) fail(`Run "${nodeTitle(run)}" has no usable model credential: set a default Run model in Settings.`);
+  if (!credential) fail(`Generate "${nodeTitle(run)}" has no usable model credential: set a default Generate model in Settings.`);
 
   const input = runInputTable(ctx.state, run);
   const done = new Set(runResultsOf(run).map((r) => r?.input_row_index).filter((i) => typeof i === 'number'));
   const pendingRows = input.rows.map((row, index) => ({ row, index })).filter(({ index }) => !done.has(index));
-  if (!pendingRows.length) fail(`Run "${nodeTitle(run)}" has already processed all ${input.rows.length} input rows.`);
+  if (!pendingRows.length) fail(`Generate "${nodeTitle(run)}" has already processed all ${input.rows.length} input rows.`);
 
   const mapping = JSON.parse(run.runInputToColumn || '{}');
   const templateChars = String(prompt.text || '').trim().length;
@@ -132,7 +133,7 @@ function previewRun(job, ctx) {
 
   const lines = [
     `${pendingRows.length} row${pendingRows.length === 1 ? '' : 's'} of "${stepSourceLabel(ctx.state, runInputSource(ctx.state, run.nodeId))}"${done.size ? ` (continuing after ${done.size} done)` : ''}`,
-    `Model: ${credentialLabel(credential)}${run.runCredentialId ? '' : ' (default Run model)'}`,
+    `Model: ${credentialLabel(credential)}${run.runCredentialId ? '' : ' (default Generate model)'}`,
     `≈ ${Math.round(inputTokens).toLocaleString('en-US')} input and ${Math.round(outputTokens).toLocaleString('en-US')} output tokens`
       + (usd != null ? `, about ${formatUsd(usd)}` : ''),
   ];
@@ -171,7 +172,7 @@ function previewScore(job, ctx) {
   if (!/^\s*def\s+match\s*\(/m.test(String(score.scoreMatchCode || ''))) fail('Evaluate code must define match(input_row, output_row, gt_row).');
   if (!String(ctx.settings.python_path || '').trim()) fail('No Python interpreter is set; choose one in Settings → Python first.');
   const run = upstream(ctx.state, score.nodeId, 'run-to-score');
-  if (!run) fail(`Evaluate "${nodeTitle(score)}" is not connected to a Run.`);
+  if (!run) fail(`Evaluate "${nodeTitle(score)}" is not connected to a Generate.`);
   const groundTruth = findNode(ctx.state, score.scoreGroundTruthId, 'dataset', 'ground truth');
   let payload;
   try {
@@ -180,7 +181,7 @@ function previewScore(job, ctx) {
       groundTruth: datasetContentOf(groundTruth) });
   } catch (error) { fail(error.message); }
   return { kind: 'score', title: `Evaluate "${nodeTitle(score)}" using code`, nodeIds: [score.nodeId],
-    lines: [`Runs its Python match code on ${payload.runRows.length} Run rows against ${payload.gtRows.length} ground-truth rows (no model calls).`],
+    lines: [`Runs its Python match code on ${payload.runRows.length} model output rows against ${payload.gtRows.length} ground-truth rows (no model calls).`],
     usd: 0, calls: 0, priced: true };
 }
 
@@ -191,7 +192,7 @@ async function previewReview(job, ctx) {
   const score = existing ? upstream(ctx.state, existing.nodeId, 'score-to-prompt-review') : findNode(ctx.state, job.score, 'score', 'score');
   if (!score) fail('Optimize is not connected to an Evaluate node.');
   const run = upstream(ctx.state, score.nodeId, 'run-to-score');
-  if (!run || !runResultsOf(run).length) fail(`Evaluate "${nodeTitle(score)}" has no run results to review.`);
+  if (!run || !runResultsOf(run).length) fail(`Evaluate "${nodeTitle(score)}" has no model outputs to review.`);
   if (!score.scoreGroundTruthId) fail(`Evaluate "${nodeTitle(score)}" has no ground-truth dataset.`);
   if (score.scoreActiveMatchMode === 'code' && !score.scoreMatchResult) {
     fail(`Evaluate "${nodeTitle(score)}" matches by code and has no code-match result yet; run a score job first.`);
@@ -234,7 +235,7 @@ function previewSuggestionOptimization(job, ctx) {
 
 function previewStop(job, ctx) {
   const node = ctx.state.nodes.find((entry) => entry.nodeId === job.node);
-  if (!node || !['run', 'process', 'score', 'promptReview'].includes(node.type)) fail('Stop needs a Run, Process, Evaluate or Optimize node.');
+  if (!node || !['run', 'process', 'score', 'promptReview'].includes(node.type)) fail('Stop needs a Generate, Process, Evaluate or Optimize node.');
   if (!hasNodeExecution(node.nodeId) && !node.runPending && !node.processPending && !node.scoreMatchPending && !node.reviewPending) fail('That node has no active task to stop.');
   const taskId = ctx.getNodeTaskIdentity?.(node.nodeId) || nodeExecutionIdentity(node.nodeId);
   if (!taskId) fail('This task is still starting. Refresh the workspace and prepare the stop request again when its job is registered.');
@@ -246,13 +247,13 @@ function previewStop(job, ctx) {
 const formatRows = (rows) => (rows == null ? 'unknown rows' : `${rows.toLocaleString('en-US')} row${rows === 1 ? '' : 's'}`);
 
 /**
- * run_to: the plan for a Run or Process, as the user's Execute to here (or, with only_this, Execute
+ * run_to: the plan for a Generate or Process, as the user's Run to here (or, with only_this, Run
  * this step) shows it (runPlan.js). When everything up to it is current, it runs the step again.
  */
 function previewRunTo(job, ctx) {
   const target = ctx.state.nodes.find((n) => n.nodeId === String(job.node || '').trim());
   if (!target) fail(`node "${job.node}" is not a node on the canvas.`);
-  if (!['run', 'process'].includes(target.type)) fail(`node "${job.node}" is a ${target.type}; run_to works on a Run or a Process.`);
+  if (!['run', 'process'].includes(target.type)) fail(`node "${job.node}" is a ${nodeTypeLabel(target.type)}; run_to works on a Generate or a Process.`);
   const context = { settings: ctx.settings, credentialIds: new Set(ctx.credentialsById.keys()) };
   let planOptions = { onlyThis: job.only_this === true };
   let plan = planRunTo(ctx.state, target.nodeId, context, planOptions);
@@ -270,7 +271,7 @@ function previewRunTo(job, ctx) {
     `Runs, in order: ${running.map((step) => `${step.name}${step.action === 'resume' ? ' (continues)' : step.action === 'rerun' ? ' (again; its result is current)' : ''}`).join(' → ')}`,
     plan.calls == null ? 'Model calls: unknown until the steps before them have run.' : `Model calls: ${plan.calls.toLocaleString('en-US')}`,
   ];
-  return { kind: 'run_to', title: `${planOptions.onlyThis ? 'Execute' : 'Execute to'} "${name}"`, nodeIds: running.map((step) => step.nodeId), lines, usd: null, calls: plan.calls,
+  return { kind: 'run_to', title: `${planOptions.onlyThis ? 'Run' : 'Run to'} "${name}"`, nodeIds: running.map((step) => step.nodeId), lines, usd: null, calls: plan.calls,
     priced: false, targetId: target.nodeId, planOptions, planSteps: plan.steps.map(({ nodeId, action }) => ({ nodeId, action })) };
 }
 
@@ -282,7 +283,7 @@ async function executeRunTo(item, env, ctx, { signal, onStatus, approvedSteps })
     approvedPlan: { steps: approvedSteps || item.planSteps },
     onStep: (step) => onStatus(`${step.name}: ${step.status}`),
   };
-  // The canvas keeps a record of it in Executions, as for the user's Execute.
+  // The canvas keeps a record of it in Executions, as for the user's Run action.
   const task = env.runPlanned ? await env.runPlanned(item.targetId, options) : await runTo(item.targetId, env, options);
   const lines = task.steps.filter((step) => step.status !== 'reused').map((step) => `${step.name}: ${step.status}${step.errorRows ? `, ${step.errorRows} rows with errors` : ''}${step.message && step.status !== 'completed' ? ` (${step.message})` : ''}`);
   return { status: task.status, lines: task.error ? [`${item.title}: ${task.error}`, ...lines] : lines };
@@ -386,7 +387,7 @@ async function scoreSummaries(env, runNodeId) {
   return out;
 }
 
-/** A Run job, with the Evaluate scores that read it once it has finished. */
+/** A Generate job, with the Evaluate scores that read it once it has finished. */
 async function executeRun(item, env, options) {
   const outcome = await executeRunStep(item, env, options);
   return outcome.inspected ? { ...outcome, lines: [...outcome.lines, ...(await scoreSummaries(env, item.nodeIds[0]))] } : outcome;
@@ -438,7 +439,7 @@ async function executeScore(item, env, { signal, onStatus }) {
   const matched = result.outcomes.filter((outcome) => outcome.ok && typeof outcome.matched_gt_index === 'number').length;
   const errors = result.outcomes.filter((outcome) => !outcome.ok).length;
   return { status: result.wasCancelled ? 'stopped' : 'completed',
-    lines: [`${item.title}: ${result.wasCancelled ? 'stopped' : 'finished'}; ${matched}/${result.outcomes.length} Run rows matched${errors ? `, ${errors} with errors` : ''}`],
+    lines: [`${item.title}: ${result.wasCancelled ? 'stopped' : 'finished'}; ${matched}/${result.outcomes.length} model output rows matched${errors ? `, ${errors} with errors` : ''}`],
   };
 }
 

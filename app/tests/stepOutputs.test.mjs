@@ -46,7 +46,7 @@ test('a completed Run gives the table Save results makes, failed rows included a
   assert.equal(errorRowCount, 1);
 });
 
-test('a Run without a complete result makes its readers wait', () => {
+test('a Generate without a complete result makes its readers wait', () => {
   assert.deepEqual(stepOutputTable(state({ runPending: true }), { nodeId: 'r', port: 'result' }), { waiting: 'running' });
   assert.deepEqual(stepOutputTable(state({ runCompleted: undefined }), { nodeId: 'r', port: 'result' }), { waiting: 'no-result' });
   assert.deepEqual(stepOutputTable(state({ runCompleted: undefined, runResumable: '1' }), { nodeId: 'r', port: 'result' }), { waiting: 'stopped' });

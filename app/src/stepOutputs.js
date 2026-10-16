@@ -1,7 +1,7 @@
 /**
- * The table a step input reads (docs/design/DATA_FLOW_DESIGN.md §3.7): a Dataset's content, a Run's
+ * The table a step input reads (docs/design/DATA_FLOW_DESIGN.md §3.7): a Dataset's content, a Generate's
  * results as Save results builds them, or one output branch of a Process. Pure; works on canvas
- * state as getCanvasState() saves it, where a Run or Process carries its current History result.
+ * state as getCanvasState() saves it, where a Generate or Process carries its current History result.
  */
 import { cloneCell } from './datasetContent.js';
 import { effectiveProcessOutputs } from './processOutputPorts.js';
@@ -18,7 +18,7 @@ function parsed(value, fallback) {
   try { return JSON.parse(value); } catch (_) { return fallback; }
 }
 
-/** The output fields of the Prompt a Run uses: the columns its results table gets. */
+/** The output fields of the Prompt a Generate uses: the columns its results table gets. */
 function promptFields(state, runId) {
   const edge = (state?.connections || []).find((item) => item?.type === 'prompt-to-run' && String(item.toId) === runId);
   const format = findNode(state, edge?.fromId)?.outputFormat;
@@ -26,8 +26,8 @@ function promptFields(state, runId) {
 }
 
 /**
- * A Run's results as a table: what a step reading the Run gets, and what Save results saves (also
- * from a Run that stopped part way). Null when it has no results.
+ * A Generate's results as a table: what a step reading the Generate gets, and what Save results saves (also
+ * from a Generate that stopped part way). Null when it has no results.
  */
 export function runResultsTable(state, run) {
   const results = parsed(run?.runResults, []);
@@ -81,7 +81,7 @@ function processOutput(processNode, port) {
 }
 
 /**
- * What `source` gives a step that reads it. A Run or Process gives a table only when its current
+ * What `source` gives a step that reads it. A Generate or Process gives a table only when its current
  * result is complete; `waiting` says why not. The canvas does not keep a record's status, so a
  * failed upstream, which leaves no result, is reported as 'no-result'.
  * @param {object} state canvas state

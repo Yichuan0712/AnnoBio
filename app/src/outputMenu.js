@@ -29,7 +29,7 @@ const processSaveReason = (node, branch) => {
 };
 const scoreReadyReason = (state, node) => {
   const runId = (state.connections || []).find(edge => edge.type === 'run-to-score' && edge.toId === nodeIdOf(node))?.fromId;
-  if (!hasRunResults(findNode(state, runId))) return 'Run the upstream Run first.';
+  if (!hasRunResults(findNode(state, runId))) return 'Run the upstream Generate first.';
   if (findNode(state, node.scoreGroundTruthId)?.type !== 'dataset') return 'Connect a ground truth dataset first.';
   if (node.scoreMatchPending) return 'Wait for evaluation to finish.';
   return '';
@@ -37,8 +37,8 @@ const scoreReadyReason = (state, node) => {
 
 function readers(node, ports, { named = false, dataset = false } = {}) {
   return [
-    ...ports.map(port => item(node, port, 'run-prompt-on-output', dataset ? 'Create Run with this data'
-      : named ? `Create Run from '${port}'` : 'Create Run from results')),
+    ...ports.map(port => item(node, port, 'run-prompt-on-output', dataset ? 'Create Generate with this data'
+      : named ? `Create Generate from '${port}'` : 'Create Generate from results')),
     ...ports.map(port => item(node, port, 'process-output', dataset ? 'Create Process'
       : named ? `Create Process from '${port}'` : 'Create Process from results')),
   ];
@@ -87,7 +87,7 @@ export function outputMenuItems(state, nodeId, { port } = {}) {
   let data = [];
   if (node.type === 'dataset' && (port === undefined || port === RESULT)) data = readers(node, [RESULT], { dataset: true });
   if (node.type === 'prompt' && (port === undefined || port === 'prompt')) data = [
-    item(node, 'prompt', 'run-this-prompt', 'Create Run'), ...creation,
+    item(node, 'prompt', 'run-this-prompt', 'Create Generate'), ...creation,
   ];
   if (node.type === 'run' && (port === undefined || port === RESULT)) data = [
     ...readers(node, [RESULT]), item(node, RESULT, 'save-results-to-workspace', 'Save to workspace', runSaveReason(node)),
@@ -125,6 +125,6 @@ export function inputMenuItems(state, nodeId, portId) {
     const sourcePort = type === 'prompt' ? 'prompt' : RESULT;
     const proposed = { type, nodeId: newId, processOutputPorts: { ports: [RESULT], dynamic: false, error: '', codeHash: 'new' } };
     const check = checkConnect({ ...state, nodes: [...state.nodes, proposed] }, { nodeId: newId, portId: sourcePort }, { nodeId, portId });
-    return { ...item(proposed, sourcePort, 'create-input', `Create ${type === 'dataset' ? 'Dataset' : type === 'prompt' ? 'Prompt' : type === 'run' ? 'Run' : 'Process'}`, check.ok ? '' : check.reason), createType: type };
+    return { ...item(proposed, sourcePort, 'create-input', `Create ${type === 'dataset' ? 'Dataset' : type === 'prompt' ? 'Prompt' : type === 'run' ? 'Generate' : 'Process'}`, check.ok ? '' : check.reason), createType: type };
   });
 }

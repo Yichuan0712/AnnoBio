@@ -30,7 +30,7 @@ function chain() {
 }
 
 /**
- * A canvas workspace over `state`: a Run or Process "runs" by getting a result at once.
+ * A canvas workspace over `state`: a Generate or Process "runs" by getting a result at once.
  * `fail` names a step that fails; `during` is called inside each step.
  */
 function fakeEnv(state, { fail = '', runStatus = 'completed', during = () => {} } = {}) {
@@ -95,7 +95,7 @@ test('a failed step stops the steps after it; running again reuses what finished
   assert.deepEqual(statuses(again), [['extract', 'reused'], ['tidy', 'completed'], ['score', 'completed']]);
 });
 
-test('a Run that ends without finishing its rows (stopped from its window) stops the task', async () => {
+test('a Generate that ends without finishing its rows (stopped from its window) stops the task', async () => {
   const task = await runTo('score', fakeEnv(chain(), { runStatus: 'stopped' }), { context });
   assert.equal(task.status, 'stopped');
   assert.deepEqual(statuses(task), [['extract', 'stopped'], ['tidy', 'not-started'], ['score', 'not-started']]);
@@ -185,7 +185,7 @@ test('the Agent run_to card shows the plan the user confirms', async () => {
     const env = { getCanvasState: () => state, credentialsById: new Map([['cred', { id: 'cred', model: 'some/model' }]]) };
     const preview = await previewRunRequest({ jobs: [{ kind: 'run_to', node: 'score' }] }, env);
     assert.equal(preview.ok, true, preview.error);
-    assert.equal(preview.items[0].title, 'Execute to "Score"');
+    assert.equal(preview.items[0].title, 'Run to "Score"');
     assert.deepEqual(preview.items[0].planSteps, [
       { nodeId: 'extract', action: 'reuse' }, { nodeId: 'tidy', action: 'run' }, { nodeId: 'score', action: 'run' },
     ]);
@@ -196,12 +196,12 @@ test('the Agent run_to card shows the plan the user confirms', async () => {
       'Model calls: unknown until the steps before them have run.',
     ]);
     const refused = await previewRunRequest({ jobs: [{ kind: 'run_to', node: 'p-score' }] }, env);
-    assert.match(refused.error, /run_to works on a Run or a Process/);
+    assert.match(refused.error, /run_to works on a Generate or a Process/);
 
     // only_this: just that step, which needs current results before it.
     const lone = await previewRunRequest({ jobs: [{ kind: 'run_to', node: 'tidy', only_this: true }] }, env);
     assert.equal(lone.ok, true, lone.error);
-    assert.equal(lone.items[0].title, 'Execute "Tidy"');
+    assert.equal(lone.items[0].title, 'Run "Tidy"');
     assert.deepEqual(lone.items[0].planSteps, [{ nodeId: 'tidy', action: 'run' }]);
     const early = await previewRunRequest({ jobs: [{ kind: 'run_to', node: 'score', only_this: true }] }, env);
     assert.match(early.error, /"Tidy" has no current result/);
@@ -226,10 +226,10 @@ test('running again executes a current step once more, through its normal single
   assert.deepEqual(statuses(task), [['extract', 'reused'], ['tidy', 'completed']]);
 });
 
-test('Execute this step refuses while a step before it has no result', async () => {
+test('Run this step refuses while a step before it has no result', async () => {
   const env = fakeEnv(chain());
   const task = await runTo('tidy', env, { context, planOptions: { onlyThis: true } });
   assert.equal(task.status, 'failed');
-  assert.match(task.error, /Use Execute to here/);
+  assert.match(task.error, /Use Run to here/);
   assert.deepEqual(env.calls, []);
 });

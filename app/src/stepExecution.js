@@ -1,5 +1,5 @@
 /**
- * Running one Run or Process step and waiting until it finishes, through the same canvas functions
+ * Running one Generate or Process step and waiting until it finishes, through the same canvas functions
  * the node windows use. Shared by the Agent's run_nodes (agent/execution/runJobs.js) and Run to here
  * (runTo.js). `env` is the canvas workspace: getCanvasState, startRunNode, stopRunNode,
  * runProcessNode, inspectNode.
@@ -35,7 +35,7 @@ export function currentNode(env, id) {
 }
 
 /**
- * Starts a Run and waits for it. `item` is { title, nodeIds: [runId] }.
+ * Starts a Generate and waits for it. `item` is { title, nodeIds: [runId] }.
  * @returns {Promise<{ status: 'completed'|'stopped', lines: string[], inspected?: true, errorRows?: number }>}
  *   `inspected` once it ran to the end (completed, or stopped by itself), with its error row count
  */

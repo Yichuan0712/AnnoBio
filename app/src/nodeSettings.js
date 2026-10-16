@@ -1,7 +1,7 @@
 /**
- * A node's model and settings. Run and Review use the models chosen in Settings → Run / Optimize; there
+ * A node's model and settings. Run and Review use the models chosen in Settings → Generate / Optimize; there
  * are no per-node settings controls. The default model (and review method) is written onto the node
- * the first time it is needed, so a Run keeps the model it started with when it resumes.
+ * the first time it is needed, so a Generate keeps the model it started with when it resumes.
  *
  * Node fields: model → runCredentialId / reviewCredentialId, review method → reviewMethod, number
  * overrides → runSettings / reviewSettings (JSON, keyed by the backend settings names; sent as the
@@ -22,7 +22,7 @@ function readOverrides(node, datasetKey) {
   }
 }
 
-/** A Run node's settings_overrides for POST /api/run, or undefined when it has none. */
+/** A Generate node's settings_overrides for POST /api/run, or undefined when it has none. */
 export function runSettingsOverrides(node) {
   const o = readOverrides(node, 'runSettings');
   return Object.keys(o).length ? o : undefined;

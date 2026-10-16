@@ -209,7 +209,7 @@ function ensureCardTitleSentenceLead(text) {
   return chars.join('');
 }
 
-/** 0-based run/comparison row_index → 1-based label (same as Score table “Run result #”). */
+/** 0-based run/comparison row_index → 1-based label (same as Score table “Generate result #”). */
 function formatRunRowIndexForDisplay(zeroBased) {
   const n = Number(zeroBased);
   if (zeroBased === null || zeroBased === undefined || zeroBased === '' || Number.isNaN(n) || n < 0) return '—';
@@ -561,7 +561,7 @@ function openSuggestionDebugOverlay(sug, debugData, verifyResult = null) {
       `<h2 class="review-suggestion-debug-group-title">Ground truth</h2>${gtBlocksHtml}` +
       verifyHtml;
   } else {
-    bodyHtml = '<p class="review-diagnosis-detail-prose review-diagnosis-detail-empty">(Run information will appear here.)</p>';
+    bodyHtml = '<p class="review-diagnosis-detail-prose review-diagnosis-detail-empty">(Generation details will appear here.)</p>';
   }
 
   if (existing) existing.remove();
@@ -1627,7 +1627,7 @@ function buildReviewResultUI(overlay, options) {
         const gtContent = typeof payload?.getGroundTruthContent === 'function'
           ? payload.getGroundTruthContent()
           : { headers: [], rows: [] };
-        if (!credentialId) throw new Error('No run credential configured on the Run node.');
+        if (!credentialId) throw new Error('No run credential configured on the Generate node.');
         if (!outputSchema) throw new Error('No output schema configured on the Prompt node.');
         if (!scoreMapping) throw new Error('No Evaluate mapping configured.');
 

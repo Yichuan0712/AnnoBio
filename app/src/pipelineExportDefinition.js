@@ -63,7 +63,7 @@ export function exportCanvasDefinition(canvasState, route) {
       return null;
     })
     .filter(Boolean);
-  // What the selected steps read (`data`), and which Prompt each Run uses. Saved-from links are not
+  // What the selected steps read (`data`), and which Prompt each Generate uses. Saved-from links are not
   // sent: a Dataset is only an input (docs/design/DATA_FLOW_DESIGN.md §6.1).
   const executableEdgeTypes = new Set(['data', 'prompt-to-run', 'prompt-to-prompt']);
   const connections = (canvasState?.connections || []).filter((edge) => executableEdgeTypes.has(edge?.type) && ids.has(edge?.toId));

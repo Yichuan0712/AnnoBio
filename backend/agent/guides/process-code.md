@@ -2,7 +2,7 @@
 
 A Process may be created without a Data input, as with the toolbar. Its code can be edited first;
 connect `df` before running it. `duplicate_process` copies its code and detected outputs into a
-standalone Process with no inputs or saved results. A Run can likewise be created before connecting
+standalone Process with no inputs or saved results. A Generate can likewise be created before connecting
 its Prompt and Data inputs; input mapping is configured after both are connected.
 
 A Process node runs one Python function over whole tables. There is no LLM involved.
@@ -23,10 +23,10 @@ def process(df, df_chembl_targets):
 ```
 
 - `df` is the first parameter: the Process's primary input. An input is a Dataset or another step's
-  output: a Run's results (columns `Input: #`, `Input: <column>`, `Output: #`, `Output: <field>`), or
+  output: a Generate's results (columns `Input: #`, `Input: <column>`, `Output: #`, `Output: <field>`), or
   one branch of a Process.
 - Every other input is a parameter after `df`, named after its alias `df_<name>`. The name is a
-  Dataset's name, the Prompt name of a Run, a Process's name for its single output, or the branch name
+  Dataset's name, the Prompt name of a Generate, a Process's name for its single output, or the branch name
   for one of several branches; lower-cased, accents removed, and each run of characters outside
   `a-z0-9_` replaced by `_`. For example a Dataset called "ChEMBL targets (v2)" is
   `df_chembl_targets_v2` and a branch `needs_review` is `df_needs_review`. If two names collide, later
@@ -56,7 +56,7 @@ that interpreter, so prefer pandas and the standard library.
 - Image and pdf cells arrive as a Python list of local file paths, so code can open the files.
 - Every returned value becomes a text cell. Return strings, numbers, booleans or None; convert lists
   and dicts with `json.dumps` yourself, otherwise they are stored as unreadable text. Image and pdf
-  columns do not survive a Process, so a Prompt that needs the files must read a Dataset or a Run's
+  columns do not survive a Process, so a Prompt that needs the files must read a Dataset or a Generate's
   results that still hold them.
 - Column order in the returned DataFrame is the column order of the output.
 
@@ -78,7 +78,7 @@ def process(df):
     return {"with_figures": df[has_fig], "text_only": df[~has_fig]}
 ```
 
-Explode a JSON list produced by a Run into one row per item:
+Explode a JSON list produced by a Generate into one row per item:
 
 ```python
 import json

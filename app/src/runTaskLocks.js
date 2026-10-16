@@ -1,5 +1,5 @@
 /**
- * The nodes a Run to here task (runTo.js) holds until it ends: its steps, their Prompts and the
+ * The nodes a Generate to here task (runTo.js) holds until it ends: its steps, their Prompts and the
  * Datasets they read. While held, their inputs and content cannot change, so each later step runs
  * with what the confirmed plan showed. Transient, per open project, never saved.
  */

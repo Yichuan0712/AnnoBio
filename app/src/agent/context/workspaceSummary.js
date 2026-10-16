@@ -1,10 +1,11 @@
 /**
  * Compact plain-text description of the canvas for the Agent's system prompt: pipelines as the
- * Current Pipeline panel shows them (Run prompt and Process data steps, pickers, branches; the
+ * Current Pipeline panel shows them (Generate and Process data steps, pickers, branches; the
  * panel's choices when mounted, otherwise the defaults), then every node with the few
  * facts needed to decide what to inspect next. Details (prompt text, code, rows) are left to the
  * read tools.
  */
+import { nodeTypeLabel } from '../../nodeLabels.js';
 import { detectPipelines } from '../../pipelineDetection.js';
 import { buildSelectedRoute, getVisibleRoute } from '../../pipelineRouteSelection.js';
 import { processInputSources, runInputSource, stepSourceLabel } from '../../stepInputs.js';
@@ -37,10 +38,10 @@ function sourceRef(linked, missing) {
   if (!linked) return missing;
   if (linked.type === 'dataset') return linkRef(linked);
   const branch = linked.branch && linked.branch !== 'result' ? ` branch ${quote(linked.branch)}` : '';
-  return `the output of ${linked.type} ${linkRef(linked)}${branch}`;
+  return `the output of ${nodeTypeLabel(linked.type)} ${linkRef(linked)}${branch}`;
 }
 
-const STEP_LABELS = { prompt: 'Run prompt', process: 'Process data' };
+const STEP_LABELS = { prompt: 'Generate', process: 'Process data' };
 
 /** An input as the summary names it: a Dataset by its name, another step's output by that step. */
 function describeInput(source, lookup, canvasState) {
@@ -51,7 +52,7 @@ function describeInput(source, lookup, canvasState) {
 function describeRouteOption(option, lookup, canvasState) {
   if (option.kind === 'prompt') {
     const input = runInputSource(canvasState, option.runNodeId);
-    return `${quote(option.promptName)} [${option.promptNodeId}] by run ${quote(option.runName)} [${option.runNodeId}]`
+    return `${quote(option.promptName)} [${option.promptNodeId}] by Generate ${quote(option.runName)} [${option.runNodeId}]`
       + ` on ${input ? describeInput(input, lookup, canvasState) : '(no input)'}`;
   }
   const inputs = processInputSources(canvasState, option.processNodeId).map((source) => describeInput(source, lookup, canvasState)).join(' + ');
@@ -87,7 +88,7 @@ function routeLines(route, lookup, indent, selectionSource, canvasState) {
 
 function pipelineLines(canvasState, lookup, selections = []) {
   const pipelines = detectPipelines(canvasState);
-  if (!pipelines.length) return ['No pipelines yet (a pipeline needs at least one Prompt with a Run, or a Process).'];
+  if (!pipelines.length) return ['No pipelines yet (a pipeline needs at least one Prompt with a Generate, or a Process).'];
   const lines = [];
   pipelines.forEach((pipeline, index) => {
     const selection = selections.find((item) => item.id === String(pipeline?.id || `pipeline-index-${index}`));
@@ -110,10 +111,10 @@ function datasetLine(node, lookup) {
   const sampler = node.samplerNodeId ? lookup.get(node.samplerNodeId) : null;
   if (savedFrom?.kind === 'pipeline') source = `; saved from Pipeline run ${savedFrom.pipelineRunId}`;
   else if (savedFrom && from) {
-    source = savedFrom.kind === 'run' ? `; saved results of run ${quote(nodeTitle(from))}`
+    source = savedFrom.kind === 'run' ? `; saved results of Generate ${quote(nodeTitle(from))}`
       : savedFrom.kind === 'process' ? `; saved output ${quote(savedFrom.port)} of process ${quote(nodeTitle(from))}`
         : `; saved comparison of Evaluate ${quote(nodeTitle(from))}`;
-  } else if (savedFrom) source = `; saved from a ${savedFrom.kind} no longer on the canvas`;
+  } else if (savedFrom) source = `; saved from a ${nodeTypeLabel(savedFrom.kind)} no longer on the canvas`;
   else if (sampler) source = `; sampled by ${quote(nodeTitle(sampler))}`;
   return `- ${ref(node)}: ${content.rows.length} rows; columns: ${columns || '(none)'}${source}`;
 }
@@ -171,7 +172,7 @@ function samplerLine(node, lookup, canvasState) {
 function scoreLine(node, inspection) {
   const d = inspection.details;
   const metrics = d.metrics ? `; ${formatScoreMetrics(d.metrics)}` : '; not computed yet';
-  return `- ${ref(node)}: run ${linkRef(d.run, '(none)')} vs ground truth ${linkRef(d.groundTruth, '(none)')}; ${d.matching}${metrics}`;
+  return `- ${ref(node)}: Generate ${linkRef(d.run, '(none)')} vs ground truth ${linkRef(d.groundTruth, '(none)')}; ${d.matching}${metrics}`;
 }
 
 function reviewLine(node, inspection) {
@@ -187,7 +188,7 @@ const SECTION_ORDER = [
   ['sampler', 'Samplers'],
   ['process', 'Processes'],
   ['prompt', 'Prompts'],
-  ['run', 'Runs'],
+  ['run', 'Generate nodes'],
   ['score', 'Evaluate nodes'],
   ['promptReview', 'Optimize nodes'],
 ];

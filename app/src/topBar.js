@@ -10,6 +10,7 @@ import { setTheme, THEME_LIGHT, THEME_DARK } from './theme.js';
 import { openSettingsModal } from './settingsModal.js';
 import { openPythonSettingsModal } from './pythonSettingsModal.js';
 import { iconClose, iconMaximize, iconMinimize, iconRestore } from './modalMaximize.js';
+import { iconRun } from './icons.js';
 import logoIconUrl from '../../images/logo.png';
 
 /**
@@ -84,7 +85,7 @@ function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, add
     <div class="menu-separator"></div>
     <button type="button" class="menu-option menu-option--create" data-action="new-prompt" disabled>Create new prompt</button>
     <button type="button" class="menu-option menu-option--create" data-action="new-dataset" disabled>Create new dataset</button>
-    <button type="button" class="menu-option menu-option--create" data-action="new-run" disabled>Create new run</button>
+    <button type="button" class="menu-option menu-option--create" data-action="new-run" disabled>Create Generate</button>
     <button type="button" class="menu-option menu-option--create" data-action="new-process" disabled>Create new process</button>
   `;
   const undoOpt = editDrop.querySelector('[data-action="undo"]');
@@ -103,7 +104,7 @@ function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, add
     e.stopPropagation();
     if (!createDatasetOpt.disabled) openAddDatasetModal();
   });
-  // A Run or Process gets its inputs by dragging on the canvas, so it can start on its own.
+  // A Generate or Process gets its inputs by dragging on the canvas, so it can start on its own.
   const createRunOpt = editDrop.querySelector('[data-action="new-run"]');
   const createProcessOpt = editDrop.querySelector('[data-action="new-process"]');
   createRunOpt.addEventListener('click', (e) => {
@@ -329,8 +330,8 @@ const iconNewDataset = () => svgIcon({
   paths: ['M3 5V19A9 3 0 0 0 21 19V5', 'M3 12A9 3 0 0 0 21 12'],
 });
 
-// Run = Lucide's "play", matching the triangle on a Run node; Process = Lucide's "code".
-const iconNewRun = () => svgIcon({ paths: ['M6 3v18l15-9z'] });
+// Generate shares its filled sparkle with the canvas; Process = Lucide's "code".
+const iconNewRun = () => iconRun(16);
 const iconNewProcess = () => svgIcon({ paths: ['m16 18 6-6-6-6', 'm8 6-6 6 6 6'] });
 
 // Publish to Gallery = Lucide's "cloud-upload" (official path data) — reads as "send this up
@@ -468,7 +469,7 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, addRunN
   });
   rail.appendChild(newDatasetBtn.wrap);
 
-  const newRunBtn = iconButton({ icon: iconNewRun, label: 'Create new run', onClick: () => addRunNode?.() });
+  const newRunBtn = iconButton({ icon: iconNewRun, label: 'Create Generate', onClick: () => addRunNode?.() });
   rail.appendChild(newRunBtn.wrap);
   const newProcessBtn = iconButton({ icon: iconNewProcess, label: 'Create new process', onClick: () => addProcessNode?.() });
   rail.appendChild(newProcessBtn.wrap);

@@ -1,14 +1,15 @@
 /**
- * The one place that reads and writes where a Run or Process gets its data (docs/design/
+ * The one place that reads and writes where a Generate or Process gets its data (docs/design/
  * DATA_FLOW_DESIGN.md §3.3). Works on plain canvas state ({ nodes, connections }), as saved by
  * getCanvasState(); workflowCanvas.js adapts it to the live DOM.
  *
- * Every input is a `data` connection { type: 'data', fromId, fromPort, toId, alias }. A Run has at
+ * Every input is a `data` connection { type: 'data', fromId, fromPort, toId, alias }. A Generate has at
  * most one. A Process has one per input; `alias` is the name its code uses, 'df' for the primary.
- * A source is { nodeId, port, kind }: a Dataset ('dataset', port 'result'), a Run's results ('run',
+ * A source is { nodeId, port, kind }: a Dataset ('dataset', port 'result'), a Generate's results ('run',
  * port 'result') or one output branch of a Process ('process', port = the branch) (§3.2, §3.4).
  * Functions that take a source look its kind up in `state` when it is not given.
  */
+import { generateDisplayName } from './nodeLabels.js';
 import { buildProcessDatasetBindings, processDatasetInputs, referencedDatasetAliases } from './processDatasetBindings.js';
 import { effectiveProcessOutputs } from './processOutputPorts.js';
 import { stepOutputTable } from './stepOutputs.js';
@@ -50,13 +51,13 @@ function removeDataEdgesInto(state, toId) {
 
 // ---------- names ----------
 
-/** A Run is named by its Prompt, as Current Pipeline names it; every Run is called "Run" by default. */
+/** A Generate is named by its Prompt, as Current Pipeline names it; every Generate is called "Run" by default. */
 function runLabel(state, run) {
   const edge = (state?.connections || []).find((item) => item?.type === 'prompt-to-run' && String(item.toId) === nodeIdOf(run));
-  return String(findNode(state, edge?.fromId)?.name || '').trim() || String(run.runName || '').trim() || 'Run';
+  return String(findNode(state, edge?.fromId)?.name || '').trim() || generateDisplayName(run.runName);
 }
 
-/** How a source is shown: a Dataset's name, a Run's Prompt, or a Process with its branch ("Process · branch"). */
+/** How a source is shown: a Dataset's name, a Generate's Prompt, or a Process with its branch ("Process · branch"). */
 export function stepSourceLabel(state, source) {
   const node = findNode(state, source?.nodeId);
   if (!node) return String(source?.nodeId || '');
@@ -111,7 +112,7 @@ export function readsFromStep(state, nodeId, stepId) {
 }
 
 /**
- * Every source a step could read: each Dataset in canvas order, then each Run's results and each
+ * Every source a step could read: each Dataset in canvas order, then each Generate's results and each
  * Process output branch (processOutputPorts.js), leaving out the step itself and every step that
  * reads it, which would make a cycle. `name` is what an alias is made from (§3.5); `label` is how
  * the source is shown.
@@ -140,7 +141,7 @@ function candidateSources(state, stepId) {
   return [...datasets, ...steps];
 }
 
-/** Every source a Run could read. */
+/** Every source a Generate could read. */
 export function runCandidateSources(state, runId) {
   return candidateSources(state, runId);
 }
@@ -152,13 +153,13 @@ export function processCandidateSources(state, processId) {
 
 // ---------- Run ----------
 
-/** @returns {{ nodeId: string, port: string, kind: string } | null} the source a Run reads */
+/** @returns {{ nodeId: string, port: string, kind: string } | null} the source a Generate reads */
 export function runInputSource(state, runId) {
   const edge = dataEdgesInto(state, runId)[0];
   return edge ? sourceOf(state, edge) : null;
 }
 
-/** Points a Run at `source`, or clears its input when `source` is null. Changes `state` in place. */
+/** Points a Generate at `source`, or clears its input when `source` is null. Changes `state` in place. */
 export function setRunInputSource(state, runId, source) {
   if (!findNode(state, runId)) return;
   removeDataEdgesInto(state, runId);
@@ -167,7 +168,7 @@ export function setRunInputSource(state, runId, source) {
   }
 }
 
-/** The table a Run reads (stepOutputs.js), or null when it has no input or the input has no result yet. */
+/** The table a Generate reads (stepOutputs.js), or null when it has no input or the input has no result yet. */
 export function runInputTable(state, runId) {
   return stepOutputTable(state, runInputSource(state, runId)).table || null;
 }
@@ -311,7 +312,7 @@ export function stepInputEdges(state) {
   }));
 }
 
-/** The inputs of the Runs in `state`. */
+/** The inputs of the Generates in `state`. */
 export function runInputEdges(state) {
   return stepInputEdges(state).filter((edge) => findNode(state, edge.toId)?.type === 'run')
     .map(({ fromId, fromPort, toId }) => ({ fromId, fromPort, toId }));
@@ -326,7 +327,7 @@ export function processInputEdges(state) {
 }
 
 /**
- * What breaks the rules above: a Run with more than one input, a Process whose inputs have no df or
+ * What breaks the rules above: a Generate with more than one input, a Process whose inputs have no df or
  * several, or two inputs of one Process under one alias. Empty when the state is consistent.
  * @returns {string[]}
  */

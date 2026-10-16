@@ -1,4 +1,4 @@
-/** Prompt families follow version edges and Optimize → Evaluate → Run → Prompt ancestry. */
+/** Prompt families follow version edges and Optimize → Evaluate → Generate → Prompt ancestry. */
 const nodeId = (node) => String(node?.nodeId || node?.id || '');
 
 const METHOD_NAMES = {

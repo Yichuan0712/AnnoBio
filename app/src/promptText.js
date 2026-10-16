@@ -1,5 +1,5 @@
 /**
- * A Prompt is one block of text. `{name}` marks an input the Run fills from a dataset column, and
+ * A Prompt is one block of text. `{name}` marks an input the Generate fills from a dataset column, and
  * `{{` / `}}` write literal braces, so `{{text}}` is plain text rather than an input.
  */
 

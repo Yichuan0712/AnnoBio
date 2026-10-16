@@ -13,9 +13,9 @@ function parsed(value, fallback) {
 }
 
 /**
- * Freeze exactly the inputs used by one new Run/Process record (docs/design/DATA_FLOW_DESIGN.md §3.8).
+ * Freeze exactly the inputs used by one new Generate/Process record (docs/design/DATA_FLOW_DESIGN.md §3.8).
  * A Dataset input is kept as a snapshot of its content; a step's output only as a reference to the
- * upstream record, which cannot change. A Run's capture also carries `inputTable`, the table it reads,
+ * upstream record, which cannot change. A Generate's capture also carries `inputTable`, the table it reads,
  * which runningHistoryRecord keeps as the record's runInputContent and not as an input.
  */
 export async function captureHistoryInput(state, targetNodeId, { index, loadRecord }) {
@@ -23,7 +23,7 @@ export async function captureHistoryInput(state, targetNodeId, { index, loadReco
   const canvas = resolved.state;
   const nodes = new Map(canvas.nodes.map((node) => [nodeId(node), node]));
   const target = nodes.get(targetNodeId);
-  if (!target || !['run', 'process'].includes(target.type)) throw new Error(`Run or Process node was not found: ${targetNodeId}`);
+  if (!target || !['run', 'process'].includes(target.type)) throw new Error(`Generate or Process node was not found: ${targetNodeId}`);
 
   async function snapshotDataset(id) {
     const dataset = nodes.get(id);
@@ -56,7 +56,7 @@ export async function captureHistoryInput(state, targetNodeId, { index, loadReco
   if (target.type === 'run') {
     const promptEdge = canvas.connections.find((edge) => edge.type === 'prompt-to-run' && edge.toId === targetNodeId);
     const prompt = nodes.get(promptEdge?.fromId);
-    if (!prompt || prompt.type !== 'prompt') throw new Error('Run has no input Prompt.');
+    if (!prompt || prompt.type !== 'prompt') throw new Error('Generate has no input Prompt.');
     const source = runInputSource(canvas, targetNodeId);
     const { snapshot: dataset, table } = await snapshotSource(source);
     const promptSnapshot = {

@@ -27,7 +27,7 @@ const runState = () => ({
   connections: [data('raw', 'run-a'), data('subset', 'run-b'), data('deleted', 'run-gone'), { type: 'prompt-to-run', fromId: 'p', toId: 'run-a' }],
 });
 
-test('a Run reads the source of its data connection', () => {
+test('a Generate reads the source of its data connection', () => {
   assert.deepEqual(runInputSource(runState(), 'run-a'), dataset('raw'));
   assert.deepEqual(runInputSource(runState(), 'run-b'), dataset('subset'));
   assert.equal(runInputSource(runState(), 'run-none'), null);
@@ -41,7 +41,7 @@ test('the input table is the Dataset content, a Sampler subset included', () => 
   assert.equal(runInputTable(runState(), 'run-gone'), null);
 });
 
-test('setting and clearing a Run input edits the shared connections array', () => {
+test('setting and clearing a Generate input edits the shared connections array', () => {
   const s = runState();
   const connections = s.connections;
   setRunInputSource(s, 'run-none', { nodeId: 'raw', port: RESULT_PORT });
@@ -56,7 +56,7 @@ test('setting and clearing a Run input edits the shared connections array', () =
   assert.equal(s.connections.some((edge) => edge.toId === 'missing-run'), false);
 });
 
-test('every Run with an input gives one edge from its source', () => {
+test('every Generate with an input gives one edge from its source', () => {
   assert.deepEqual(runInputEdges(runState()), [
     { fromId: 'raw', fromPort: RESULT_PORT, toId: 'run-a' },
     { fromId: 'subset', fromPort: RESULT_PORT, toId: 'run-b' },
@@ -175,7 +175,7 @@ test('input edges carry each alias, df for the first input when none is recorded
     [['raw', 'p'], ['lookup', 'p'], ['notes', 'unrecorded'], ['notes', 'run']]);
 });
 
-test('validation reports a Run with two inputs, a Process without exactly one df, and a repeated alias', () => {
+test('validation reports a Generate with two inputs, a Process without exactly one df, and a repeated alias', () => {
   assert.deepEqual(validateStepInputs(processState()), ['Process unrecorded has 0 df inputs.']);
   const s = processState();
   s.nodes.push({ type: 'run', nodeId: 'run' });
@@ -217,10 +217,10 @@ test('step outputs are candidates, except the step itself and every step that re
     'run:run:result:Extract:Extract', 'process:split:lookup:lookup:Split · lookup', 'process:split:rest:rest:Split · rest',
     'process:join:result:Join:Join',
   ]);
-  // The Run feeds Split, which feeds Join: none of them can be the Run's input.
+  // The Generate feeds Split, which feeds Join: none of them can be the Generate's input.
   assert.deepEqual(describe(runCandidateSources(stepState(), 'run')),
     ['dataset:raw:Raw:Raw', 'dataset:lookup-data:Lookup:Lookup', 'process:tidy:result:Tidy:Tidy']);
-  // Split reads the Run, so the Run is still one; Join reads Split, so it is not.
+  // Split reads the Generate, so the Generate is still one; Join reads Split, so it is not.
   assert.deepEqual(describe(processCandidateSources(stepState(), 'split')).filter((item) => !item.startsWith('dataset')),
     ['run:run:result:Extract:Extract', 'process:tidy:result:Tidy:Tidy']);
 });
@@ -274,7 +274,7 @@ test('a step source is named by its Prompt or its Process and branch, in labels 
   assert.equal(stepInputWaitingMessage(s, dataset('raw'), 'no-result'), 'Input Dataset "Raw" has no current result. Run its upstream node first.');
 });
 
-test('a Run reading a step gets the step output table once it is complete', () => {
+test('a Generate reading a step gets the step output table once it is complete', () => {
   const s = stepState();
   s.connections.push(data('join', 'run-2'));
   s.nodes.push({ type: 'run', nodeId: 'run-2' });

@@ -11,7 +11,7 @@ async function readJson(response) {
 }
 
 function historyUrl(projectId, recordId = '') {
-  if (!projectId) throw new Error('Open a project before using Run history.');
+  if (!projectId) throw new Error('Open a project before using node history.');
   const base = `${BACKEND_API_BASE}/api/projects/${encodeURIComponent(projectId)}/history`;
   return recordId ? `${base}/${encodeURIComponent(recordId)}` : base;
 }

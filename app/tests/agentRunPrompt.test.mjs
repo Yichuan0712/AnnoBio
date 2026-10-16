@@ -17,8 +17,8 @@ const canvas = (run = {}) => upgradeCanvasState({
 const plan = (state, set) => planChangeSet(state, [{ op: 'update', node: 'r', set }], { extractInputFields });
 const promptOf = (state) => state.connections.filter((c) => c.type === 'prompt-to-run' && c.toId === 'r').map((c) => c.fromId);
 
-// A Run picks its Prompt in its window, so the Agent can switch it too, under the same lock.
-test('the Agent can point a Run at another Prompt', () => {
+// A Generate picks its Prompt in its window, so the Agent can switch it too, under the same lock.
+test('the Agent can point a Generate at another Prompt', () => {
   const result = plan(canvas(), { prompt: 'p2', input_mapping: { title: 'title' } });
   assert.deepEqual(promptOf(result.state), ['p2'], 'exactly one prompt-to-run connection, to the new Prompt');
   assert.deepEqual(JSON.parse(result.state.nodes.find((n) => n.nodeId === 'r').runInputToColumn), { title: 'title' });
@@ -29,7 +29,7 @@ test('a new Prompt needs a mapping for its own inputs', () => {
   assert.throws(() => plan(canvas(), { prompt: 'p2' }), /no column for prompt input "title"/);
 });
 
-test('a Run with results keeps its Prompt, input and mapping, as in the Run window', () => {
+test('a Generate with results keeps its Prompt, input and mapping, as in the Generate window', () => {
   const ran = canvas({ runResults: JSON.stringify([{ input_row_index: 0, output: { a: 'x' } }]) });
   for (const set of [{ prompt: 'p2', input_mapping: { title: 'title' } }, { input: 'raw' }, { input_mapping: { text: 'title' } }]) {
     assert.throws(() => plan(ran, set), /already has results/);

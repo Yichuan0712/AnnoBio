@@ -14,7 +14,7 @@ function formatEntry(entry, currentId) {
   };
 }
 
-/** Add History immediately before the pane toggle in a Run/Process window. */
+/** Add History immediately before the pane toggle in a Generate/Process window. */
 export function attachRunHistoryPicker({ overlay, loadEntries, onSelect, onDelete, isDisabled = () => false }) {
   const panel = overlay.querySelector('.modal-panel');
   const actions = overlay.querySelector('.modal-header-actions');

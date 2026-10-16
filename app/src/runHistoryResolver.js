@@ -49,7 +49,7 @@ function applyResult(node, record) {
 
 /**
  * Resolve the visible canvas from current inputs and the history index. Nothing is persisted here.
- * A Run or Process without a matching record has its output cache cleared; one with an input that
+ * A Generate or Process without a matching record has its output cache cleared; one with an input that
  * has no result yet also gets `waitingForUpstream`. When its last result no longer matches its
  * inputs, `historyStaleRecordId` points to that record: the node "needs updating", and its window
  * shows the earlier result. Nothing downstream reads it (docs/design/RUN_TO_HERE_PLAN.md step 5).

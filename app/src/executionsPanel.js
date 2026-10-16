@@ -1,5 +1,5 @@
 /**
- * The Executions tab of the bottom panel: every Run to here of the project, newest first
+ * The Executions tab of the bottom panel: every Generate to here of the project, newest first
  * (executionRecords.js). A running one can be stopped; a stopped or failed one resumed, which plans
  * its target again. A step shows its node on the canvas.
  */
@@ -11,7 +11,7 @@ const STEP_LABELS = {
   reused: 'Used existing result', pending: 'Waiting', running: 'Running', completed: 'Ran',
   failed: 'Failed', stopped: 'Stopped', 'not-started': 'Not started', interrupted: 'Interrupted',
 };
-const KIND_LABELS = { run: 'Run prompt', process: 'Process data' };
+const KIND_LABELS = { run: 'Generate', process: 'Process data' };
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -40,7 +40,7 @@ function recordHtml(record, { open, active }) {
     <div class="executions__head">
       <button type="button" class="executions__toggle" data-action="toggle" data-record-id="${escapeHtml(record.id)}" aria-expanded="${open}">
         <span class="executions__chevron" aria-hidden="true">${open ? '▾' : '▸'}</span>
-        <span class="executions__title">${record.scope === 'this' ? 'Execute' : 'Execute to'} "${escapeHtml(record.targetName || 'step')}"</span>
+        <span class="executions__title">${record.scope === 'this' ? 'Run' : 'Run to'} "${escapeHtml(record.targetName || 'step')}"</span>
         <span class="executions__status executions__status--${escapeHtml(record.status)}">${escapeHtml(STATUS_LABELS[record.status] || record.status)}</span>
         <span class="executions__summary">${escapeHtml(executionSummary(record))}</span>
         <span class="executions__time">${escapeHtml(when)}${record.source === 'agent' ? ' · by the Agent' : ''}</span>
@@ -77,7 +77,7 @@ export function mountExecutionsPanel(container, { getRecords, isActive, onStop, 
     }
     const html = records.length
       ? `<ol class="executions__list">${records.map((record) => recordHtml(record, { open: opened.has(record.id), active: isActive(record.id) })).join('')}</ol>`
-      : '<p class="executions__empty">No executions yet. Use Execute to here or Execute this step on a Run or Process step (its right-click menu, or its Run button when an input has no result).</p>';
+      : '<p class="executions__empty">No executions yet. Use Run to here or Run this step on a Generate or Process step (its right-click menu, or its Run button when an input has no result).</p>';
     if (html === previousHtml) return;
     previousHtml = html;
     view.innerHTML = html;

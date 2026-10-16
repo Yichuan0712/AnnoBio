@@ -1,4 +1,5 @@
 import { reviewSettingsOverrides } from './nodeSettings.js';
+import { generateDisplayName, isDefaultGenerateName } from './nodeLabels.js';
 import { datasetColorAt, promptColorAt } from './workflowNodeColors.js';
 import { isTaskLocked } from './runTaskLocks.js';
 import { sourceKey } from './stepInputs.js';
@@ -291,9 +292,9 @@ export function createWorkflowNodeFactories(deps = {}) {
       onRunPrompt: (credentialId) => {
         const runNode = createRunNode({
           left: (parseFloat(node.style.left) || 0) + (node.offsetWidth || 280) + NEW_NODE_OFFSET,
-          top: parseFloat(node.style.top) || 0, title: 'Run',
+          top: parseFloat(node.style.top) || 0, title: 'Generate',
         });
-        // The model picked beside Create Run; without one the Run takes the Settings default when opened.
+        // The model picked beside Create Generate; without one the Generate takes the Settings default when opened.
         if (runNode && credentialId) runNode.dataset.runCredentialId = credentialId;
         if (runNode?.dataset?.nodeId) {
           getConnectionsList().push({ fromId: node.dataset.nodeId, toId: runNode.dataset.nodeId, type: 'prompt-to-run' });
@@ -466,17 +467,17 @@ export function createWorkflowNodeFactories(deps = {}) {
     const node = document.createElement('div');
     node.className = 'workflow-node workflow-node--run workflow-node--no-body';
     node.setAttribute('role', 'article');
-    node.setAttribute('aria-label', 'Run node');
+    node.setAttribute('aria-label', 'Generate node');
     node.dataset.nodeId = nodeId;
     node.dataset.nodeType = 'run';
-    const runTitle = (givenTitle != null && givenTitle !== '') ? String(givenTitle) : 'Run';
+    const runTitle = (givenTitle != null && givenTitle !== '') ? String(givenTitle) : 'Generate';
     node.dataset.runName = runTitle;
     const position = allocateNodePosition(left, top);
     setNodeCanvasPosition(node, position.left, position.top);
     node.innerHTML = `
       <div class="workflow-node__header">
         <span class="workflow-node__icon workflow-node__icon--run" aria-hidden="true">${iconRun(14).outerHTML}</span>
-        <span class="workflow-node__title">${escapeHtml(runTitle)}</span>
+        <span class="workflow-node__title">${escapeHtml(generateDisplayName(runTitle))}</span>
         <button type="button" class="workflow-node__delete" aria-label="Delete node" title="Delete node">${iconTrash(12).outerHTML}</button>
       </div>
       <div class="workflow-node__run-progress" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
@@ -863,7 +864,7 @@ export function createWorkflowNodeFactories(deps = {}) {
       openScoreDetailModal({
         node,
         revealNode,
-        // A Run with results (also part way through) can be scored; one without cannot yet.
+        // A Generate with results (also part way through) can be scored; one without cannot yet.
         getRunState: () => (runNode ? {
           ready: runNode.dataset.runCompleted === '1' || (() => {
             try { return JSON.parse(runNode.dataset.runResults || '[]').length > 0; } catch (_) { return false; }
@@ -872,9 +873,9 @@ export function createWorkflowNodeFactories(deps = {}) {
           // Named as elsewhere: its own name once renamed, else its Prompt's (stepInputs.js runLabel).
           name: (() => {
             const own = (runNode.dataset.runName || '').trim();
-            if (own && own !== 'Run') return own;
+            if (!isDefaultGenerateName(own)) return own;
             const promptId = getConnectionsList().find((c) => c.type === 'prompt-to-run' && c.toId === runNode.dataset.nodeId)?.fromId;
-            return (getNodeById(promptId)?.dataset.promptName || '').trim() || 'Run';
+            return (getNodeById(promptId)?.dataset.promptName || '').trim() || 'Generate';
           })(),
         } : null),
         getWorkingSets: () => workingSets,

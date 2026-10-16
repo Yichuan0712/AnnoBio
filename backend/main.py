@@ -302,7 +302,7 @@ class SettingsPatch(BaseModel):
         return None if value is None else validate_model_settings(value)
 
 
-# Settings a single Run node / Review-capable Score node may override for its own jobs (Run settings /
+# Settings a single Generate node / Review-capable Score node may override for its own jobs (Generate settings /
 # Review settings dialogs); anything else in a request's settings_overrides is rejected.
 RUN_SETTINGS_OVERRIDE_KEYS = frozenset({"run_max_tokens", "run_max_retries", "run_concurrency"})
 REVIEW_SETTINGS_OVERRIDE_KEYS = frozenset({
@@ -378,8 +378,8 @@ class RunRequest(BaseModel):
                         raise ValueError("Image/PDF blocks require an asset ID and a project session.")
         return self
     output_schema: dict = Field(..., description="return_shape + fields: [{ key, type, description?, allow_none? }]")
-    run_node_id: str | None = Field(default=None, description="Frontend Run node id for correlation when polling")
-    settings_overrides: dict | None = Field(default=None, description="Per-Run-node run_max_tokens / run_max_retries / run_concurrency")
+    run_node_id: str | None = Field(default=None, description="Frontend Generate node id for correlation when polling")
+    settings_overrides: dict | None = Field(default=None, description="Per-Generate-node run_max_tokens / run_max_retries / run_concurrency")
 
     @field_validator("settings_overrides")
     @classmethod
@@ -1742,7 +1742,7 @@ def run_prompts(body: RunRequest):
     """Start run in background; returns 202 with run_id. Poll GET /api/run/result/{run_id}. Worker stops if client stops polling."""
     run_id = str(uuid.uuid4())
     with _run_jobs_lock:
-        # At most one active worker per canvas Run node: supersede any still-running job for this node.
+        # At most one active worker per canvas Generate node: supersede any still-running job for this node.
         # (Rows within a single job are already processed sequentially in _do_run_work.)
         nid = body.run_node_id
         if nid:
@@ -1992,7 +1992,7 @@ def get_run_result_by_node(run_node_id: str):
 
 
 # ---------- PubMed import (bulk-fetch articles into a Dataset) ----------
-# Same shape as the Run job block above: background thread + job_id + polling, persisted to
+# Same shape as the Generate job block above: background thread + job_id + polling, persisted to
 # disk so a large import survives a backend restart. job: { status, completed, total, headers,
 # rows, error? }. Cancellation/abandonment reuse the same timeout as Run (RUN_ABANDON_TIMEOUT_SEC).
 PUBMED_MAX_IDS_CAP = 5000  # sane ceiling regardless of what the client requests

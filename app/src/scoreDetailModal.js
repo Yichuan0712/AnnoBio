@@ -123,7 +123,7 @@ function buildMatchDefaultCode(inputHeaders, outputKeys, gtHeaders) {
 
 
 def match(input_row, output_row, gt_row):
-    # Called per (Run row, ground-truth row) pair, in order, until it returns
+    # Called per (model output row, ground-truth row) pair, in order, until it returns
     # True. A True pair is scored as correct; that ground-truth row is then
     # not reused. input_row / output_row / gt_row are dicts keyed by name.
 ${commentLines.length ? `${commentLines.join('\n')}\n` : ''}    #
@@ -140,7 +140,7 @@ ${sameItemLines}
 }
 
 /**
- * Builds a `runToGt` array (run row_index -> matched GT row index, or -1) from a completed "Match by
+ * Builds a `runToGt` array (model output row_index -> matched GT row index, or -1) from a completed "Match by
  * code" run (the shape persisted at `node.dataset.scoreMatchResult`), in the same shape
  * `computeGreedyRunToGtPairing` returns -- lets code mode feed the same results-table/metrics pipeline
  * as rule mode in {@link renderResults}, and lets Review's comparison-row builder (workflowCanvas.js)
@@ -558,7 +558,7 @@ function reviewPreviewCellHtml(raw) {
 }
 
 /**
- * Group key + sort order for Review preview: primary = worksheet input index; GT-only = GT row; else run row fallback.
+ * Group key + sort order for Review preview: primary = worksheet input index; GT-only = GT row; else model output row fallback.
  * @param {any} r
  */
 function reviewPreviewInputGroupMeta(r) {
@@ -668,7 +668,7 @@ function buildReviewPreviewModelOutputTable(rows, outputFields) {
   const thFields = cols.map((c) => `<th scope="col">${escapeHtml(c.label)}</th>`).join('');
   const thead = `<thead><tr>
     <th scope="col">Evaluate #</th>
-    <th scope="col" title="Run result row (1-based)">${escapeHtml(runHashLabel)}</th>
+    <th scope="col" title="Output row (1-based)">${escapeHtml(runHashLabel)}</th>
     <th scope="col">Result</th>
     ${thFields}
   </tr></thead>`;
@@ -704,7 +704,7 @@ function buildReviewPreviewGroundTruthTable(rows, outputFields) {
     .join('');
   const thead = `<thead><tr>
     <th scope="col">Evaluate #</th>
-    <th scope="col" title="Run result row (1-based)">${escapeHtml(runHashLabel)}</th>
+    <th scope="col" title="Output row (1-based)">${escapeHtml(runHashLabel)}</th>
     <th scope="col">Result</th>
     ${thFields}
     <th scope="col">Rule targets <span class="review-selection-preview-th-hint">(all text)</span></th>
@@ -739,7 +739,7 @@ export async function openReviewSelectionPreviewModal({ getReviewPayload }) {
   if (typeof getReviewPayload !== 'function') return;
   const payload = await Promise.resolve(getReviewPayload());
   if (!payload || !String(payload.prompt || '').trim()) {
-    showAlert('Cannot build Optimize data. Ensure the Evaluate node is connected to a Run with a prompt that has text.', { title: 'Debug: Optimize rows' });
+    showAlert('Cannot build Optimize data. Ensure the Evaluate node is connected to a Generate with a prompt that has text.', { title: 'Debug: Optimize rows' });
     return;
   }
   const comparisonRows = Array.isArray(payload.comparison_rows) ? payload.comparison_rows : [];
@@ -1297,7 +1297,7 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
   }
 
   /**
-   * Evaluate tree node for run row i vs GT row j.
+   * Evaluate tree node for model output row i vs GT row j.
    */
   function evaluateNode(node, runRowIndex, gtRowIndex, resultsByIndex, runWs, outputFields, gtContent) {
     if (!node) return false;
@@ -1433,14 +1433,14 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
               <div class="score-detail-rules-scroll score-detail-rules-code-panel" id="score-detail-rules-panel-code" hidden>
                 <div class="process-editor-mid">
                   <div class="process-editor-host" id="score-detail-code-host"></div>
-                  <p class="process-editor-hint">Runs once per candidate (run row, ground-truth row) pair, using the Python interpreter set in Settings → Python, until each run row finds a match (in order; matched ground-truth rows aren't reused). <code>input_row</code>, <code>output_row</code>, and <code>gt_row</code> are dicts keyed by column name. Return a truthy value to count the pair as a match.</p>
+                  <p class="process-editor-hint">Runs once per candidate (model output row, ground-truth row) pair, using the Python interpreter set in Settings → Python, until each model output row finds a match (in order; matched ground-truth rows aren't reused). <code>input_row</code>, <code>output_row</code>, and <code>gt_row</code> are dicts keyed by column name. Return a truthy value to count the pair as a match.</p>
                   <div class="score-detail-code-results" id="score-detail-code-results"></div>
                 </div>
                 <div class="dataset-meta-field run-detail-model-actions-field">
                   <div class="run-detail-llm-actions-row">
                     <span class="run-detail-llm-actions-lead" aria-hidden="true"></span>
                     <div class="run-detail-llm-actions-right">
-                      <button type="button" class="btn btn-secondary run-detail-run-btn score-detail-code-run-btn">Run matching code</button>
+                      <button type="button" class="btn btn-secondary run-detail-run-btn score-detail-code-run-btn">Run</button>
                     </div>
                   </div>
                 </div>
@@ -1508,7 +1508,7 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
     else rulesSectionEl.setAttribute('hidden', '');
   }
 
-  /** Why there is nothing to score: the Run it reads has no current result yet ('' when it has one). */
+  /** Why there is nothing to score: the Generate it reads has no current result yet ('' when it has one). */
   function runNotReadyMessage() {
     const run = getRunState?.();
     if (!run || run.ready) return '';
@@ -1593,7 +1593,7 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
       else delete node.dataset.scoreMatchUiRunning;
     }
     if (!codeRunBtn) return;
-    codeRunBtn.textContent = isRunning ? 'Stop matching'
+    codeRunBtn.textContent = isRunning ? 'Stop'
       : executionIdleLabel({ task: 'matching', interrupted: node?.dataset?.scoreMatchInterrupted === '1' });
     codeRunBtn.classList.toggle('btn-danger', isRunning);
   }
@@ -1669,7 +1669,7 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
     gtRows.forEach((r) => Object.keys(r.gt_row || {}).forEach((k) => { if (!gtCols.includes(k)) gtCols.push(k); }));
 
     const headers = [
-      'Run row',
+      'model output row',
       ...inputCols.map((c) => `Input: ${c}`),
       ...outputCols.map((c) => `Output: ${c}`),
       'Matched GT row',
@@ -1753,7 +1753,7 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
     const gtContent = getGroundTruthContent(selectedNodeId);
     const results = (rawResults || []).filter((r) => isValidRunOutputForScoreRow(r, outputFields));
     if (results.length === 0) {
-      setCodeMatchError('No run results to match.');
+      setCodeMatchError('No model outputs to match.');
       return;
     }
     if ((gtContent.rows || []).length === 0) {
@@ -1962,12 +1962,12 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
     const runFieldAria = isTopLevel
       ? 'Column: an input column/row index, or a model output field/row index'
       : (side === 'input'
-        ? 'Run input column: row index or a dataset input column'
+        ? 'Generate input column: row index or a dataset input column'
         : 'Model output column');
     const epsGapLabel = isTopLevel
       ? 'ε: max absolute gap (selected column vs ground truth)'
       : (side === 'input'
-        ? 'ε: max absolute gap (run side vs ground truth)'
+        ? 'ε: max absolute gap (model output side vs ground truth)'
         : 'ε: max absolute gap (output vs ground truth)');
     const epsHintInequality = isTopLevel
       ? '|selected value − ground truth| ≤ ε'
@@ -2260,7 +2260,7 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
     resultSelectEl?.focus();
   }
 
-  /** Run-side label for rule summary: input rules must not match `getRunResultColumns()`’s first `#` (run row #). */
+  /** Run-side label for rule summary: input rules must not match `getRunResultColumns()`’s first `#` (model output row #). */
   function formatScoreRuleRunSideLabel(side, rule) {
     const key = String(rule?.outputKey ?? '').trim();
     if (!key) return '—';
@@ -2509,7 +2509,7 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
       if (resultsToolbar) { resultsToolbar.style.display = 'none'; resultsToolbar.innerHTML = ''; }
       return;
     }
-    // Without a current Run result there is nothing to score; a row of 0% would read as a real score.
+    // Without a current Generate result there is nothing to score; a row of 0% would read as a real score.
     const notReady = runNotReadyMessage();
     if (notReady) {
       resultsBody.innerHTML = `<p class="score-detail-placeholder">${escapeHtml(notReady)}</p>`;
@@ -2546,7 +2546,7 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
     const hasAnyRows = maxRunRow >= 0 || maxGtRow >= 0;
 
     if (!hasAnyRows) {
-      resultsBody.innerHTML = '<p class="score-detail-placeholder">No run results and no ground truth rows.</p>';
+      resultsBody.innerHTML = '<p class="score-detail-placeholder">No model outputs and no ground truth rows.</p>';
       if (resultsToolbar) { resultsToolbar.style.display = 'none'; resultsToolbar.innerHTML = ''; }
       return;
     }
@@ -2731,7 +2731,7 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
     const excludedMap = getScoreRowExcludedFromScoring();
     const isGtExcluded = (j) => !!excludedMap[String(j)];
     const isRunOnlyExcluded = (runRowIdx) => !!excludedMap[`run:${runRowIdx}`];
-    /** Count run rows with API/runtime errors among rows still included for Review (not excluded from scoring). */
+    /** Count model output rows with API/runtime errors among rows still included for Review (not excluded from scoring). */
     function errorCountAmongReviewIncluded(excluded) {
       let n = 0;
       for (const r of rawResults || []) {
@@ -2772,7 +2772,7 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
     const errorNote = errorRowCount > 0 ? ` · ${errorRowCount} row${errorRowCount === 1 ? '' : 's'} with error` : '';
     const metricsText = `Precision ${fmt(precision)}% · Recall ${fmt(recall)}% · F1 ${fmt(f1)}%${errorNote}`;
 
-    const summaryText = `Run result ${runCount} rows · Ground truth ${gtRows.length} rows · ${tp} matched`;
+    const summaryText = `Generate result ${runCount} rows · Ground truth ${gtRows.length} rows · ${tp} matched`;
 
     /** Recompute PR/F1 banner only (Review checkbox toggles); avoids full table rebuild and scroll jump. */
     function refreshScoreMetricsBanner() {
@@ -2805,7 +2805,7 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
       const errN = errorCountAmongReviewIncluded(excludedMapNow);
       const errNote = errN > 0 ? ` · ${errN} row${errN === 1 ? '' : 's'} with error` : '';
       const mTxt = `Precision ${fmt(prec)}% · Recall ${fmt(rec)}% · F1 ${fmt(f1v)}%${errNote}`;
-      const sTxt = `Run result ${runCount} rows · Ground truth ${gtRows.length} rows · ${tpN} matched`;
+      const sTxt = `Generate result ${runCount} rows · Ground truth ${gtRows.length} rows · ${tpN} matched`;
       const summaryEl = resultsBody.querySelector('.score-detail-results-summary');
       const metricsEl = resultsBody.querySelector('.score-detail-results-metrics');
       if (summaryEl) summaryEl.textContent = sTxt;
@@ -2859,8 +2859,8 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
     function runResultCellsHtml(runResult, runRowIndex, scoreTableRowNum, collapsedInputs, collapsedOutputs, blankOutputsOnly = false) {
       const idxDisplay = runResult ? String((runResult.row_index ?? runRowIndex) + 1) : '—';
       const idxTitle = scoreTableRowNum != null
-        ? `Evaluate table row ${scoreTableRowNum}${runResult ? `; Run result row ${(runResult.row_index ?? runRowIndex) + 1}` : ''}`
-        : (runResult ? `Run result row ${(runResult.row_index ?? runRowIndex) + 1}` : 'No run result');
+        ? `Evaluate table row ${scoreTableRowNum}${runResult ? `; Output row ${(runResult.row_index ?? runRowIndex) + 1}` : ''}`
+        : (runResult ? `Output row ${(runResult.row_index ?? runRowIndex) + 1}` : 'No run result');
       const inpDisplay = runResult ? String((runResult.input_row_index ?? 0) + 1) : '—';
       const inpTitle = runResult ? `Dataset input row ${inpDisplay}` : '';
       let html = '';
@@ -3031,10 +3031,10 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
           if (canToggleOutputs) {
             wireScoreOutputHeader(
               thRunIdx,
-              'Output: # — Run output row index. Click any output column header to hide output columns.',
+              'Output: # — Output row index. Click any output column header to hide output columns.',
             );
           } else {
-            thRunIdx.title = 'Run output row index (row_index + 1)';
+            thRunIdx.title = 'Output row index (row_index + 1)';
           }
           trHead.appendChild(thRunIdx);
         }
@@ -3176,7 +3176,7 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
           tr += '<td class="score-detail-results-td score-detail-results-td--gt">—</td>';
         }
       }
-      tr += '<td class="score-detail-results-td score-detail-results-td--match score-detail-results-td--block-sep" aria-label="Run result row without ground truth match">false</td>';
+      tr += '<td class="score-detail-results-td score-detail-results-td--match score-detail-results-td--block-sep" aria-label="Output row without ground truth match">false</td>';
       tr += '<td class="score-detail-results-td score-detail-results-td--review"></td></tr>';
       tbody.insertAdjacentHTML('beforeend', tr);
     }

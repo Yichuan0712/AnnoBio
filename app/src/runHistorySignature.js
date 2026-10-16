@@ -33,7 +33,7 @@ export async function datasetSignature({ nodeId, content }) {
 }
 
 export async function runInputSignature({ promptNodeId, prompt, datasetNodeId, datasetSignature: dataSignature, mapping }) {
-  if (!promptNodeId || !datasetNodeId || !dataSignature) throw new Error('Run history input is incomplete.');
+  if (!promptNodeId || !datasetNodeId || !dataSignature) throw new Error('Generate history input is incomplete.');
   return sha256Signature({
     kind: 'run', promptNodeId, datasetNodeId, datasetSignature: dataSignature,
     prompt: {
@@ -60,7 +60,7 @@ export async function processInputSignature({ code, primaryDatasetId, bindings }
   });
 }
 
-/** One port of a Run or Process as of one of its History records: what a step input signs. */
+/** One port of a Generate or Process as of one of its History records: what a step input signs. */
 export async function stepOutputSignature({ nodeId, recordId, port }) {
   if (!nodeId || !recordId || !port) throw new Error('Step output history input is incomplete.');
   return sha256Signature({ kind: 'step-output', nodeId, recordId, port });

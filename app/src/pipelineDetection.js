@@ -5,11 +5,11 @@
  * getCanvasState()'s output) and offline (fed a saved project's state) without any canvas
  * instance at all.
  *
- * A "pipeline" here is a graph of Prompt (+ the Run that executes it) and Process steps, joined by
+ * A "pipeline" here is a graph of Prompt (+ the Generate that executes it) and Process steps, joined by
  * the `data` connections that make one step read another's output (docs/design/DATA_FLOW_DESIGN.md
  * §6.1). Most pipelines read as a linear sequence, but a Process may also read several inputs and
- * form an explicit merge point. A pipeline needs at least one Prompt Run or Process. Where one input
- * feeds both Prompt Runs and Processes, each kind starts its own pipeline (see splitByConsumerKind).
+ * form an explicit merge point. A pipeline needs at least one Prompt/Generate step or Process. Where one input
+ * feeds both Prompt/Generate steps and Processes, each kind starts its own pipeline (see splitByConsumerKind).
  * Score/PromptReview stay out: they're evaluation/tuning scaffolding, not part of "the thing that
  * produces output" this is meant to describe. See the AnnoBio canvas→code-export planning
  * discussion this was built for.
@@ -22,6 +22,7 @@
  *    or one branch of a Process. Every branch a Process returns has a slot, read or not, as every
  *    branch is an output of the pipeline (pipeline_compile.py).
  */
+import { generateDisplayName } from './nodeLabels.js';
 import { effectiveProcessOutputs, showsProcessOutputs } from './processOutputPorts.js';
 import { processInputSources, runInputSource } from './stepInputs.js';
 
@@ -161,7 +162,7 @@ export function detectPipelines(canvasState) {
             const input = runInputSource(canvasState, runNodeId);
             return {
               runNodeId,
-              runName: nodeById.get(runNodeId)?.runName || 'Run',
+              runName: generateDisplayName(nodeById.get(runNodeId)?.runName),
               // The Dataset it reads, when it starts from one rather than from another step's output.
               inputDatasetNodeId: input?.kind === 'dataset' ? input.nodeId : '',
             };
@@ -239,7 +240,7 @@ export function detectPipelines(canvasState) {
     readers.consumerStepIds.forEach((id) => slot.consumerStepIds.add(id));
   }
 
-  // Output slots. The Runs of one Prompt are alternatives in one slot, so the slot follows whichever
+  // Output slots. The Generates of one Prompt are alternatives in one slot, so the slot follows whichever
   // Run the route selects. A Process's named branches are separate slots, in the order it returns
   // them, so the Current Pipeline can draw the fork, an empty lane for a branch nothing reads, and
   // the later merge.
@@ -342,7 +343,7 @@ export function detectPipelines(canvasState) {
 const MAX_PIPELINES_PER_COMPONENT = 32;
 
 /**
- * A Dataset read by both Prompt Runs and Processes starts different pipelines rather than one with a
+ * A Dataset read by both Prompt/Generate steps and Processes starts different pipelines rather than one with a
  * mixed choice: running a Prompt and transforming data are different jobs, not versions of one step.
  * Each variant keeps one consumer kind at that Dataset and drops whatever only the other kind reached.
  * A Process needs all of its inputs, so losing any input drops it; a Prompt step stays while any of

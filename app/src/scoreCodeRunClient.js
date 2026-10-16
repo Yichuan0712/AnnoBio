@@ -20,7 +20,7 @@ export function buildMatchGtRowDict(content, rowIndex) {
 
 export function buildCodeMatchInputs({ results, outputFields, input, groundTruth }) {
   const valid = (results || []).filter((result) => isValidRunOutputForScoreRow(result, outputFields || []));
-  if (!valid.length) throw new Error('No run results to match.');
+  if (!valid.length) throw new Error('No model outputs to match.');
   if (!groundTruth?.rows?.length) throw new Error('Ground truth dataset has no rows.');
   return {
     runRowIndices: valid.map((result) => result.row_index),

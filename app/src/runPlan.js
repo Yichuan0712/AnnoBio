@@ -1,5 +1,5 @@
 /**
- * "Run to here" (docs/design/RUN_TO_HERE_PLAN.md step 1): which steps up to a Run or Process are
+ * "Run to here" (docs/design/RUN_TO_HERE_PLAN.md step 1): which steps up to a Generate or Process are
  * reused, which run, what they read and roughly how many rows. Pure: canvas state as
  * getCanvasState() saves it (each step carrying its current History result) in, plan out.
  *
@@ -26,7 +26,7 @@ function parsed(value, fallback) {
 const isStepSource = (source) => STEP_TYPES.has(source?.kind);
 const processCode = (node) => String(node?.dfCode || node?.code || '');
 
-/** The sources a step runs with: a Run's one input, or every input a Process's code is given. */
+/** The sources a step runs with: a Generate's one input, or every input a Process's code is given. */
 function stepSources(state, node) {
   if (node.type === 'run') {
     const source = runInputSource(state, nodeIdOf(node));
@@ -65,7 +65,7 @@ function promptFormat(prompt) {
   return { fields: Array.isArray(format?.fields) ? format.fields : [], returnShape: format?.returnShape || 'single' };
 }
 
-/** Input rows a Run already finished, by their input row index. */
+/** Input rows a Generate already finished, by their input row index. */
 function doneRows(run) {
   const results = parsed(run.runResults, []);
   return new Set((Array.isArray(results) ? results : []).map((item) => item?.input_row_index).filter((index) => typeof index === 'number')).size;
@@ -73,7 +73,7 @@ function doneRows(run) {
 
 /**
  * The first step `nodeId` reads that has no current result, by name; null when every one has one.
- * Execute this step needs them all (the canvas menu disables it otherwise).
+ * Run this step needs them all (the canvas menu disables it otherwise).
  */
 export function upstreamWithoutResult(state, nodeId) {
   const node = findNode(state, nodeId);
@@ -88,10 +88,10 @@ export function upstreamWithoutResult(state, nodeId) {
 
 /**
  * @param {object} state canvas state from getCanvasState()
- * @param {string} targetId a Run or Process node
- * @param {{ settings?: object, credentialIds?: Set<string> }} context Settings (default Run model,
+ * @param {string} targetId a Generate or Process node
+ * @param {{ settings?: object, credentialIds?: Set<string> }} context Settings (default Generate model,
  *   Python path) and the credentials that exist
- * @param {{ onlyThis?: boolean, rerun?: boolean }} [options] onlyThis: Execute this step, without the
+ * @param {{ onlyThis?: boolean, rerun?: boolean }} [options] onlyThis: Run this step, without the
  *   steps before it, which then must have current results; rerun: run the target again although its
  *   result is current (what Execute does when everything up to it is current)
  * @returns {{
@@ -113,7 +113,7 @@ export function planRunTo(state, targetId, { settings = {}, credentialIds = new 
     if (!plan.problems.some((item) => item.nodeId === nodeId && item.message === message)) plan.problems.push({ nodeId, message });
   };
   if (!target || !STEP_TYPES.has(target.type)) {
-    problem(id, 'Execute works on Run and Process steps.');
+    problem(id, 'Run works on Generate and Process steps.');
     plan.calls = null;
     return plan;
   }
@@ -130,7 +130,7 @@ export function planRunTo(state, targetId, { settings = {}, credentialIds = new 
     const sources = stepSources(state, node);
     sourcesOf.set(nodeId, sources);
     for (const source of sources) {
-      // Execute this step: the steps before it are not part of the plan.
+      // Run this step: the steps before it are not part of the plan.
       if (isStepSource(source) && findNode(state, source.nodeId)) { if (!onlyThis) visit(source.nodeId); }
       else if (!isStepSource(source)) {
         if (!inputs.has(source.nodeId)) inputs.set(source.nodeId, []);
@@ -172,12 +172,12 @@ export function planRunTo(state, targetId, { settings = {}, credentialIds = new 
         continue;
       }
       if (!actionOf.has(source.nodeId)) {
-        // Outside the plan (Execute this step): it must have a current result already.
+        // Outside the plan (Run this step): it must have a current result already.
         const waiting = stepOutputTable(state, source).waiting;
         if (waiting === 'missing-port') problem(nodeId, stepInputWaitingMessage(state, source, waiting));
         else if (waiting) {
           const upstreamName = stepSourceLabel(state, { ...source, port: RESULT_PORT });
-          problem(nodeId, `"${upstreamName}" has no current result. Use Execute to here to run it first.`);
+          problem(nodeId, `"${upstreamName}" has no current result. Use Run to here to run it first.`);
         }
       } else if (actionOf.get(source.nodeId) === 'reuse') {
         if (stepOutputTable(state, source).waiting === 'missing-port') problem(nodeId, stepInputWaitingMessage(state, source, 'missing-port'));
@@ -205,7 +205,7 @@ export function planRunTo(state, targetId, { settings = {}, credentialIds = new 
         const mapping = parsed(node.runInputToColumn, {});
         const unmapped = prompt ? extractInputFields(prompt.text).filter((field) => !String(mapping?.[field] || '').trim()) : [];
         if (unmapped.length) problem(nodeId, `"${name}" has no column mapped to ${unmapped.map((field) => `{${field}}`).join(', ')}.`);
-        if (!step.credentialId || !credentialIds.has(step.credentialId)) problem(nodeId, `"${name}" has no usable model. Choose one in Settings → Run.`);
+        if (!step.credentialId || !credentialIds.has(step.credentialId)) problem(nodeId, `"${name}" has no usable model. Choose one in Settings → Generate.`);
       }
       const done = action === 'resume' ? doneRows(node) : 0;
       step.calls = action === 'reuse' ? 0 : step.inputRows == null ? null : Math.max(0, step.inputRows - done);

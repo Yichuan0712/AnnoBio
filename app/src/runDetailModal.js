@@ -5,6 +5,7 @@
  * input_row_index 统一 0-based，展示时 +1
  */
 
+import { generateDisplayName } from './nodeLabels.js';
 import { embedInputRow, markEmptyOutputAsError } from './runResumeUtils.js';
 import { isTaskLocked } from './runTaskLocks.js';
 import { selectPlaceholderLabel, formatResultOutputColumnLabel } from './displayTextNormalize.js';
@@ -126,7 +127,7 @@ export function openRunDetailModal({
   // The Prompt and the input are connected by dragging on the canvas; this window shows them.
   const inputFields = getPromptInputFields();
   let selectedCredentialId = (node?.dataset?.runCredentialId || '').trim();
-  const runName = (node?.dataset?.runName || node?.querySelector?.('.workflow-node__title')?.textContent?.trim() || 'Run').trim() || 'Run';
+  const runName = generateDisplayName(node?.dataset?.runName || node?.querySelector?.('.workflow-node__title')?.textContent);
   const nodeId = node?.dataset?.nodeId || '';
   const historyMode = !!history;
 
@@ -158,12 +159,12 @@ export function openRunDetailModal({
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--run-detail">
       <div class="modal-header">
-        <h2 id="run-detail-title" class="modal-title">${escapeHtml(`Run: ${runName}`)}</h2>
+        <h2 id="run-detail-title" class="modal-title">${escapeHtml(`Generate: ${runName}`)}</h2>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body run-detail-body modal-body--run">
         <div class="run-detail-main">
-          <p class="run-detail-main-label">Run settings</p>
+          <p class="run-detail-main-label">Generate settings</p>
           <p class="run-detail-waiting-banner" role="status" hidden></p>
           <div class="dataset-meta-wrap run-detail-meta-wrap">
             <div class="modal-input-group">
@@ -188,7 +189,7 @@ export function openRunDetailModal({
             <div class="run-detail-llm-actions-row">
               <span class="run-detail-llm-actions-lead" aria-hidden="true"></span>
               <div class="run-detail-llm-actions-right">
-                <button type="button" class="btn btn-primary run-detail-run-btn" disabled>Generate</button>
+                <button type="button" class="btn btn-primary run-detail-run-btn" disabled>Run</button>
               </div>
             </div>
           </div>
@@ -212,17 +213,17 @@ export function openRunDetailModal({
   };
   const promptSource = describePrompt();
   renderSourceLink(overlay.querySelector('#run-detail-prompt-source'), {
-    ...promptSource, hint: "Drag a Prompt onto this Run's prompt port.", onReveal: () => reveal(promptSource.nodeId),
+    ...promptSource, hint: "Drag a Prompt onto this Generate's prompt port.", onReveal: () => reveal(promptSource.nodeId),
   });
   const inputSource = describeInput();
   renderSourceLink(overlay.querySelector('#run-detail-input-source'), {
-    ...inputSource, hint: "Drag a Dataset or a step output onto this Run's input port.", onReveal: () => reveal(inputSource.nodeId),
+    ...inputSource, hint: "Drag a Dataset or a step output onto this Generate's input port.", onReveal: () => reveal(inputSource.nodeId),
   });
   const runBtn = overlay.querySelector('.run-detail-run-btn');
   const waitingBannerEl = overlay.querySelector('.run-detail-waiting-banner');
   const rightCol = overlay.querySelector('.run-detail-preview-content');
 
-  /** What the Run's input gives now (stepOutputs.js): `{ table }`, or `{ waiting, message }`, or null. */
+  /** What the Generate's input gives now (stepOutputs.js): `{ table }`, or `{ waiting, message }`, or null. */
   function selectedInput() {
     const source = getInputSource();
     return source ? getInputTable(source) : null;
@@ -273,7 +274,7 @@ export function openRunDetailModal({
 
   function applyRunningLock() {
     runBtn.disabled = false;
-    runBtn.textContent = 'Stop generation';
+    runBtn.textContent = 'Stop';
     runBtn.classList.remove('btn-primary');
     runBtn.classList.add('btn-secondary', 'btn-danger');
     inputsListEl.querySelectorAll('select, input').forEach((el) => { el.disabled = true; });
@@ -313,7 +314,7 @@ export function openRunDetailModal({
     const status = refreshInputStatus();
     if (isCompleted()) {
       runBtn.disabled = !historyMode;
-      runBtn.textContent = 'Generate again';
+      runBtn.textContent = 'Run again';
       runBtn.classList.remove('btn-primary', 'btn-danger');
       runBtn.classList.add('btn-secondary');
       if (historyMode) applyUnlock();
@@ -468,11 +469,11 @@ export function openRunDetailModal({
       if (typeof onToggleOutputCollapse === 'function') {
         bindOutputColumnCollapseHeader(
           thIndex,
-          'Output: # — Run output row index. Click any output column header to hide output columns.',
+          'Output: # — Output row index. Click any output column header to hide output columns.',
           'Click to expand output columns.',
         );
       } else {
-        thIndex.title = 'Run output row index (row_index + 1)';
+        thIndex.title = 'Output row index (row_index + 1)';
       }
       headerRow.appendChild(thIndex);
       outputFields.forEach((f) => {
@@ -675,12 +676,12 @@ export function openRunDetailModal({
     const headerSet = new Set(headers);
     inputsListEl.innerHTML = '';
     if (inputFields.length === 0) {
-      inputsListEl.innerHTML = `<p class="run-detail-placeholder">${getPromptId() ? 'No prompt inputs.' : "Drag a Prompt onto this Run's prompt port first."}</p>`;
+      inputsListEl.innerHTML = `<p class="run-detail-placeholder">${getPromptId() ? 'No prompt inputs.' : "Drag a Prompt onto this Generate's prompt port first."}</p>`;
       refreshButton();
       return;
     }
     if (!input) {
-      inputsListEl.innerHTML = `<p class="run-detail-placeholder">${escapeHtml("Drag a Dataset or a step output onto this Run's input port first.")}</p>`;
+      inputsListEl.innerHTML = `<p class="run-detail-placeholder">${escapeHtml("Drag a Dataset or a step output onto this Generate's input port first.")}</p>`;
       refreshButton();
       return;
     }
@@ -776,7 +777,7 @@ export function openRunDetailModal({
   attachModalPaneCycle({
     overlay,
     bothLabel: 'Show both panels',
-    leftOnlyLabel: 'Show run settings panel only',
+    leftOnlyLabel: 'Show Generate settings panel only',
     rightOnlyLabel: 'Show results panel only',
   });
   if (history) attachRunHistoryPicker({
@@ -831,7 +832,7 @@ export function openRunDetailModal({
       selectedCredentialId = (node?.dataset?.runCredentialId || '').trim();
     }
     if (!selectedCredentialId && !emptyInput) {
-      formErrorEl.textContent = 'No Run model: set a default Run model in Settings.';
+      formErrorEl.textContent = 'No Generate model: set a default Generate model in Settings.';
       formErrorEl.hidden = false;
       return;
     }

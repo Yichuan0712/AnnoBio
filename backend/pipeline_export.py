@@ -116,7 +116,7 @@ def _prompt_module(
         + "from pathlib import Path\n\n"
         + "import pandas as pd\n\n"
         + "from engine.base import BaseEngine, run_prompt_step\n\n\n"
-        + "# This configuration is the user's selected Prompt and Run, exported by AnnoBio.\n"
+        + "# This configuration is the user's selected Prompt and Generate node, exported by AnnoBio.\n"
         + "# API keys are intentionally absent; set them in .env or the process environment.\n"
         + "# MODEL_CONFIG is a placeholder example; replace its model before running.\n"
         + f"PROMPT_NAME = {_python_literal(name)}\n"

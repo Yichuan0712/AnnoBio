@@ -674,7 +674,7 @@ export function openSettingsModal() {
                   <div class="model-settings-tab-row">
                     <div class="review-detail-view-switch model-settings-view-switch" role="tablist" aria-label="Settings options">
                       <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" aria-controls="settings-panel-credentials" id="settings-tab-credentials" data-tab="credentials">New credential</button>
-                      <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-run" id="settings-tab-run" data-tab="run">Run</button>
+                      <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-run" id="settings-tab-run" data-tab="run">Generate</button>
                       <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-review" id="settings-tab-review" data-tab="review">Optimize</button>
                       <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-agent" id="settings-tab-agent" data-tab="agent">Agent</button>
                     </div>
@@ -682,7 +682,7 @@ export function openSettingsModal() {
                   <div class="review-detail-tab-panels model-settings-tab-panels">
                     <div class="review-detail-tab-panel review-detail-tab-panel--active" id="settings-panel-credentials" role="tabpanel" aria-labelledby="settings-tab-credentials" data-panel="credentials">
                       <div class="defaults-page-scroll settings-credentials-tab-body">
-                        <p class="settings-tab-intro">A credential is a model ID plus the API key that pays for it. Add one through LiteLLM, which reaches most providers and your own server through Base URL, or connect an OpenRouter account. Credentials appear on the left, where Test checks them, and can then be used by Runs, Optimize nodes and the Agent.</p>
+                        <p class="settings-tab-intro">A credential is a model ID plus the API key that pays for it. Add one through LiteLLM, which reaches most providers and your own server through Base URL, or connect an OpenRouter account. Credentials appear on the left, where Test checks them, and can then be used by Generate nodes, Optimize nodes and the Agent.</p>
                         <div id="model-settings-credentials-add" class="model-settings-credentials-add">
                           <div class="credentials-add-method-row">
                             <label class="dataset-meta-label" for="credentials-add-method-select">Add credential</label>
@@ -730,25 +730,25 @@ export function openSettingsModal() {
                     </div>
                     <div class="review-detail-tab-panel" id="settings-panel-run" role="tabpanel" aria-labelledby="settings-tab-run" data-panel="run">
                       <div class="defaults-page-scroll">
-                          <p class="settings-tab-intro">A Run sends its prompt to a model once per input row. Choose a model to see and change its Max tokens and Concurrency; the model chosen when you save is preselected when you create a Run. With None chosen, they are the values for models that have none of their own. Max retries applies to every model. Running more rows at once finishes sooner but can hit the provider's rate limits.</p>
+                          <p class="settings-tab-intro">A Generate sends its prompt to a model once per input row. Choose a model to see and change its Max tokens and Concurrency; the model chosen when you save is preselected when you create a Generate. With None chosen, they are the values for models that have none of their own. Max retries applies to every model. Running more rows at once finishes sooner but can hit the provider's rate limits.</p>
                           <div class="defaults-row">
                             <div class="defaults-field defaults-field--full">
                               <label class="dataset-meta-label" for="settings-default-run-credential">Model</label>
-                              <select id="settings-default-run-credential" class="credentials-select dataset-meta-input" aria-label="Default model for Run">
+                              <select id="settings-default-run-credential" class="credentials-select dataset-meta-input" aria-label="Default model for Generate">
                                 <option value="">${selectPlaceholderLabel('None (select each time)')}</option>
                               </select>
                             </div>
                             <div class="defaults-field">
                               <label class="dataset-meta-label" for="settings-run-max-tokens">Max tokens (256–131072)</label>
-                              <input type="number" id="settings-run-max-tokens" class="dataset-meta-input" min="256" max="131072" value="8192" aria-label="Run max tokens" />
+                              <input type="number" id="settings-run-max-tokens" class="dataset-meta-input" min="256" max="131072" value="8192" aria-label="Generate max tokens" />
                             </div>
                             <div class="defaults-field">
                               <label class="dataset-meta-label" for="settings-run-max-retries">Max retries on error (0–5)</label>
-                              <input type="number" id="settings-run-max-retries" class="dataset-meta-input" min="0" max="5" value="2" aria-label="Run max retries" />
+                              <input type="number" id="settings-run-max-retries" class="dataset-meta-input" min="0" max="5" value="2" aria-label="Generate max retries" />
                             </div>
                             <div class="defaults-field">
                               <label class="dataset-meta-label" for="settings-run-concurrency">Concurrency (1–10)</label>
-                              <input type="number" id="settings-run-concurrency" class="dataset-meta-input" min="1" max="10" value="4" aria-label="Run concurrency" />
+                              <input type="number" id="settings-run-concurrency" class="dataset-meta-input" min="1" max="10" value="4" aria-label="Generate concurrency" />
                             </div>
                           </div>
                       </div>
@@ -896,7 +896,7 @@ export function openSettingsModal() {
   const footerAdd = overlay.querySelector('#settings-footer-add');
 
   /*
-   * The model chosen at the top of the Run, Optimize and Agent tabs is the default model, and these
+   * The model chosen at the top of the Generate, Optimize and Agent tabs is the default model, and these
    * fields show and edit that model's own values (perModelSettings.js). Saved as model_settings.
    */
   const modelState = { shared: {}, modelSettings: {} };

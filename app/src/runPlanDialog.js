@@ -4,7 +4,7 @@
  * runs, in order. A step card shows that node on the canvas. Problems keep it from starting.
  */
 
-const KIND_LABELS = { run: 'Run prompt', process: 'Process data' };
+const KIND_LABELS = { run: 'Generate', process: 'Process data' };
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -36,7 +36,7 @@ export function runPlanView(plan, { modelLabel = (id) => id } = {}) {
   const stepIds = new Set(plan.steps.map((step) => step.nodeId));
   const target = plan.steps.at(-1);
   return {
-    title: `${plan.scope === 'this' ? 'Execute' : 'Execute to'} "${target?.name || 'this step'}"`,
+    title: `${plan.scope === 'this' ? 'Run' : 'Run to'} "${target?.name || 'this step'}"`,
     inputs: plan.inputs.map((input) => ({
       nodeId: input.nodeId,
       text: `${input.name} · ${input.rows == null ? 'unknown rows' : plural(input.rows, 'row')} · read by ${input.readBy.map((id) => names.get(id) || id).join(', ')}`,
@@ -47,7 +47,7 @@ export function runPlanView(plan, { modelLabel = (id) => id } = {}) {
     // Problems not about a step or input of this plan (for example the target itself is not a step).
     otherProblems: plan.problems.filter((problem) => !stepIds.has(problem.nodeId) && !plan.inputs.some((input) => input.nodeId === problem.nodeId))
       .map((problem) => problem.message),
-    // Only when a Run will run: Process steps make no model calls.
+    // Only when a Generate will run: Process steps make no model calls.
     calls: !plan.steps.some((step) => step.kind === 'run' && step.action !== 'reuse') ? ''
       : plan.calls == null ? 'Model calls: unknown until earlier steps finish.' : `Model calls: ${plan.calls.toLocaleString('en-US')}`,
     hasProblems: plan.problems.length > 0,

@@ -2,7 +2,7 @@
  * Run to here (docs/design/RUN_TO_HERE_PLAN.md step 2): runs a plan from runPlan.js one step after
  * another, through the same single-step functions the node windows use, so every result lands in
  * its node's History as usual. Nothing about the task is saved: running it again plans again, which
- * reuses the finished steps and continues a Run stopped part way.
+ * reuses the finished steps and continues a Generate stopped part way.
  */
 import { planRunTo } from './runPlan.js';
 import { executeProcessStep, executeRunStep } from './stepExecution.js';
@@ -10,7 +10,7 @@ import { holdNodes, isTaskLocked } from './runTaskLocks.js';
 
 const nodeIdOf = (node) => String(node?.nodeId || node?.id || '').trim();
 
-/** What the task holds: every step, the Prompt of each Run and every Dataset read. */
+/** What the task holds: every step, the Prompt of each Generate and every Dataset read. */
 export function planHeldNodeIds(state, plan) {
   const ids = new Set(plan.steps.map((step) => step.nodeId));
   for (const step of plan.steps) {
@@ -33,7 +33,7 @@ export function samePlanSteps(a, b) {
  * @param {object} env the canvas workspace (stepExecution.js)
  * @param {{ context: { settings?: object, credentialIds?: Set<string> }, planOptions?: object, signal?: AbortSignal,
  *   approvedPlan?: object, onStep?: (step: object, task: object) => void }} options planOptions: as for
- *   planRunTo (Execute this step, run again)
+ *   planRunTo (Run this step, run again)
  *   approvedPlan: the plan the user confirmed; the run is refused when the canvas now plans otherwise
  * @returns {Promise<{ status: 'completed'|'failed'|'stopped', error?: string, plan: object,
  *   steps: Array<{ nodeId, name, kind, action, status: 'reused'|'pending'|'running'|'completed'|'failed'|'stopped'|'not-started',
@@ -84,7 +84,7 @@ export async function runTo(targetId, env, { context = {}, planOptions = {}, sig
       } catch (error) {
         outcome = { status: 'failed', lines: [`"${step.name}": ${error instanceof Error ? error.message : String(error)}`] };
       }
-      // A Run that ends short (stopped from its window, or interrupted) continues when run again.
+      // A Generate that ends short (stopped from its window, or interrupted) continues when run again.
       const status = outcome.status === 'completed' ? 'completed'
         : outcome.status === 'failed' ? 'failed' : 'stopped';
       const node = env.getCanvasState().nodes.find((entry) => nodeIdOf(entry) === step.nodeId);

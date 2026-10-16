@@ -52,7 +52,7 @@ test('an Optimize keeps the model it ran with when its Evaluate picks another', 
   assert.equal(after.review.get('review').inputs.reviewCredentialId, 'model-1');
 });
 
-test('Score and Review have no current analysis key without a Run result', async () => {
+test('Score and Review have no current analysis key without a Generate result', async () => {
   const keys = await analysisInputKeys(state(), {});
   assert.equal(keys.score.size, 0);
   assert.equal(keys.review.size, 0);

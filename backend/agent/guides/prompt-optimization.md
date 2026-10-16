@@ -5,7 +5,7 @@
 Prompts are improved from evidence, not by rewriting them blind:
 
 1. Run the prompt on a Dataset that has ground truth (a sampled subset is fine while iterating).
-2. Evaluate the Run.
+2. Evaluate the Generate.
 3. Optimize the prompt using the evaluation results. An Optimize node analyses the unmatched rows and proposes concrete edits: the old
    sentence, the new sentence and the reason.
 4. Verify suggestions. Verification re-runs the prompt with the edit on the rows it targets and reports
@@ -39,7 +39,7 @@ not attributable to the prompt.
 The Prompt Version tab shows each prompt family as a left-to-right tree, including prompts that
 have not been run. Branch labels identify Manual edit, Agent edit, or Optimize and its method when
 recorded. Click a node to locate and highlight its Prompt on the canvas; click a branch or its label to compare the parent and child.
-Independent duplicates start their own families. Inspect the Run and Evaluate nodes to compare results;
+Independent duplicates start their own families. Inspect the Generate and Evaluate nodes to compare results;
 this panel displays version ancestry rather than evaluation metrics.
 
 The workspace summary gives the same version links, and each Evaluate line gives the same precision,
@@ -56,11 +56,11 @@ Optimize nodes use the review method set in Settings → Optimize:
 
 ## Advising the user
 
-- Find out where the pipeline stands first: does the prompt already have a Run, an Evaluate node, an Optimize node, a
+- Find out where the pipeline stands first: does the prompt already have a Generate, an Evaluate node, an Optimize node, a
   newer version? Continue from the furthest point instead of starting over.
 - Before optimising, check the evaluation is trustworthy: read some unmatched rows. If most failures
   are formatting or ground-truth problems, fix the Evaluate rules or the data, not the prompt.
-- Each step costs model calls (Runs, Optimize nodes and verification all do), so confirm with the user before
+- Each step costs model calls (Generate steps, Optimize nodes and verification all do), so confirm with the user before
   recommending a full cycle on a large Dataset, and suggest a Sampler subset while iterating.
 - After a cycle, report the metric change between versions and the rows that changed, then ask the user
   whether to continue, stop, or try something else.

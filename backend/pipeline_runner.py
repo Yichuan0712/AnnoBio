@@ -98,8 +98,8 @@ class PipelineRunConflict(RuntimeError):
 
 
 def _apply_model_settings(job: dict, settings: dict, credential_id: str, node_overrides: Any) -> None:
-    """The Run's model's own Max tokens / Concurrency (Settings, "Per model") replace the shared
-    values the compiler used; settings a Run node saved for itself still win."""
+    """The Generate's model's own Max tokens / Concurrency (Settings, "Per model") replace the shared
+    values the compiler used; settings a Generate node saved for itself still win."""
     if isinstance(node_overrides, str):
         try:
             node_overrides = json.loads(node_overrides or "{}")
@@ -351,7 +351,7 @@ class PipelineRunner:
             run_node_id = str(job["config"]["model_binding"]["run_node_id"])
             credential_id = str((nodes.get(run_node_id) or {}).get("runCredentialId") or default_credential).strip()
             if not credential_id:
-                raise ValueError(f'Run node "{run_node_id}" has no credential configured.')
+                raise ValueError(f'Generate node "{run_node_id}" has no credential configured.')
             credential = self.credential_resolver(credential_id)
             if not credential:
                 raise ValueError(f'Credential "{credential_id}" was not found.')

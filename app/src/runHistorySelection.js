@@ -37,7 +37,7 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
   const desired = new Map();
   const selectedRecords = new Map();
   const promptEdges = new Map();
-  const runInputs = new Map(); // Run node id -> input source { nodeId, port, kind }
+  const runInputs = new Map(); // Generate node id -> input source { nodeId, port, kind }
   const processInputs = new Map(); // Process node id -> { primary: source, inputs: [{ nodeId, port, kind, alias }] }
   const active = new Set();
   const recordCache = new Map();
@@ -106,7 +106,7 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
       if (record.kind === 'run') {
         const prompt = record.inputs.prompt;
         const dataset = record.inputs.dataset;
-        if (!prompt?.nodeId || !dataset?.nodeId) throw new Error(`Run history inputs are incomplete: ${id}`);
+        if (!prompt?.nodeId || !dataset?.nodeId) throw new Error(`Generate history inputs are incomplete: ${id}`);
         demand(prompt.nodeId, 'prompt', {
           text: String(prompt.text || ''), outputFormat: prompt.outputFormat || { returnShape: 'single', fields: [] },
           inputTypes: prompt.inputTypes || {},
@@ -165,7 +165,7 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
     return (inputs || []).some((input) => input?.kind === 'step' && input.recordId === upstreamId);
   }
 
-  // Selecting any point in a saved Pipeline restores the matching Run/Process records on both
+  // Selecting any point in a saved Pipeline restores the matching Generate/Process records on both
   // sides. When the same downstream node was rerun from one parent, retain its current attempt if
   // compatible; otherwise choose the latest saved attempt for that parent.
   if (recordEntries.length) {

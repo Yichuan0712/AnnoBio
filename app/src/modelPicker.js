@@ -1,5 +1,5 @@
 /**
- * The model picker beside Create Run and Optimize prompt: the credentials whose Test passed in
+ * The model picker beside Create Generate and Optimize prompt: the credentials whose Test passed in
  * Settings → Credentials. The node created by the button keeps the picked model.
  */
 
