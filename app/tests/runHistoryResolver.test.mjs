@@ -145,3 +145,54 @@ test('a step whose inputs changed points to its last result, which nothing downs
   const gone = await resolve(stale.state, indexOf(migrated.records.filter((record) => record.nodeId !== 'run')));
   assert.equal(nodeOf(gone, 'run').historyStaleRecordId, undefined);
 });
+
+test('saved results still become Historical when a project has History but no current record pointers', async () => {
+  const stored = await recordGraph(graph);
+  const changed = structuredClone(stored.state);
+  changed.nodes.find(node => node.nodeId === 'input').datasetContent.rows[0][0] = 'changed';
+  const resolved = await resolveHistoryCanvasState(changed, {
+    index: indexOf(stored.records), loadRecord: async id => stored.records.find(record => record.id === id),
+  });
+  for (const record of stored.records) {
+    const node = resolved.state.nodes.find(node => node.nodeId === record.nodeId);
+    assert.equal(node.historyStaleRecordId, record.id);
+    assert.equal(node.historyRecordId, undefined);
+  }
+  assert.deepEqual(resolved.currentRecordIds, {});
+});
+
+test('restoring inputs retains the chosen older attempt rather than silently selecting a newer identical result', async () => {
+  const stored = await recordGraph(graph);
+  const originalRun = stored.records.find(record => record.kind === 'run');
+  const records = [...stored.records, { ...structuredClone(originalRun), id: 'newer-identical-attempt' }];
+  const options = { index: indexOf(records), loadRecord: async id => records.find(record => record.id === id) };
+  const state = structuredClone(stored.state);
+  state.nodes.find(node => node.nodeId === 'run').historyRecordId = originalRun.id;
+  const before = structuredClone(state.nodes.find(node => node.nodeId === 'input').datasetContent);
+  state.nodes.find(node => node.nodeId === 'input').datasetContent.rows[0][0] = 'edited';
+  const stale = await resolveHistoryCanvasState(state, options);
+  assert.equal(stale.state.nodes.find(node => node.nodeId === 'run').historyStaleRecordId, originalRun.id);
+  stale.state.nodes.find(node => node.nodeId === 'input').datasetContent = before;
+  const restored = await resolveHistoryCanvasState(stale.state, options);
+  assert.equal(restored.currentRecordIds.run, originalRun.id);
+  assert.equal(restored.currentRecordIds.process, stored.records.find(record => record.kind === 'process').id);
+});
+
+test('changed inputs retain partial stopped results as Historical without allowing downstream to consume them', async () => {
+  const stored = await recordGraph(graph);
+  const run = stored.records.find(record => record.kind === 'run');
+  run.status = 'stopped';
+  const options = { index: indexOf(stored.records), loadRecord: async id => stored.records.find(record => record.id === id) };
+  const state = structuredClone(stored.state);
+  state.nodes.find(node => node.nodeId === 'run').historyRecordId = run.id;
+  state.nodes.find(node => node.nodeId === 'input').datasetContent.rows[0][0] = 'edited';
+  const stale = await resolveHistoryCanvasState(state, options);
+  const staleRun = stale.state.nodes.find(node => node.nodeId === 'run');
+  assert.equal(staleRun.historyStaleRecordId, run.id);
+  assert.equal(staleRun.runResumable, undefined);
+  assert.deepEqual(stepOutputTable(stale.state, { nodeId: 'run', port: 'result' }), { waiting: 'stale' });
+  stale.state.nodes.find(node => node.nodeId === 'input').datasetContent = structuredClone(graph.nodes.find(node => node.nodeId === 'input').datasetContent);
+  const restored = await resolveHistoryCanvasState(stale.state, options);
+  assert.equal(restored.currentRecordIds.run, run.id);
+  assert.equal(restored.state.nodes.find(node => node.nodeId === 'run').runResumable, true);
+});

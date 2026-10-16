@@ -93,7 +93,7 @@ function pipelineLines(canvasState, lookup, selections = []) {
   pipelines.forEach((pipeline, index) => {
     const selection = selections.find((item) => item.id === String(pipeline?.id || `pipeline-index-${index}`));
     const source = selection?.source === 'panel' ? 'panel' : 'default';
-    lines.push(`Pipeline ${index + 1} [${String(pipeline?.id || `pipeline-index-${index}`)}] (${source === 'panel' ? 'current panel selection' : 'default route; Pipeline panel is not mounted'}):`);
+    lines.push(`${pipeline.name || `Pipeline ${index + 1}`} [${String(pipeline?.id || `pipeline-index-${index}`)}] (${source === 'panel' ? 'current panel selection' : 'default route; Pipeline panel is not mounted'}):`);
     lines.push(...routeLines(getVisibleRoute(selection?.route || buildSelectedRoute(pipeline, new Map())), lookup, '  ', source, canvasState));
   });
   return lines;

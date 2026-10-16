@@ -210,12 +210,10 @@ export function buildSelectedRoute(pipeline, selectedByChoiceId) {
     const selected = chooseOption(choiceId, nextOptions, selectedByChoiceId, preferredValue);
     if (!selected) return;
 
-    const promptOptionCount = nextOptions.filter((option) => option.kind === 'prompt').length;
+    // A Generate step is named by its Prompt and its own name, even when it is the only choice.
     const displayOptions = nextOptions.map((option) => ({
       ...option,
-      label: option.kind === 'prompt' && promptOptionCount > 1
-        ? `${option.promptName} — ${option.runName}`
-        : option.label || option.promptName,
+      label: option.kind === 'prompt' ? `${option.promptName} — ${option.runName}` : option.label,
     }));
     out.push({
       kind: selected.kind,

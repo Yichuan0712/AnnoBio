@@ -1,4 +1,11 @@
-/** Prompt families follow version edges and Optimize → Evaluate → Generate → Prompt ancestry. */
+/**
+ * Prompt families follow version edges and Optimize → Evaluate → Generate → Prompt ancestry.
+ * Each family also lists its rounds: one Evaluate & Optimize step per Optimize (or per Evaluate
+ * not optimized yet) reached from a version through Generate → Evaluate.
+ */
+import { generateDisplayName } from './nodeLabels.js';
+import { runInputSource, stepSourceLabel } from './stepInputs.js';
+
 const nodeId = (node) => String(node?.nodeId || node?.id || '');
 
 const METHOD_NAMES = {
@@ -6,6 +13,16 @@ const METHOD_NAMES = {
   gepa: 'GEPA', miprov2: 'MIPROv2', bootstrap_fewshot: 'Bootstrap Few-Shot',
   textgrad: 'TextGrad', copro: 'COPRO', simba: 'SIMBA',
 };
+
+const methodName = (methodId) => (methodId ? METHOD_NAMES[methodId] || methodId : '');
+/** The method chosen for an Optimize, else the one its result records it used. */
+function reviewMethodId(review) {
+  let result = review?.reviewResult;
+  if (typeof result === 'string') {
+    try { result = JSON.parse(result); } catch (_) { result = null; }
+  }
+  return String(review?.reviewMethodId || result?.review_method_id || '').trim();
+}
 
 export function buildPromptFamilies(canvasState) {
   const nodes = Array.isArray(canvasState?.nodes) ? canvasState.nodes : [];
@@ -33,10 +50,10 @@ export function buildPromptFamilies(canvasState) {
     const promptId = fromOf('prompt-to-run', runId);
     if (!isType(scoreId, 'score') || !isType(runId, 'run') || !isType(promptId, 'prompt') || promptId === toId) continue;
     const review = byId.get(reviewId);
-    const methodId = String(byId.get(toId)?.optimizationMethodId || review.reviewMethodId || '').trim();
+    const methodId = String(byId.get(toId)?.optimizationMethodId || '').trim() || reviewMethodId(review);
     parentOf.set(toId, { parentId: promptId, via: 'review', reviewId,
       reviewName: String(review.promptReviewName || review.name || 'Optimize'),
-      changeLabel: methodId ? `Optimize · ${METHOD_NAMES[methodId] || methodId}` : 'Optimize' });
+      method: methodName(methodId), changeLabel: methodId ? `Optimize · ${methodName(methodId)}` : 'Optimize' });
   }
 
   // Malformed imported cycles become a tree rooted at their first Prompt in canvas order.
@@ -63,14 +80,57 @@ export function buildPromptFamilies(canvasState) {
     if (!children.has(parent)) children.set(parent, []);
     children.get(parent).push(id);
   }
+  const targetsOf = (type, fromId, toType) => [...new Set(connections
+    .filter((edge) => edge?.type === type && String(edge.fromId) === fromId).map((edge) => String(edge.toId)))]
+    .filter((id) => isType(id, toType));
+  const groundTruthName = (score) => {
+    const dataset = byId.get(String(score?.scoreGroundTruthId || '').trim());
+    return dataset ? String(dataset.name || '').trim() || 'Dataset' : '';
+  };
+  /** Applied Optimizes group their versions by method, since a rerun with another method can apply again. */
+  function roundsFrom(promptId) {
+    const rounds = [];
+    for (const runId of targetsOf('prompt-to-run', promptId, 'run')) {
+      const input = runInputSource(canvasState, runId);
+      for (const scoreId of targetsOf('run-to-score', runId, 'score')) {
+        const score = byId.get(scoreId);
+        const base = { promptId, runId, scoreId, reviewId: '', reviewName: '', method: '', childIds: [],
+          runName: generateDisplayName(byId.get(runId)?.runName), scoreName: String(score.scoreName || 'Evaluate'),
+          inputName: input ? stepSourceLabel(canvasState, input) : '', groundTruthName: groundTruthName(score) };
+        const reviewIds = targetsOf('score-to-prompt-review', scoreId, 'promptReview');
+        if (!reviewIds.length) rounds.push({ ...base, id: `score:${scoreId}`, status: 'notOptimized' });
+        for (const reviewId of reviewIds) {
+          const review = byId.get(reviewId);
+          const reviewed = { ...base, reviewId, reviewName: String(review.promptReviewName || review.name || 'Optimize') };
+          const applied = new Map();
+          for (const childId of children.get(promptId) || []) {
+            const link = parentOf.get(childId);
+            if (link.reviewId !== reviewId) continue;
+            if (!applied.has(link.method)) applied.set(link.method, []);
+            applied.get(link.method).push(childId);
+          }
+          for (const [method, childIds] of applied) {
+            rounds.push({ ...reviewed, id: `review:${reviewId}:${method}`, status: 'applied', method, childIds });
+          }
+          if (!applied.size) {
+            rounds.push({ ...reviewed, id: `review:${reviewId}`, status: 'notApplied',
+              method: methodName(reviewMethodId(review)) });
+          }
+        }
+      }
+    }
+    return rounds;
+  }
   return prompts.filter((id) => !parentOf.has(id)).map((rootId) => {
     const versions = [];
+    const rounds = [];
     function visit(promptId, depth) {
       versions.push({ promptId, name: String(byId.get(promptId)?.name || 'Prompt'), depth,
-        parentId: '', via: '', reviewName: '', changeLabel: '', ...parentOf.get(promptId) });
+        parentId: '', via: '', reviewName: '', method: '', changeLabel: '', ...parentOf.get(promptId) });
+      rounds.push(...roundsFrom(promptId));
       for (const child of children.get(promptId) || []) visit(child, depth + 1);
     }
     visit(rootId, 0);
-    return { rootId, versions };
+    return { rootId, versions, rounds };
   });
 }

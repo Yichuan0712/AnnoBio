@@ -75,16 +75,29 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
   const resolvedNodes = new Map();
   const visiting = new Set();
 
-  /** The completed record a node showed last, if it is still in History. */
-  function staleEntry(node) {
-    const entry = byId.get(String(node.historyRecordId || node.historyStaleRecordId || ''));
-    return entry && entry.nodeId === nodeId(node) && entry.kind === node.type && entry.status === 'completed' ? entry : null;
+  /** Preserve the last displayed result, including useful partial progress, without making it live. */
+  async function staleEntry(node) {
+    const valid = entry => entry && entry.nodeId === nodeId(node) && entry.kind === node.type
+      && ['completed', 'stopped', 'failed'].includes(entry.status);
+    const candidates = [byId.get(node.historyRecordId), byId.get(node.historyStaleRecordId), ...indexEntries.slice().reverse()].filter(valid);
+    for (const entry of candidates) {
+      if (entry.status === 'completed') return entry;
+      if (!recordCache.has(entry.id)) recordCache.set(entry.id, Promise.resolve(loadRecord(entry.id)));
+      const record = await recordCache.get(entry.id);
+      if (!record || record.id !== entry.id || record.nodeId !== nodeId(node) || record.signature !== entry.signature) {
+        throw new Error(`History record is missing or invalid: ${entry.id}`);
+      }
+      const partial = node.type === 'run' ? record.results?.runResults?.length
+        : parsed(record.results?.dfResults, null);
+      if (partial) return entry;
+    }
+    return null;
   }
 
   async function recordFor(node, signature) {
     const key = `${nodeId(node)}\u0000${signature}`;
     const candidates = bySignature.get(key) || [];
-    const preferred = byId.get(String(node.historyRecordId || ''));
+    const preferred = byId.get(String(node.historyRecordId || node.historyStaleRecordId || ''));
     const selectedSignature = String(node.historySelectionSignature || '');
     const entry = preferred?.nodeId === nodeId(node)
       && (preferred?.signature === signature || selectedSignature === signature)
@@ -170,7 +183,7 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
         delete node.historyStaleRecordId;
         currentRecordIds[id] = record.id;
       } else {
-        const stale = staleEntry(node);
+        const stale = await staleEntry(node);
         clearResult(node);
         delete node.historyRecordId;
         delete node.historySelectionSignature;
@@ -193,12 +206,15 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
     const id = nodeId(node), signature = analyses.score.get(id)?.signature;
     const eligible = indexEntries.filter(entry => entry.kind === 'score' && entry.nodeId === id && entry.status === 'completed');
     const preferredId = node.historyRecordId || node.historyStaleRecordId;
-    const preferred = eligible.find(entry => entry.id === preferredId);
+    const preferred = eligible.find(entry => entry.id === preferredId) || eligible.at(-1);
     const matching = eligible.filter(entry => entry.signature === signature);
     let current = null;
     for (const entry of [preferred?.signature === signature ? preferred : null, ...matching.slice().reverse()].filter(Boolean)) {
       const record = await loadRecord(entry.id);
-      if (record?.evaluationVersion === 1 && record.id === entry.id && record.nodeId === id && record.signature === signature) { current = record; break; }
+      if (!record || record.id !== entry.id || record.nodeId !== id || record.kind !== 'score' || record.signature !== entry.signature) {
+        throw new Error(`History record is missing or invalid: ${entry.id}`);
+      }
+      if (record.evaluationVersion === 1 && record.status === 'completed' && record.signature === signature) { current = record; break; }
     }
     if (current) {
       node.historyRecordId = current.id;
@@ -208,6 +224,7 @@ export async function resolveHistoryCanvasState(state, { index, loadRecord }) {
       delete node.historyRecordId;
       // Keep the last snapshot visible even while an upstream Generate needs updating.
       if (preferred) node.historyStaleRecordId = preferred.id;
+      else delete node.historyStaleRecordId;
     }
   }
   return { state: next, currentRecordIds, missingResultNodeIds };

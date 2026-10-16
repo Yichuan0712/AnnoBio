@@ -83,13 +83,6 @@ export function attachRunHistoryPicker({ overlay, loadEntries, onSelect, onDelet
           current.textContent = 'Current result';
           top.appendChild(current);
         }
-        if (entry.optimizations?.length) {
-          const optimization = document.createElement('span');
-          optimization.className = 'modal-history-popup__status modal-history-popup__optimization';
-          optimization.textContent = 'Has optimization';
-          optimization.title = `Optimize nodes using this evaluation:\n${entry.optimizations.map(node => node.name).join('\n')}`;
-          top.appendChild(optimization);
-        }
         const description = document.createElement('span');
         description.className = 'modal-history-popup__fact';
         description.textContent = item.display.title || '';
@@ -102,6 +95,13 @@ export function attachRunHistoryPicker({ overlay, loadEntries, onSelect, onDelet
         row.append(top);
         if (description.textContent) row.appendChild(description);
         row.append(input, output);
+        // Optimize nodes fixed to this Evaluate record, on the line below its metrics.
+        if (entry.optimizations?.length) {
+          const optimization = document.createElement('span');
+          optimization.className = 'modal-history-popup__fact';
+          optimization.textContent = `Has optimization: ${entry.optimizations.map((node) => node.name).join(', ')}`;
+          row.appendChild(optimization);
+        }
         if (item.display.meta) {
           const detail = document.createElement('small');
           detail.textContent = item.display.meta;

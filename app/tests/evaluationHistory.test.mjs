@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { graph, recordGraph, content, indexOf } from './historyGraphFixture.mjs';
 import { RunHistorySession } from '../src/runHistorySession.js';
-import { runEvaluation, evaluationPayload, optimizationSourceIsEarlier } from '../src/evaluationHistory.js';
+import { runEvaluation, evaluationPayload, optimizationSourceIsEarlier, optimizationApplyBlockReason } from '../src/evaluationHistory.js';
 import { analysisInputKeys } from '../src/runAnalysisHistory.js';
 
 async function fixture() {
@@ -88,6 +88,19 @@ test('Evaluate becomes stale after configuration, GT, exclusion or upstream edit
   }
 });
 
+test('Evaluate recovers its Historical display from saved records without pointers and clears deleted stale references', async () => {
+  const f = await fixture(), record = await f.run();
+  f.state.nodes.find(node => node.nodeId === 'gt').datasetContent.rows[0][0] = 'changed';
+  const resolved = await f.session.resolve(f.state);
+  const score = resolved.state.nodes.find(node => node.nodeId === 'score');
+  assert.equal(score.historyRecordId, undefined);
+  assert.equal(score.historyStaleRecordId, record.id);
+  f.records.delete(record.id);
+  f.session.index = indexOf([...f.records.values()]);
+  const deleted = await f.session.resolve(resolved.state);
+  assert.equal(deleted.state.nodes.find(node => node.nodeId === 'score').historyStaleRecordId, undefined);
+});
+
 test('fixed Optimize identity and evidence survive new Evaluate attempts, missing live inputs, and method metadata', async () => {
   const f = await fixture(), first = await f.run();
   f.state.nodes.push({ type: 'promptReview', nodeId: 'opt', evaluateRecordId: first.id, evaluateNodeId: 'score' });
@@ -135,7 +148,10 @@ test('Optimize notices compare displayed History IDs independently of input fres
   const opt = { evaluateRecordId: 'e1' };
   assert.equal(optimizationSourceIsEarlier(opt, { historyStaleRecordId: 'e1' }), false);
   assert.equal(optimizationSourceIsEarlier(opt, { historyStaleRecordId: 'e2' }), true);
-  assert.equal(optimizationSourceIsEarlier(opt, null), false);
+  assert.equal(optimizationSourceIsEarlier(opt, null), true);
+  assert.equal(optimizationSourceIsEarlier(opt, {}), true);
+  assert.match(optimizationApplyBlockReason(opt, null), /source Evaluate node is unavailable/);
+  assert.match(optimizationApplyBlockReason(opt, {}), /not currently displayed/);
   assert.equal(optimizationSourceIsEarlier({}, { historyRecordId: 'e1' }), false);
 });
 

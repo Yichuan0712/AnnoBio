@@ -82,7 +82,7 @@ test('an output read by both a Generate and a merging Process splits, keeping th
       data('prep', 'join', 'df'), data('lookup', 'join', 'df_lookup')],
   };
   const pipelines = detectPipelines(state);
-  assert.deepEqual(pipelines.map(routeKinds), [['process:prep', 'prompt:p'], ['process:prep', 'process:join']]);
+  assert.deepEqual(pipelines.map(routeKinds), [['process:prep', 'prompt:p — Generate'], ['process:prep', 'process:join']]);
   assert.ok(!pipelines[0].steps.some((step) => step.datasets?.some((d) => d.datasetNodeId === 'lookup')));
 });
 
@@ -154,7 +154,7 @@ test('a Dataset saved from a step starts a new pipeline instead of chaining to i
       node('dataset', 'saved', { savedFrom: { kind: 'run', nodeId: 'r', port: 'result', recordId: 'rec' } }), node('process', 'clean')],
     connections: [edge('p', 'r', 'prompt-to-run'), data('raw', 'r'), data('saved', 'clean', 'df')],
   };
-  assert.deepEqual(detectPipelines(state).map(routeKinds), [['prompt:p'], ['process:clean']]);
+  assert.deepEqual(detectPipelines(state).map(routeKinds), [['prompt:p — Generate'], ['process:clean']]);
 });
 
 test('Process payload includes all explicit Dataset dependencies', () => {

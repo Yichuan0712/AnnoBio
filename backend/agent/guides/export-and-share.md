@@ -36,11 +36,12 @@ A route exports only if:
 
 If export fails, the panel shows the reason. Fix the named node and export again.
 
-## Prompt Version
+## Prompt
 
-The Prompt Version tab displays a left-to-right family tree with the origin of each version on its
-branch. Click a Prompt to locate and highlight it on the canvas, or a branch to compare versions. Export Prompt content from its
-node window; the family tree has no evaluation table or Excel export.
+The Prompt tab draws each prompt family left to right, like the Pipeline tab, with Prompt steps and
+Evaluate & Optimize steps between versions. Click a step to locate and highlight it on the canvas, or a
+version's Compare button to compare it with its parent. Export Prompt content from its node window; the
+Prompt tab has no evaluation table or Excel export.
 
 ## Gallery (web)
 

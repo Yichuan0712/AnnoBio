@@ -52,11 +52,11 @@ export const AGENT_TOOL_DEFINITIONS = [
   ),
   tool(
     PIPELINE_ACTION_TOOL,
-    'Ask the user to export the selected route of a Pipeline as a Python project zip. The user sees the route and must confirm before the download starts. Use get_workspace for pipeline_id. To run steps, use run_nodes with a run_to job instead.',
+    'Ask the user to rename a Pipeline or export its selected route as a Python project zip. The user confirms the action on a card. Use get_workspace for pipeline_id. To run steps, use run_nodes with a run_to job instead.',
     {
-      action: { type: 'string', enum: ['export'] },
+      action: { type: 'string', enum: ['export', 'rename'] },
       pipeline_id: { type: 'string', description: 'Exact Pipeline id shown by get_workspace.' },
-      name: { type: 'string', description: 'Optional export filename base.' },
+      name: { type: 'string', description: 'Required new Pipeline name for rename; optional export filename base for export.' },
       summary: { type: 'string', description: 'One sentence explaining this action to the user.' },
     },
     ['action', 'pipeline_id', 'summary'],

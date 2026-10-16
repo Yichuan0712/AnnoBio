@@ -181,8 +181,7 @@
   color: var(--diff-added-text, #15803d);
   background: var(--diff-added-bg, rgba(22, 163, 74, .12));
 }
-.modal-history-popup__current,
-.modal-history-popup__optimization {
+.modal-history-popup__current {
   color: var(--accent, #4677d5);
   background: color-mix(in srgb, var(--accent, #4677d5) 12%, transparent);
 }
@@ -8860,8 +8859,20 @@ body.wd-image-dragging .wd-image-thumb { cursor: grabbing; }
 .pipeline-overview-body { min-width: 0; overflow-x: hidden; }
 .pipeline-overview-card { min-width: 0; margin-bottom: 22px; }
 .pipeline-overview-card:last-child { margin-bottom: 0; }
-.pipeline-overview-card-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; }
-.pipeline-overview-card-title { font-size: 14px; margin: 0; }
+.pipeline-overview-card-header { display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; }
+.pipeline-overview-card-title { font-size: 14px; margin: 0; min-width: 0; max-width: 100%; }
+.pipeline-overview-name {
+  display: block; width: max-content; max-width: 100%; box-sizing: border-box; padding: 2px 4px;
+  border: 0; border-radius: var(--control-radius, 6px); background: transparent; color: inherit;
+  font: inherit; text-align: left; cursor: text; white-space: normal; overflow-wrap: anywhere;
+}
+.pipeline-overview-name:hover { background: var(--hover); }
+.pipeline-overview-name:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pipeline-overview-name-input {
+  max-width: min(480px, 100%); box-sizing: border-box; padding: 2px 4px; margin-left: -4px;
+  border: 1px solid var(--accent); border-radius: var(--control-radius, 6px);
+  background: var(--bg); color: var(--text); font: inherit; outline: none;
+}
 .pipeline-overview-card-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
 .pipeline-overview-export { flex: 0 0 auto; padding: 5px 10px; font-size: 12px; }
 .pipeline-overview-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 100%; margin: 0; padding: 0; list-style: none; }
@@ -8908,7 +8919,7 @@ body.wd-image-dragging .wd-image-thumb { cursor: grabbing; }
   border-radius: var(--control-radius, 6px); background: var(--bg); color: var(--text); font-family: inherit;
 }
 /* Pipeline overview: fixed columns keep branches aligned while each route scrolls horizontally.
-   These classes are separate from the cards shared with the Prompt Version panel. */
+   The Prompt panel draws its version families with the same flow classes. */
 .pipeline-flow-viewport {
   max-width: 100%; overflow: auto; padding: 2px 0 10px;
   scrollbar-width: thin; scrollbar-color: var(--border) transparent;

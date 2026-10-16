@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { processTrialInputs } from '../src/agent/canvas/processTrialInputs.js';
 import { inspectWorkflowNode, readNodeRows } from '../src/agent/canvas/workflowNodeInspector.js';
 import { planChangeSet } from '../src/agent/operations/changeSet.js';
+import { previewProposal, applyProposal } from '../src/agent/operations/proposals.js';
 import { previewRunRequest, executeRunRequest } from '../src/agent/execution/runJobs.js';
 import { executeAgentTool, AGENT_TOOL_DEFINITIONS } from '../src/agent/tools/agentTools.js';
 import { extractInputFields } from '../src/promptText.js';
@@ -296,7 +297,7 @@ function runtimeHarness(result = reviewResult(), overrides = {}) {
     ...(node.type === 'run' ? { runResults: node.runResults, runOutputFields: JSON.stringify([{ key: 'a' }]) } : {}),
     ...(node.type === 'score' ? { scoreGroundTruthId: 'gt', scoreMapping: JSON.stringify(node.scoreMapping) } : {}),
     ...(node.type === 'promptReview' ? { reviewResult: node.reviewResult, reviewInterrupted: '1' } : {}),
-  }, classList: { contains: (name) => name === `workflow-node--${node.type === 'promptReview' ? 'prompt-review' : node.type}` } }]));
+  }, style: {}, classList: { contains: (name) => name === `workflow-node--${node.type === 'promptReview' ? 'prompt-review' : node.type}` } }]));
   const pending = new Set();
   const requests = [];
   const runtime = createWorkflowCanvasRuntime({ getNodeById: (id) => elements.get(id), getConnections: () => state.connections,
@@ -346,6 +347,64 @@ test('canvas Apply reconciles History and blocks a version change before creatin
   assert.equal(created, 0);
   assert.equal(elements.get('rev').dataset.reviewResult, before);
 });
+
+test('canvas Apply uses the bound evaluation Prompt schema and rechecks its version after loading the snapshot', async () => {
+  for (const changeVersion of [false, true]) {
+    let elements, created;
+    const snapshot = { name: 'Original', text: 'Read {text}', outputFormat: { returnShape: 'table', fields: [{ key: 'old-field', type: 'str' }] }, inputTypes: { text: 'pdf' } };
+    const harness = runtimeHarness(reviewResult(), {
+      getEvaluationPayload: async () => {
+        if (changeVersion) elements.get('s').dataset.historyRecordId = 'evaluation-2';
+        return { prompt_snapshot: snapshot };
+      },
+      getPromptDataFromNode: node => node.dataset.nodeId === 'p' ? { name: 'Changed', outputFormat: { fields: [{ key: 'wrong' }] } } : created,
+      findUniquePromptName: name => name,
+      isPromptNameAlreadyUsed: () => false,
+      createPromptNode: options => {
+        created = options;
+        const node = { dataset: { nodeId: 'new-prompt' }, style: {} };
+        elements.set('new-prompt', node);
+        return node;
+      },
+      NEW_NODE_OFFSET: 20, updateContentSize: () => {}, updateEdges: () => {},
+    });
+    elements = harness.elements;
+    const applying = harness.runtime.applyReviewSuggestions({ reviewNodeId: 'rev', text: 'Read carefully {text}' });
+    if (changeVersion) {
+      await assert.rejects(applying, /different Evaluate History/);
+      assert.equal(created, undefined);
+    } else {
+      assert.equal((await applying).nodeId, 'new-prompt');
+      assert.deepEqual(created.outputFormat, snapshot.outputFormat);
+      assert.deepEqual(created.inputTypes, snapshot.inputTypes);
+      assert.equal(created.name, 'Original');
+    }
+  }
+});
+
+test('Agent Apply loads the original schema for preview and apply and refuses a version change during that load', async () => withSettings(async () => {
+  let state = canvas(), race = true;
+  const snapshot = { name: 'Original', text: 'Read {text}', outputFormat: { returnShape: 'table', fields: [{ key: 'original', type: 'str' }] }, inputTypes: { text: 'image' } };
+  find(state, 'p').outputFormat = { fields: [{ key: 'changed' }] };
+  const proposal = { operations: [{ op: 'apply_review', review: 'rev', suggestion_ids: ['1'] }] };
+  const workspace = { getCanvasState: () => state, extractInputFields,
+    getEvaluationPayload: async (_id, { recordId }) => {
+      assert.equal(recordId, 'evaluation-1');
+      if (race) find(state, 's').historyRecordId = 'evaluation-2';
+      return { prompt_snapshot: snapshot };
+    },
+    applyCanvasState: next => { state = next; },
+  };
+  const refused = await previewProposal(proposal, workspace);
+  assert.equal(refused.ok, false);
+  assert.match(refused.error, /different Evaluate History/);
+  race = false;
+  find(state, 's').historyRecordId = 'evaluation-1';
+  assert.equal((await previewProposal(proposal, workspace)).ok, true);
+  assert.equal((await applyProposal(proposal, workspace)).status, 'applied');
+  assert.deepEqual(state.nodes.at(-1).outputFormat, snapshot.outputFormat);
+  assert.deepEqual(state.nodes.at(-1).inputTypes, snapshot.inputTypes);
+}));
 
 test('the canvas Resume entry reuses the existing Optimize node and shared payload checks', async () => {
   const { runtime, requests } = runtimeHarness(reviewResult({ streamComplete: false }));

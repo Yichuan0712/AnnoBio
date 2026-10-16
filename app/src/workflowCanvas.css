@@ -275,10 +275,18 @@
   z-index: 10;
 }
 
-.workflow-node--selected,
-.workflow-node--pipeline-highlighted {
+.workflow-node--selected {
   outline: 2px solid var(--primary-btn-text, #2563eb);
   outline-offset: 2px;
+}
+
+/* Nodes located or hovered from the Pipeline and Prompt panels, or shown from the Run tab, a node
+   window or the Agent: thicker and amber, so they stand out from the blue selection outline.
+   Later in the file, so it wins on a selected node too. */
+.workflow-node--pipeline-highlighted,
+.workflow-node--located {
+  outline: 3px solid var(--locate-highlight, #f59e0b);
+  outline-offset: 3px;
 }
 
 /* Rubber-band select rectangle — tracked in viewport coordinates (see startMarqueeSelect in
@@ -661,10 +669,9 @@
   pointer-events: none;
 }
 
-/* Waiting for upstream data, or showing an evaluation/optimization that no longer matches. */
+/* Waiting for upstream data, or showing any result that no longer matches. */
 .workflow-node[data-waiting-for-upstream="1"],
-.workflow-node--score.workflow-node--stale,
-.workflow-node--prompt-review.workflow-node--stale {
+.workflow-node--stale {
   opacity: 0.6;
 }
 

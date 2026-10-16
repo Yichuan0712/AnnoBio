@@ -206,6 +206,18 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       }
     }
 
+    if (refNode?.dataset.evaluateRecordId && getEvaluationPayload) {
+      const payload = await getEvaluationPayload(refNode.dataset.evaluateNodeId || scoreNode?.dataset.nodeId,
+        { recordId: refNode.dataset.evaluateRecordId });
+      if (getCurrentProjectId() !== projectId || getNodeById(refNode.dataset.nodeId) !== refNode) {
+        throw new Error('The project changed. Open Optimize again before applying.');
+      }
+      const reason = optimizationApplyBlockReason(refNode.dataset, getNodeById(scoreNode?.dataset.nodeId)?.dataset);
+      if (reason) throw new Error(reason);
+      if (!payload.prompt_snapshot) throw new Error('The original Prompt snapshot is unavailable.');
+      sourcePromptData = payload.prompt_snapshot;
+    }
+
     let resolvedText = typeof text === 'string' ? text : '';
     if (!resolvedText.trim() && normalizedReviewNodeId) {
       const reviewNode = getReviewNodeById(normalizedReviewNodeId);

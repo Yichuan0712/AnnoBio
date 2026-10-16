@@ -5,13 +5,14 @@
  * for a Process's named outputs and for the Datasets one Process merges.
  *
  * The chosen route is what Export Python Project exports. Running is done with Run to here on a
- * step (docs/design/RUN_TO_HERE_PLAN.md); its runs are listed in the Executions tab.
+ * step (docs/design/RUN_TO_HERE_PLAN.md); its runs are listed in the Run tab.
  */
 import { showAlert } from './alertModal.js';
 import { iconRun } from './icons.js';
 import { layoutPipelineFlow } from './pipelineFlow.js';
 import { exportPythonPipeline } from './pipelineExportClient.js';
 import { buildSelectedRoute, exportRoutePayload, getVisibleRoute } from './pipelineRouteSelection.js';
+import { pipelineDisplayName } from './pipelineNames.js';
 
 const STEP_LABELS = { prompt: 'Generate', process: 'Process' };
 
@@ -20,6 +21,7 @@ function escapeHtml(str) {
   div.textContent = str;
   return div.innerHTML;
 }
+const escapeAttr = value => escapeHtml(value).replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 
 function renderPickerOrName(choiceId, options, selectedValue, title) {
   if (options.length === 1) return `<span class="pipeline-step-name">${escapeHtml(options[0].label)}</span>`;
@@ -92,13 +94,14 @@ function pipelineStepNodeIds(pipeline) {
   return ids;
 }
 
-function renderPipeline(pipeline, index, selectedByChoiceId) {
+function renderPipeline(pipeline, index, selectedByChoiceId, canRename) {
   const route = buildSelectedRoute(pipeline, selectedByChoiceId);
   const visibleRoute = getVisibleRoute(route);
+  const name = pipelineDisplayName(pipeline, index);
   return `
-    <div class="pipeline-overview-card" data-pipeline-index="${index}" data-pipeline-id="${escapeHtml(getPipelineViewId(pipeline, index))}">
+    <div class="pipeline-overview-card" data-pipeline-index="${index}" data-pipeline-id="${escapeHtml(getPipelineViewId(pipeline, index))}" data-pipeline-key="${escapeAttr(pipeline.nameKey || '')}">
       <div class="pipeline-overview-card-header">
-        <h3 class="pipeline-overview-card-title">Pipeline ${index + 1}</h3>
+        <h3 class="pipeline-overview-card-title">${canRename ? `<button type="button" class="pipeline-overview-name" title="${escapeAttr(`${name} — Click to rename`)}" aria-label="${escapeAttr(`Rename ${name}`)}">${escapeHtml(name)}</button>` : escapeHtml(name)}</h3>
         <div class="pipeline-overview-card-actions">
           <button type="button" class="btn btn-secondary pipeline-overview-export" data-pipeline-index="${index}">Export Python Project</button>
         </div>
@@ -129,6 +132,10 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     ? options.highlightCanvasNodes
     : () => {};
   let focusCanvasNodes = options.focusCanvasNodes || (() => {});
+  let onRenamePipeline = options.onRenamePipeline;
+  let editingName = null;
+  let finishNameEdit = null;
+  let deferredRender = false;
   let pipelines = [];
   let pipelineSignature = '';
   let refreshFrame = 0;
@@ -144,6 +151,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   // Agent reads the same picker state as the panel instead of rebuilding a default route.
   overlay.getPipelineSelections = () => (readPipelines?.() || []).map((pipeline, index) => ({
     id: getPipelineViewId(pipeline, index),
+    name: pipeline.name, nameKey: pipeline.nameKey,
     index,
     route: buildSelectedRoute(pipeline, selectedByChoiceId),
     nodeIds: [...pipelineStepNodeIds(pipeline)],
@@ -185,11 +193,13 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     }
   }
   function renderBody() {
+    if (editingName?.isConnected) { deferredRender = true; return; }
+    deferredRender = false;
     const scrollPositions = [...bodyEl.querySelectorAll('.pipeline-overview-card')].map(card => [card.dataset.pipelineId, card.querySelector('.pipeline-flow-viewport')?.scrollLeft || 0]);
     const focusChoice = bodyEl.contains(document.activeElement) ? document.activeElement?.dataset.choiceId : null;
     clearCanvasHighlight();
     bodyEl.innerHTML = pipelines.length > 0
-      ? pipelines.map((pipeline, index) => renderPipeline(pipeline, index, selectedByChoiceId)).join('')
+      ? pipelines.map((pipeline, index) => renderPipeline(pipeline, index, selectedByChoiceId, typeof onRenamePipeline === 'function')).join('')
       : `<p class="pipeline-overview-empty">${escapeHtml(emptyText)}</p>`;
     for (const card of bodyEl.querySelectorAll('.pipeline-overview-card')) {
       const position = scrollPositions.find(([id]) => id === card.dataset.pipelineId);
@@ -223,6 +233,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
       highlightCanvasNodes = nextOptions.highlightCanvasNodes;
     }
     if (typeof nextOptions.focusCanvasNodes === 'function') focusCanvasNodes = nextOptions.focusCanvasNodes;
+    if (typeof nextOptions.onRenamePipeline === 'function') onRenamePipeline = nextOptions.onRenamePipeline;
   };
   refresh();
 
@@ -253,13 +264,64 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
   });
 
   async function onPanelClick(event) {
+    const nameButton = event.target.closest?.('.pipeline-overview-name');
+    if (nameButton && typeof onRenamePipeline === 'function') {
+      const card = nameButton.closest('.pipeline-overview-card');
+      const pipeline = pipelines.find((item, index) => getPipelineViewId(item, index) === card.dataset.pipelineId);
+      if (!pipeline?.nameKey) return;
+      const nameKey = pipeline.nameKey;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'pipeline-overview-name-input';
+      input.value = nameButton.textContent;
+      input.size = Math.min(45, Math.max(12, input.value.length + 2));
+      input.setAttribute('aria-label', 'Pipeline name');
+      editingName = input;
+      nameButton.replaceWith(input);
+      let finished = false;
+      function finish(save, preserveExportTarget = false) {
+        if (finished) return;
+        finished = true;
+        editingName = null;
+        finishNameEdit = null;
+        try {
+          if (save && input.value.trim()) onRenamePipeline(nameKey, input.value.trim());
+        } catch (error) {
+          showAlert(error.message || 'Could not rename this Pipeline.', { title: 'Rename Pipeline' });
+        }
+        pipelines = readPipelines?.() || [];
+        pipelineSignature = JSON.stringify(pipelines);
+        const currentIndex = pipelines.findIndex(item => item.nameKey === nameKey);
+        if (currentIndex < 0 || (deferredRender && !preserveExportTarget)) renderBody();
+        else {
+          const name = pipelineDisplayName(pipelines[currentIndex], currentIndex);
+          nameButton.textContent = name;
+          nameButton.title = `${name} — Click to rename`;
+          nameButton.setAttribute('aria-label', `Rename ${name}`);
+          input.replaceWith(nameButton);
+        }
+      }
+      finishNameEdit = finish;
+      input.addEventListener('blur', event => finish(true, !!event.relatedTarget?.closest?.('.pipeline-overview-export')));
+      input.addEventListener('keydown', event => {
+        if (!['Enter', 'Escape'].includes(event.key) || event.isComposing) return;
+        event.preventDefault(); event.stopPropagation();
+        finish(event.key === 'Enter');
+        [...bodyEl.querySelectorAll('.pipeline-overview-card')].find(item => item.dataset.pipelineKey === nameKey)
+          ?.querySelector('.pipeline-overview-name')?.focus();
+      });
+      input.focus(); input.select();
+      return;
+    }
     if (!event.target.closest('select, button, input, label')) {
       const step = event.target.closest('[data-canvas-node-ids]');
       if (step) focusCanvasNodes(JSON.parse(decodeURIComponent(step.dataset.canvasNodeIds)));
     }
     const button = event.target.closest?.('.pipeline-overview-export');
     if (!button || button.disabled) return;
-    const pipelineIndex = Number.parseInt(button.getAttribute('data-pipeline-index') || '', 10);
+    finishNameEdit?.(true, true);
+    const key = button.closest('.pipeline-overview-card')?.dataset.pipelineKey;
+    const pipelineIndex = key ? pipelines.findIndex(item => item.nameKey === key) : Number.parseInt(button.getAttribute('data-pipeline-index') || '', 10);
     const pipeline = pipelines[pipelineIndex];
     if (!pipeline || !getCanvasState) {
       showAlert('The live canvas is unavailable for export.', { title: 'Cannot export Pipeline' });
@@ -276,7 +338,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
         ?.selectedOption?.label;
       const stepName = promptName || processName;
       await exportPythonPipeline({
-        name: stepName ? `${stepName} pipeline` : `pipeline-${pipelineIndex + 1}`,
+        name: pipeline.name || (stepName ? `${stepName} pipeline` : `pipeline-${pipelineIndex + 1}`),
         canvasState: getCanvasState(),
         route: exportRoutePayload(route),
       });
@@ -289,8 +351,14 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
         button.disabled = false;
         button.textContent = originalLabel;
       }
+      if (deferredRender) renderBody();
     }
   }
+  // Keep the export target in place until its click: committing on pointerdown blur can move it
+  // when the editable input and saved title have different widths.
+  bodyEl.addEventListener('pointerdown', event => {
+    if (editingName && event.target.closest?.('.pipeline-overview-export')) event.preventDefault();
+  });
   bodyEl.addEventListener('click', onPanelClick);
 
   bodyEl.addEventListener('keydown', (event) => {
@@ -301,6 +369,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
 
   function destroy() {
     if (refreshFrame) cancelAnimationFrame(refreshFrame);
+    finishNameEdit?.(false);
     clearCanvasHighlight();
     overlay.remove();
     document.removeEventListener('keydown', onKeyDown);

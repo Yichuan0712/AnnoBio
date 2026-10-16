@@ -1172,7 +1172,10 @@ export function planChangeSet(state, operations, ctx) {
       const run = score ? byId().get(next.connections.find((c) => c.type === 'run-to-score' && c.toId === score.nodeId)?.fromId) : null;
       const source = run ? byId().get(next.connections.find((c) => c.type === 'prompt-to-run' && c.toId === run.nodeId)?.fromId) : null;
       if (!source) fail(`Optimize "${nodeTitle(review)}" is not connected through a score and run to a prompt.`);
-      const originalText = typeof reviewResult.promptText === 'string' && reviewResult.promptText.trim()
+      const snapshot = ctx.evaluationPrompts?.get(review.evaluateRecordId);
+      if (review.evaluateRecordId && ctx.evaluationPrompts && !snapshot) fail('The original Prompt snapshot is unavailable. Refresh the proposal before applying.');
+      const sourcePrompt = snapshot || source;
+      const originalText = snapshot ? String(snapshot.text || '') : typeof reviewResult.promptText === 'string' && reviewResult.promptText.trim()
         ? reviewResult.promptText
         : String(source.text || '');
       const chosen = new Set(ids);
@@ -1184,13 +1187,13 @@ export function planChangeSet(state, operations, ctx) {
       const unverified = ids.filter((id) => (reviewResult.verify_states?.[id] || '') !== 'verified');
       if (unverified.length) warnings.push(`Not verified yet: suggestion ${unverified.join(', ')}. Its effect on the failing rows is unknown until the new version is run.`);
       review.reviewResult = JSON.stringify({ ...reviewResult, suggestions: marked, workingText: text });
-      const name = uniqueName(clean(op.name) || nodeTitle(source), takenNames('prompt'));
+      const name = uniqueName(clean(op.name) || nodeTitle(sourcePrompt), takenNames('prompt'));
       const node = addNode({
         type: 'prompt', nodeId: generateNodeId(), ...placeNear(review), name,
         note: String(op.note ?? `Created from Optimize "${nodeTitle(review)}" (suggestions ${ids.join(', ')}).`),
         text: normalizeText(text),
-        outputFormat: JSON.parse(JSON.stringify(source.outputFormat || { returnShape: 'single', fields: [] })),
-        inputTypes: { ...(source.inputTypes || {}) },
+        outputFormat: JSON.parse(JSON.stringify(sourcePrompt.outputFormat || { returnShape: 'single', fields: [] })),
+        inputTypes: { ...(sourcePrompt.inputTypes || {}) },
         nodeOrigin: 'agent',
       });
       connect(review.nodeId, node.nodeId, 'prompt-review-to-prompt');
