@@ -1,7 +1,114 @@
+import { mountModalDialog as mountPromptDialog } from './modalDialog.js';
+
 function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
+  return String(str ?? '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[char]);
+}
+
+export const PROMPT_OUTPUT_TYPES = [
+  { value: 'str', label: 'String' },
+  { value: 'float', label: 'Number' },
+  { value: 'list_str', label: 'List of string' },
+  { value: 'list_float', label: 'List of number' },
+];
+
+export function validatePromptSchema(fields) {
+  if (!fields.length) return 'At least one output field is required.';
+  if (fields.some((field) => !String(field.key || '').trim())) return 'Field name is required for all fields.';
+  if (fields.some((field) => !String(field.description || '').trim())) return 'Field description is required for all fields.';
+  const names = fields.map((field) => field.key.trim().toLowerCase());
+  if (new Set(names).size !== names.length) return 'Field names must be unique within this prompt.';
+  return '';
+}
+
+/** Shared by the creation wizard and the existing Prompt's schema window. */
+export function mountPromptSchemaSettings(container, { fields, returnShape = 'table', onChange }) {
+  container.classList.add('prompt-schema-settings');
+  container.innerHTML = `
+    <p class="prompt-hint">Define the fields in each output row. Choose whether each input row produces one output row or multiple output rows.</p>
+    <div class="prompt-output-return-shape-wrap">
+      <span class="prompt-output-return-shape-label">For each input row</span>
+      <div class="review-detail-view-switch prompt-output-row-switch" role="group" aria-label="Output rows per input row">
+        <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab prompt-output-row-btn" data-return-shape="single">One output row</button>
+        <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab prompt-output-row-btn" data-return-shape="table">Multiple output rows</button>
+      </div>
+    </div>
+    <div class="prompt-output-format-wrap"><div class="prompt-output-keys-list"></div>
+      <div class="prompt-add-field-wrap"><button type="button" class="btn btn-secondary prompt-output-add-key">+ Add a field</button></div></div>`;
+  const list = container.querySelector('.prompt-output-keys-list');
+  let fieldDialog = null;
+  function notify() { onChange?.({ fields, returnShape }); }
+  function edit(fieldIndex = null) {
+    if (fieldDialog) return;
+    fieldDialog = openPromptFieldEditor({
+      fields, fieldIndex, outputTypes: PROMPT_OUTPUT_TYPES,
+      onDone() { render(); notify(); },
+      onClose() { fieldDialog = null; },
+    });
+  }
+  function render() {
+    renderPromptFieldCards({ fields, container: list, outputTypes: PROMPT_OUTPUT_TYPES,
+      onChange() { render(); notify(); }, onEdit: edit });
+    container.querySelectorAll('.prompt-output-row-btn').forEach((button) => {
+      const active = button.dataset.returnShape === returnShape;
+      button.classList.toggle('review-detail-tab--active', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
+  }
+  container.querySelectorAll('.prompt-output-row-btn').forEach((button) => {
+    button.addEventListener('click', () => { returnShape = button.dataset.returnShape; render(); notify(); });
+  });
+  container.querySelector('.prompt-output-add-key').addEventListener('click', () => edit());
+  render();
+  return { dispose() { fieldDialog?.close(); } };
+}
+
+export function openPromptSchemaEditor({ fields, returnShape, renderPreview, onChange, onClose }) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay modal-overlay--prompt-schema';
+  overlay.setAttribute('aria-labelledby', 'prompt-schema-editor-title');
+  overlay.innerHTML = `<div class="modal-panel modal-panel--prompt-schema">
+    <div class="modal-header"><h2 class="modal-title" id="prompt-schema-editor-title">Edit output schema</h2>
+      <button type="button" class="modal-close" aria-label="Close">&times;</button></div>
+    <div class="modal-body prompt-schema-editor-body">
+      <div class="prompt-schema-editor-settings"><h3 class="prompt-schema-preview-title">Output settings</h3><div class="prompt-schema-settings"></div>
+        <div class="prompt-form-error prompt-modal-error" role="alert" hidden></div></div>
+      <div class="prompt-schema-preview-wrap"><h3 class="prompt-schema-preview-title">Output schema</h3>
+        <div class="prompt-schema-editor-preview"></div></div>
+    </div>
+    <div class="modal-footer-actions prompt-schema-footer"><button type="button" class="btn btn-primary prompt-schema-done">Done</button></div>
+  </div>`;
+  const error = overlay.querySelector('.prompt-modal-error');
+  const preview = overlay.querySelector('.prompt-schema-editor-preview');
+  let currentFields = structuredClone(fields);
+  let currentShape = returnShape;
+  const settings = mountPromptSchemaSettings(overlay.querySelector('.prompt-schema-settings'), {
+    fields: currentFields, returnShape: currentShape,
+    onChange(value) {
+      currentFields = value.fields;
+      currentShape = value.returnShape;
+      updatePreview();
+      const message = validatePromptSchema(currentFields);
+      error.textContent = message;
+      error.hidden = !message;
+      if (!message) onChange?.({ fields: structuredClone(currentFields), returnShape: currentShape });
+    },
+  });
+  function updatePreview() {
+    preview.innerHTML = renderPreview(currentFields, currentShape);
+    preview.querySelectorAll('[data-fulltext]').forEach((cell) => { cell.title = cell.dataset.fulltext; });
+  }
+  updatePreview();
+  const close = mountPromptDialog(overlay, () => { settings.dispose(); onClose?.(); });
+  overlay.querySelector('.modal-close').addEventListener('click', close);
+  overlay.querySelector('.prompt-schema-done').addEventListener('click', () => {
+    const message = validatePromptSchema(currentFields);
+    if (message) { error.textContent = message; error.hidden = false; return; }
+    close();
+  });
+  overlay.querySelector('.prompt-output-row-btn')?.focus();
+  return { close };
 }
 
 function renderFieldEditorScalarRow(typeVal, value, rowIdx) {
@@ -31,19 +138,59 @@ function renderFieldEditorListRow(typeVal, elements, exIdx) {
   return `<div class="field-editor-list-example-block" data-ex-index="${exIdx}"><div class="field-editor-element-rows">${rowsHtml}</div><div class="field-editor-list-example-actions"><button type="button" class="btn btn-secondary field-editor-add-element" data-ex-index="${exIdx}">+ Add element</button><button type="button" class="btn btn-secondary field-editor-del-example" aria-label="Delete list example" data-ex-index="${exIdx}">Delete list</button></div></div>`;
 }
 
-export function openPromptFieldEditor({ fields, fieldIndex = null, outputTypes, onDone, host = null, onClose }) {
+/** Fit example text, including wrapped lines, padding and both borders. */
+function autoSizeExampleTextareas(overlay) {
+  const examples = overlay.querySelector('.field-editor-examples-wrap');
+  let frame = null;
+  let previousWidth = 0;
+  function resize() {
+    frame = null;
+    examples.querySelectorAll('textarea').forEach((textarea) => {
+      if (!textarea.getClientRects().length) return;
+      const style = getComputedStyle(textarea);
+      textarea.style.height = 'auto';
+      const borders = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+      textarea.style.height = `${Math.ceil(textarea.scrollHeight + borders)}px`;
+      // Growing the dialog can reveal its scrollbar and wrap the text onto another line.
+      if (textarea.scrollHeight > textarea.clientHeight) {
+        textarea.style.height = `${Math.ceil(textarea.scrollHeight + borders)}px`;
+      }
+    });
+  }
+  function schedule() {
+    if (frame === null) frame = requestAnimationFrame(resize);
+  }
+  const widthObserver = new ResizeObserver(([entry]) => {
+    if (entry.contentRect.width === previousWidth) return;
+    previousWidth = entry.contentRect.width;
+    schedule();
+  });
+  const rowsObserver = new MutationObserver(schedule);
+  widthObserver.observe(examples);
+  rowsObserver.observe(examples, { childList: true, subtree: true });
+  examples.addEventListener('input', schedule);
+  schedule();
+  return () => {
+    widthObserver.disconnect();
+    rowsObserver.disconnect();
+    examples.removeEventListener('input', schedule);
+    if (frame !== null) cancelAnimationFrame(frame);
+  };
+}
+
+export function openPromptFieldEditor({ fields, fieldIndex = null, outputTypes = PROMPT_OUTPUT_TYPES, onDone, onClose }) {
   const isEdit = fieldIndex !== null && fieldIndex >= 0;
   const field = isEdit ? fields[fieldIndex] : { key: '', type: 'str', description: '', examples: [], allowNone: false };
   const type = field.type || 'str';
   const isListType = type === 'list_str' || type === 'list_float';
   const typeOptions = outputTypes.map((t) => `<option value="${t.value}" ${t.value === type ? 'selected' : ''}>${escapeHtml(t.label)}</option>`).join('');
   const editorOverlay = document.createElement('div');
-  editorOverlay.className = host ? 'prompt-detail-side-child-editor' : 'modal-overlay modal-overlay--section-editor modal-overlay--field-editor';
-  if (!host) editorOverlay.setAttribute('aria-modal', 'true');
+  editorOverlay.className = 'modal-overlay modal-overlay--section-editor modal-overlay--field-editor';
+  editorOverlay.setAttribute('aria-labelledby', 'prompt-field-editor-title');
   editorOverlay.innerHTML = `
     <div class="modal-panel modal-panel--section-editor modal-panel--field-editor">
       <div class="modal-header">
-        <h3 class="modal-title">${isEdit ? 'Edit field' : 'Add field'}</h3>
+        <h3 class="modal-title" id="prompt-field-editor-title">${isEdit ? 'Edit field' : 'Add field'}</h3>
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body">
@@ -77,7 +224,7 @@ export function openPromptFieldEditor({ fields, fieldIndex = null, outputTypes, 
         </div>
         <div class="prompt-form-error section-editor-error field-editor-error" role="alert" aria-live="polite" hidden></div>
         <div class="modal-footer-actions">
-          <button type="button" class="btn btn-secondary section-editor-save">${isEdit ? 'Save' : 'Add field'}</button>
+          <button type="button" class="btn btn-primary section-editor-save">${isEdit ? 'Save' : 'Add field'}</button>
         </div>
       </div>
     </div>
@@ -93,11 +240,6 @@ export function openPromptFieldEditor({ fields, fieldIndex = null, outputTypes, 
   const listRowsContainer = editorOverlay.querySelector('.field-editor-list-rows');
   const addListRowBtn = editorOverlay.querySelector('.field-editor-add-list-row');
   const errorEl = editorOverlay.querySelector('.field-editor-error');
-
-  function close() {
-    editorOverlay.remove();
-    onClose?.();
-  }
 
   function showError(msg) {
     if (!errorEl) return;
@@ -320,18 +462,20 @@ export function openPromptFieldEditor({ fields, fieldIndex = null, outputTypes, 
     }
     if (isEdit) fields[fieldIndex] = payload;
     else fields.push(payload);
-    close();
     if (typeof onDone === 'function') onDone();
+    close();
     return true;
   }
 
+  const stopSizingExamples = autoSizeExampleTextareas(editorOverlay);
+  const close = mountPromptDialog(editorOverlay, () => { stopSizingExamples(); onClose?.(); });
   keyInput?.addEventListener('input', clearError);
   descInput?.addEventListener('input', clearError);
   editorOverlay.querySelector('.modal-close')?.addEventListener('click', close);
   editorOverlay.querySelector('.section-editor-save')?.addEventListener('click', save);
 
-  (host || document.body).appendChild(editorOverlay);
   keyInput?.focus();
+  return { close };
 }
 
 export function renderPromptFieldCards({ fields, container, outputTypes, onChange, onEdit }) {
