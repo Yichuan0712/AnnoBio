@@ -30,7 +30,7 @@ function outputLabel(rowCount) {
   return `${rowCount == null ? 'Unknown row count' : count(rowCount, 'row')} (not exported as a Dataset node)`;
 }
 
-/** Human-readable facts for a Run/Process History entry, including old saved records. */
+/** Human-readable facts for a Generate/Process History entry, including old saved records. */
 export function describeHistoryRecord(record, canvasState = null) {
   if (!record) return { title: 'Saved result', input: 'Input details unavailable', output: 'Result details unavailable', meta: '' };
   if (record.kind === 'run') {
@@ -44,7 +44,7 @@ export function describeHistoryRecord(record, canvasState = null) {
     const model = record.model || record.summary?.model || '';
     const exported = savedDatasetNames(record, canvasState);
     return {
-      title: prompt ? `Prompt: ${prompt}` : 'Run result',
+      title: prompt ? `Prompt: ${prompt}` : 'Generate result',
       input: `Input: ${input ? inputLabel(input, canvasState) : (record.summary?.datasetNames || []).join(', ') || 'Unknown dataset'}`,
       output: `Output: ${exported.length ? exported.join(', ') : outputLabel(resultRows)}`,
       meta: [errorRows ? count(errorRows, 'error') : '', model ? `Model: ${model}` : ''].filter(Boolean).join(' · '),

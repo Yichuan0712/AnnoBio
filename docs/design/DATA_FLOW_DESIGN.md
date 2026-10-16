@@ -1,5 +1,7 @@
 # 步骤间数据流：设计
 
+> 命名更新（2026-10-16）：界面中的 Run 节点现称 **Generate**；操作称 **Run to here / Run this step / Run again**，Settings 的对应页签称 Generate。本文旧称及历史实施记录保留原义；内部 `type: run`、工具名、字段和 API 不变。
+
 状态：已实施（2026-10-09，`261007-data-flow-design`，含 Agent 完整同步；实施记录见 [DATA_FLOW_PLAN.md](DATA_FLOW_PLAN.md)）。基于 `261006-pipeline-runs` / `ed4672f`。
 
 本文落实 [NODE_MODEL_REVIEW.md](NODE_MODEL_REVIEW.md) §2（依赖只存一处）和 §3 第二步（把位置和快照分开）。实施后，下列文档中的对应内容由本文取代：

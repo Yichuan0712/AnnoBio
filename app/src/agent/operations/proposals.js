@@ -80,7 +80,7 @@ export async function previewProposal(proposal, workspace) {
           lines: [`Delete ${plan.records.length} history record${plan.records.length === 1 ? '' : 's'}, including dependent results.`, 'This cannot be undone.'], diffs: [] }], warnings: [] };
       }
       const plan = await workspace.previewHistorySelection(op.record_id);
-      return { ok: true, items: [{ kind: 'update', type: 'history', title: 'Select saved Run or Process history',
+      return { ok: true, items: [{ kind: 'update', type: 'history', title: 'Select saved Generate or Process history',
         nodeIds: plan.changedNodeIds, lines: [`Restore inputs on ${plan.changedNodeIds.length} nodes.`, `Affected pipeline nodes: ${plan.affectedNodeIds.length}.`], diffs: [] }], warnings: [] };
     }
     const sources = await loadSources();

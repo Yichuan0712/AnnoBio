@@ -123,7 +123,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
           <div class="dataset-meta-field run-detail-model-actions-field">
             <div class="run-detail-llm-actions-row">
               <span class="run-detail-llm-actions-lead" aria-hidden="true"></span>
-              <div class="run-detail-llm-actions-right"><button type="button" class="btn btn-primary run-detail-run-btn process-run-btn">Run code</button></div>
+              <div class="run-detail-llm-actions-right"><button type="button" class="btn btn-primary run-detail-run-btn process-run-btn">Run</button></div>
             </div>
           </div>
         </div>
@@ -277,7 +277,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
     }
     if (!lastResults) {
       branchPicker.hidden = true;
-      showPlaceholder('No results yet. Click Run code.');
+      showPlaceholder('No results yet. Click Run.');
       return;
     }
     const entries = Object.entries(lastResults.outputs);
@@ -315,9 +315,9 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
   function setRunningUi(isRunning) {
     running = isRunning;
     editorView.dispatch({ effects: editable.reconfigure(EditorView.editable.of(!isRunning)) });
-    runBtn.textContent = isRunning ? 'Stop processing'
+    runBtn.textContent = isRunning ? 'Stop'
       : currentHistoryStatus === 'completed'
-        ? 'Run code again'
+        ? 'Run again'
         : executionIdleLabel({ task: 'processing', interrupted: node?.dataset?.processResumable === '1' });
     runBtn.classList.toggle('btn-danger', isRunning);
     if (saveBtnEl) saveBtnEl.disabled = isRunning || !lastResults;
@@ -333,7 +333,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
       currentHistoryStatus = current?.status || '';
       runBtn.disabled = current?.status === 'running';
       runBtn.textContent = current?.status === 'running' ? 'Processing…'
-        : current?.status === 'completed' ? 'Run code again' : executionIdleLabel({
+        : current?.status === 'completed' ? 'Run again' : executionIdleLabel({
         task: 'processing',
         interrupted: current?.status === 'stopped',
         failed: current?.status === 'failed',
@@ -361,7 +361,7 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
       runBtn.textContent = 'Waiting for upstream';
     } else if (runBtn.textContent === 'Waiting for upstream') {
       runBtn.disabled = false;
-      runBtn.textContent = currentHistoryStatus === 'completed' ? 'Run code again' : executionIdleLabel({ task: 'processing', interrupted: node?.dataset?.processResumable === '1' });
+      runBtn.textContent = currentHistoryStatus === 'completed' ? 'Run again' : executionIdleLabel({ task: 'processing', interrupted: node?.dataset?.processResumable === '1' });
     }
     applyTaskHold();
   }

@@ -14,7 +14,7 @@ const legacyLeft = (state) => [
   ...state.connections.filter((edge) => edge.type === 'dataset-to-process').map((edge) => `${edge.fromId}->${edge.toId}`),
 ];
 
-test('Run and Process inputs become data connections and the legacy fields go', () => {
+test('Generate and Process inputs become data connections and the legacy fields go', () => {
   const state = upgradeCanvasState(legacyCanvas());
   assert.equal(state.version, CANVAS_VERSION);
   assert.equal(state.historyVersion, 1);
@@ -43,7 +43,7 @@ test('aliases are the ones version 2 ran with: saved, derived from the name, or 
 });
 
 test('History signatures after the upgrade are the ones version 2 recorded', async () => {
-  // Captured from legacyCanvas() with the version 2 code, before the storage switch; the Run's since a
+  // Captured from legacyCanvas() with the version 2 code, before the storage switch; the Generate's since a
   // Prompt became one text rather than sections.
   const recorded = {
     run: 'sha256:10fb964d12b807b8088665f5dab8b81eda6ae961a30bbb1ed08ad26bd018c24f',

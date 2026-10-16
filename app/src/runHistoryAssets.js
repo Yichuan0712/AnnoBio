@@ -1,4 +1,4 @@
-/** Asset cells can appear in input snapshots, output tables, or a Run's saved input rows. */
+/** Asset cells can appear in input snapshots, output tables, or a Generate's saved input rows. */
 export function collectHistoryAssetIds(value) {
   const ids = new Set();
   const visit = (item) => {

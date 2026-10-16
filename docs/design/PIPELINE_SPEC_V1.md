@@ -1,5 +1,7 @@
 # PipelineSpec v1：编译契约
 
+> 命名更新（2026-10-16）：界面中的 Run 节点现称 **Generate**；操作称 **Run to here / Run this step / Run again**，Settings 的对应页签称 Generate。本文旧称及历史实施记录保留原义；内部 `type: run`、工具名、字段和 API 不变。
+
 状态：Phase 1 已完成；编译器、导出器、Runner 和静态分支兼容使用同一契约。编译器为 `backend/pipeline_compile.py`，消费者为 `backend/pipeline_export_spec.py` 与 `backend/pipeline_runner.py`。整体计划见 [PIPELINE_EXECUTION_PLAN.md](PIPELINE_EXECUTION_PLAN.md)。
 
 `format_version` 2：Prompt 不再分 section，LLM job 的 `config.sections` 改为一段文本 `config.prompt`。不兼容版本 1。

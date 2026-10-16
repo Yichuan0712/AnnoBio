@@ -22,7 +22,7 @@ const canvas = (extra = {}) => ({
 const runRecord = { kind: 'run', nodeId: 'run', inputs: { prompt: { nodeId: 'prompt' }, dataset: { nodeId: 'input' } } };
 const processRecord = { kind: 'process', nodeId: 'process', inputs: { bindings: [{ nodeId: 'input' }] } };
 
-test('a Run result locks its Prompt and input Dataset; a Process result locks its inputs but not its own code', () => {
+test('a Generate result locks its Prompt and input Dataset; a Process result locks its inputs but not its own code', () => {
   const locks = contentLocks([runRecord, processRecord].map(recordInputRefs), canvas());
   assert.deepEqual(locks.get('prompt'), ['run']);
   assert.deepEqual(locks.get('input'), ['run', 'process']);

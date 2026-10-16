@@ -1,5 +1,5 @@
 /**
- * A Run's results as a Dataset table: what "Save to workspace" creates on the canvas, and what the
+ * A Generate's results as a Dataset table: what "Save to workspace" creates on the canvas, and what the
  * Agent's save_run_results operation creates. Pure, so both paths produce the same table.
  */
 import { cloneCell } from './datasetContent.js';

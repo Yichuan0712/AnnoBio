@@ -19,7 +19,7 @@ const runState = (run = {}) => ({
   connections: [{ type: 'prompt-to-run', fromId: 'p', toId: 'r' }, { type: 'data', fromId: 'raw', fromPort: 'result', toId: 'r' }],
 });
 
-test('a Run is saved as the table its readers get, input columns included', () => {
+test('a Generate is saved as the table its readers get, input columns included', () => {
   const state = runState();
   const saved = savedRunOutput(state, 'r');
   const read = stepOutputTable(state, { nodeId: 'r', port: 'result', kind: 'run' }).table;
@@ -27,14 +27,14 @@ test('a Run is saved as the table its readers get, input columns included', () =
   assert.deepEqual(saved.table.headers, ['Input: #', 'Input: text', 'Input: image', 'Output: #', 'Output: answer']);
   assert.deepEqual(saved.table.columnTypes, ['text', 'text', 'image', 'text', 'text']);
   assert.deepEqual(saved.savedFrom, { kind: 'run', nodeId: 'r', port: 'result', recordId: 'rec-r' });
-  assert.equal(saved.name, 'Extract Run');
-  assert.equal(saved.notes, 'Exported from Extract Run.\nRun completed.');
+  assert.equal(saved.name, 'Extract Generate');
+  assert.equal(saved.notes, 'Exported from Extract Generate.\nRun completed.');
 });
 
 test('a stopped Run saves the rows it has; without results or a record it cannot be saved', () => {
   const stopped = savedRunOutput(runState({ runCompleted: undefined, runResumable: true }), 'r');
   assert.equal(stopped.table.rows.length, 2);
-  assert.equal(stopped.notes, 'Exported from Extract Run.\nRun incomplete.');
+  assert.equal(stopped.notes, 'Exported from Extract Generate.\nRun incomplete.');
   assert.throws(() => savedRunOutput(runState({ runResults: '[]' }), 'r'), /no results yet/);
   assert.throws(() => savedRunOutput(runState({ historyRecordId: undefined }), 'r'), /no History record yet/);
 });
@@ -111,11 +111,11 @@ test('savedFrom is read from the DOM string and named as the canvas names its so
   assert.equal(readSavedFrom('not json'), null);
   assert.deepEqual(readSavedFrom(JSON.stringify({ kind: 'process', nodeId: 'split', port: 'kept', recordId: 'x' })),
     { kind: 'process', nodeId: 'split', port: 'kept', recordId: 'x' });
-  assert.equal(savedFromLabel(state, { kind: 'run', nodeId: 'r', port: 'result' }), 'Saved from Run of "Extract"');
+  assert.equal(savedFromLabel(state, { kind: 'run', nodeId: 'r', port: 'result' }), 'Saved from Generate using "Extract"');
   assert.equal(savedFromLabel(state, { kind: 'process', nodeId: 'split', port: 'kept' }), 'Saved from branch "kept" of Process "Split"');
   assert.equal(savedFromLabel(state, { kind: 'process', nodeId: 'split', port: 'result' }), 'Saved from Process "Split"');
   assert.equal(savedFromLabel(state, { kind: 'score', nodeId: 'score' }), 'Saved from Evaluate "Accuracy"');
-  assert.equal(savedFromLabel(state, { kind: 'pipeline', nodeId: 'r', pipelineRunId: 'p' }), 'Saved from a Pipeline run (Run of "Extract")');
+  assert.equal(savedFromLabel(state, { kind: 'pipeline', nodeId: 'r', pipelineRunId: 'p' }), 'Saved from a Pipeline run (Generate using "Extract")');
   assert.equal(savedFromLabel(state, { kind: 'run', nodeId: 'deleted' }), '');
 });
 

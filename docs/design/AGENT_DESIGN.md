@@ -1,5 +1,7 @@
 # Agent 重新设计
 
+> 命名更新（2026-10-16）：界面中的 Run 节点现称 **Generate**；操作称 **Run to here / Run this step / Run again**，Settings 的对应页签称 Generate。本文旧称及历史实施记录保留原义；内部 `type: run`、工具名、字段和 API 不变。
+
 状态：P1–P3 与 P4 的 Agent 模型检查已实现（2026-09-24）。2026-10-06 增加 `pipeline_action`（整条 Pipeline 的运行、停止、续跑和 Python 导出）、`get_pipeline_runs`，并接入 Current Pipeline 当前路线。以下早期设计记录保留原阶段背景，工具表和状态以现行实现为准。
 
 ## 1. 为什么重做

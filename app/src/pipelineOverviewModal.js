@@ -1,5 +1,5 @@
 /**
- * "Current Pipeline" panel. A connected workflow is shown as one selectable route of Run prompt and
+ * "Current Pipeline" panel. A connected workflow is shown as one selectable route of Generate and
  * Process data steps; Datasets are not shown. Where several Runs or Processes could come next, that
  * chip becomes a picker and the remainder of the row follows the choice. Branches are drawn only
  * for a Process's named outputs and for the Datasets one Process merges.
@@ -11,7 +11,7 @@ import { showAlert } from './alertModal.js';
 import { exportPythonPipeline } from './pipelineExportClient.js';
 import { buildSelectedRoute, exportRoutePayload, getVisibleRoute } from './pipelineRouteSelection.js';
 
-const STEP_LABELS = { prompt: 'Run prompt', process: 'Process data' };
+const STEP_LABELS = { prompt: 'Generate', process: 'Process data' };
 
 function escapeHtml(str) {
   const div = document.createElement('div');
@@ -29,7 +29,7 @@ function renderPickerOrName(choiceId, options, selectedValue, title) {
   return `<select class="pipeline-step-version-select" data-choice-id="${escapeHtml(choiceId)}" title="${escapeHtml(title)}">${optionsHtml}</select>`;
 }
 
-/** The canvas nodes a step stands for: a Run prompt is its Prompt, Run and input Dataset; Process data is its Process and input Datasets. */
+/** The canvas nodes a step stands for: a Generate is its Prompt, Run and input Dataset; Process data is its Process and input Datasets. */
 function getCanvasNodeIds(step) {
   if (step?.kind === 'branch') {
     return (step.lanes || []).flatMap((lane) => lane.flatMap((laneStep) => getCanvasNodeIds(laneStep)));
@@ -66,7 +66,7 @@ function renderRouteChip(step) {
     step.choiceId,
     step.options,
     step.selectedValue,
-    step.kind === 'prompt' ? 'Preview one concrete Prompt Run in this branch.' : 'Preview this Process path.',
+    step.kind === 'prompt' ? 'Preview one concrete Prompt/Generate step in this branch.' : 'Preview this Process path.',
   );
   const canvasNodeIds = encodeURIComponent(JSON.stringify(getCanvasNodeIds(step)));
   return `<span class="pipeline-overview-branch-chip" tabindex="0" title="Locate on canvas" data-canvas-node-ids="${canvasNodeIds}"><span class="pipeline-step-kind pipeline-step-kind--${step.kind}">${STEP_LABELS[step.kind]}</span>${picker}</span>`;
@@ -81,7 +81,7 @@ function renderRouteStep(step) {
     `;
   }
   const titles = {
-    prompt: 'Preview one concrete Prompt Run and follow its connected output.',
+    prompt: 'Preview one concrete Prompt/Generate step and follow its connected output.',
     process: 'Preview one Process path.',
   };
   const picker = renderPickerOrName(
@@ -103,7 +103,7 @@ function getPipelineViewId(pipeline, index) {
   return String(pipeline?.id || `pipeline-index-${index}`);
 }
 
-/** Run and Process node ids in a detected pipeline. */
+/** Generate and Process node ids in a detected pipeline. */
 function pipelineStepNodeIds(pipeline) {
   const ids = new Set();
   for (const step of pipeline?.steps || []) {
@@ -176,7 +176,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     route: buildSelectedRoute(pipeline, selectedByChoiceId),
     nodeIds: [...pipelineStepNodeIds(pipeline)],
   }));
-  const emptyText = 'No pipelines detected yet — a pipeline needs at least one Prompt with a Run, or a Process.';
+  const emptyText = 'No pipelines detected yet — a pipeline needs at least one Prompt with a Generate, or a Process.';
 
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--pipeline-overview">

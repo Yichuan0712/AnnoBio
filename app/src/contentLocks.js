@@ -29,7 +29,7 @@ export function recordInputRefs(record) {
 /**
  * @param {ReturnType<typeof recordInputRefs>[]} refs one per History record
  * @param {{ nodes?: object[], connections?: object[] }} canvasState
- * @returns {Map<string, string[]>} locked node ID → IDs of the Run / Process / Score nodes whose results used it.
+ * @returns {Map<string, string[]>} locked node ID → IDs of the Generate / Process / Score nodes whose results used it.
  *   Records of nodes no longer on the canvas do not lock anything.
  */
 export function contentLocks(refs, canvasState) {
@@ -60,7 +60,7 @@ export function contentLocks(refs, canvasState) {
     lock(String(sampler.sourceNodeId || ''), String(sampler.nodeId || ''));
   }
   // Score metrics are computed live rather than saved, so a ground truth is in use while its Score shows
-  // a result (the upstream Run has a current result) or has been reviewed.
+  // a result (the upstream Generate has a current result) or has been reviewed.
   for (const node of nodes) {
     if (node.type !== 'score' || !node.scoreGroundTruthId) continue;
     const runId = connections.find((edge) => edge.type === 'run-to-score' && edge.toId === node.nodeId)?.fromId;

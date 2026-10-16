@@ -71,7 +71,7 @@ async function recordedChain() {
   return { history, state, a1, b1 };
 }
 
-test('a Run reading another Run records a reference to its record, not a copy of its table', async () => {
+test('a Generate reading another Generate records a reference to its record, not a copy of its table', async () => {
   const { a1, b1 } = await recordedChain();
   assert.deepEqual(b1.inputs.dataset, {
     kind: 'step', nodeId: 'a', port: 'result', recordId: a1.id,
@@ -112,7 +112,7 @@ test('a reader waits while its upstream has no complete result, and cannot recor
   await history.record(state, 'a', runResults('world'), 'running');
   resolved = await history.resolve(state);
   assert.equal(resolved.state.nodes.find((node) => node.nodeId === 'b').waitingForUpstream, true);
-  // A Run reading a Dataset never waits.
+  // A Generate reading a Dataset never waits.
   assert.equal(resolved.state.nodes.find((node) => node.nodeId === 'a').waitingForUpstream, undefined);
 });
 

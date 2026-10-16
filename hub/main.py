@@ -489,7 +489,7 @@ copy-pasting the same instructions into a chat window hundreds of times.</p>
 {fig("empty-canvas", "A new, empty project. The three icons in the top bar create everything you need: LLM settings, a prompt, or a dataset.")}
 <h3>What this guide covers</h3>
 <ul>
-<li>The core objects (project, prompt, dataset, run, review) and how they fit together</li>
+<li>The core objects (project, prompt, dataset, Generate, Evaluate, Optimize) and how they fit together</li>
 <li>Creating a project and adding your first prompt and dataset</li>
 <li>Connecting nodes on the canvas and running a prompt across a dataset</li>
 <li>Scoring results and letting an optimizer rewrite the prompt automatically</li>
@@ -500,7 +500,7 @@ copy-pasting the same instructions into a chat window hundreds of times.</p>
     ("key-concepts", "Key concepts", lambda: """
 <h3>Project</h3>
 <p>A <strong>project</strong> is the unit everything else lives in: its own canvas, with its own prompts,
-datasets, runs, and review history. Switching projects switches the whole canvas.</p>
+datasets, Generate steps, and evaluation history. Switching projects switches the whole canvas.</p>
 <h3>Prompt</h3>
 <p>A <strong>prompt</strong> is a reusable instruction template, written as one block of text with a
 placeholder for each input, plus an <strong>output schema</strong> describing the fields you want the model to return. You write it once and
@@ -508,11 +508,11 @@ run it against as many dataset rows as you like.</p>
 <h3>Dataset</h3>
 <p>A <strong>dataset</strong> is a table of rows, each one an input to run the prompt against. Build one by hand,
 import a spreadsheet, or pull rows directly from PubMed, ClinicalTrials.gov, bioRxiv/medRxiv, or ChEMBL.</p>
-<h3>Run</h3>
-<p>A <strong>Run node</strong> sends the prompt, filled in with each dataset row, to your chosen model, and
+<h3>Generate</h3>
+<p>A <strong>Generate node</strong> sends the prompt, filled in with each dataset row, to your chosen model, and
 collects the results into a table, one row of output per row of input.</p>
-<h3>Review / Score</h3>
-<p>A <strong>Score node</strong> grades a run's output against criteria you define. Once rows are scored, an
+<h3>Evaluate / Optimize</h3>
+<p>A <strong>Evaluate node</strong> compares a Generate step's output against criteria you define. Once rows are scored, an
 optimization method can use that signal to rewrite the prompt and try again.</p>
 <h3>Process</h3>
 <p>A <strong>Process node</strong> runs your own Python function over a dataset instead of a model. No LLM
@@ -550,7 +550,7 @@ reopens exactly as you left it.</p>
 """),
     ("add-your-model", "Add your model", lambda: f"""
 <p>Before writing a prompt, open <strong>LLM settings</strong> (the chip icon in the top bar) and add a credential:
-Run, Review, and the Agent Assistant all need one to actually talk to a model. AnnoBio doesn't restrict
+Generate, Optimize, and the Agent Assistant all need one to actually talk to a model. AnnoBio doesn't restrict
 which LLM you use, and doesn't meter or bill usage on your behalf; you bring your own API key, and it talks to
 that provider directly. There are two ways to add one:</p>
 <ul>
@@ -563,8 +563,8 @@ optional <strong>Base URL</strong> field at a local or self-hosted endpoint (e.g
 pick any model from its catalog. One connection, no per-model key pasting.</li>
 </ul>
 {fig("llm-settings", "LLM settings, empty state: two ways to add a credential, a LiteLLM model ID or an OpenRouter account connection.")}
-<p>You can add more than one credential and set a different default for <strong>Run</strong>,
-<strong>Review</strong>, and the <strong>Agent Assistant</strong> independently, for example a cheaper model for
+<p>You can add more than one credential and set a different default for <strong>Generate</strong>,
+<strong>Optimize prompt</strong>, and the <strong>Agent Assistant</strong> independently, for example a cheaper model for
 everyday runs and a stronger one for optimization.</p>
 """),
     ("write-a-prompt", "Write a prompt", lambda: f"""
@@ -574,7 +574,7 @@ everyday runs and a stronger one for optimization.</p>
 <h3>2. Prompt</h3>
 <p>The prompt body, written as one block of text. Write a placeholder in single curly braces, e.g.
 <code>{{excerpt}}</code>, anywhere you want a dataset column's value inserted; the panel beside it lists the
-inputs it finds. You'll map each placeholder to an actual column when you set up the Run node (see
+inputs it finds. You'll map each placeholder to an actual column when you set up the Generate node (see
 <a href="#connect-and-run">Connect nodes and run</a>). To change a prompt later, open it and click its text.</p>
 <h3>3. Output schema</h3>
 <p>Define the fields you want back from the model, each with a name, an optional description, and example values,
@@ -599,15 +599,19 @@ have to parse yourself. A live preview on the right shows the schema as you buil
 </div>
 <p>Picking <strong>Empty table</strong> and clicking Create gives you a dataset node with one blank column.
 Double-click it to open the dataset editor, where you rename columns, add more, and type in rows. However a
-dataset is built, the result is the same: a table of rows and columns you can feed into a Run node.</p>
+dataset is built, the result is the same: a table of rows and columns you can feed into a Generate node.</p>
 """),
     ("connect-and-run", "Connect nodes and run", lambda: f"""
-<p>Drag a connection from your prompt node to a <strong>Run node</strong> on the canvas.</p>
-{fig("canvas-connected", "A prompt node connected to a Run node. The dataset isn't wired in with a drawn line; that happens inside the Run node itself, next.")}
-<p>Open the Run node. Under <strong>Input dataset</strong>, pick the dataset to run against, then use the
-<strong>Map input dataset columns to prompt inputs</strong> table to match each <code>{{placeholder}}</code> from
-your prompt to an actual column. AnnoBio suggests a match automatically when the names line up.
-Pick a model at the bottom and click <strong>Run</strong>.</p>
+<p>Drag a connection from your prompt node to a <strong>Generate node</strong> on the canvas.</p>
+{fig("canvas-connected", "Prompt and Dataset outputs connected to the Generate step's inputs.")}
+<p>Connect the Dataset output to the Generate step's data input on the canvas. Open Generate and use
+<strong>Map input columns to prompt inputs</strong> to match each <code>{{placeholder}}</code> to an input column.
+Choose a model beside <strong>Create Generate</strong> when creating the step from its Prompt, or use the
+default in <strong>Settings → Generate</strong>. Click <strong>Run</strong>.</p>
+<p>The right-click menu offers <strong>Run to here</strong>, which fills in missing upstream results, and
+<strong>Run this step</strong>, which requires its inputs to have current results. When upstream steps also
+need to run, a plan lists the steps and reused results before you start. Completed steps are reused;
+if everything is already current, the target step runs again. The <strong>Executions</strong> tab keeps the record.</p>
 <p>AnnoBio sends the filled-in prompt to your model once per row, in parallel up to your configured
 concurrency, and streams results back into a table as they complete.</p>
 {fig("run-progress", "A run in progress: completed rows appear in the results table as they finish.")}
@@ -616,14 +620,14 @@ concurrency, and streams results back into a table as they complete.</p>
 row's output looks wrong and you want to know why.</p>
 """),
     ("review-and-optimize", "Review and optimize a prompt", lambda: f"""
-<p>Attach a <strong>Score node</strong> to a finished run. Pick a <strong>ground truth dataset</strong> (rows with
+<p>Attach a <strong>Evaluate node</strong> to a finished run. Pick a <strong>ground truth dataset</strong> (rows with
 the answer you expect) and add one or more matching rules (for example, "Input # equals Ground truth #"). A row
 counts as a match only when every rule is satisfied; AnnoBio computes precision, recall, and F1 across the
 whole run automatically. Simple comparisons like this don't need code; switch to <strong>Match by code</strong>
 instead if matching needs logic a rule can't express (fuzzy matching, numeric tolerance, and so on).</p>
 <p>Once rows are scored, the review-method dropdown becomes available. Pick a method and click
-<strong>Review</strong> to let it rewrite the prompt based on where it's going wrong.</p>
-{fig("review-method-picker", "A Score node: ground truth dataset, a matching rule, computed precision/recall/F1, and the review-method dropdown.")}
+<strong>Optimize prompt</strong> to let it rewrite the prompt based on where it's going wrong.</p>
+{fig("review-method-picker", "A Evaluate node: ground truth dataset, a matching rule, computed precision/recall/F1, and the review-method dropdown.")}
 {REVIEW_METHODS_TABLE}
 <p>Not sure which to pick: start with the default (Thompson Prompt Search) for a quick pass. Reach for GEPA or
 MIPROv2 when a single edit isn't moving the score enough, and BootstrapFewShotWithRandomSearch when the
@@ -632,23 +636,17 @@ instructions are already right but the model needs to see worked examples.</p>
 if a rewrite makes things worse.</p>
 """),
     ("process-node", "Transform data with Python", lambda: f"""
-<p>Not every step needs a model. Right-click a dataset node and choose <strong>Process with code</strong> to run
+<p>Not every step needs a model. Right-click a dataset node and choose <strong>Create Process</strong> to run
 your own Python function over it instead. No LLM, no API key, no cost, and it runs inside your own private
 container, not shared with anyone else.</p>
-{fig("process-context-menu", "Right-click a dataset node: Process with code creates a connected Process node.")}
-<p>Two modes, on tabs in the Process node's editor:</p>
-<ul>
-<li><strong>Process by row</strong>: write <code>def process(row):</code>, called once per row.
-<code>row</code> is a dict keyed by the dataset's column names; return a dict and each key becomes an output
-column. Good for per-row logic a prompt can't (or shouldn't) do, such as flagging keywords, computing a derived
-value, or validating a format.</li>
-<li><strong>Process as dataframe</strong>: write <code>def process(df):</code>, called once on the whole dataset
-as a pandas DataFrame; each other Input dataset you check becomes a parameter after <code>df</code>. Good for whole-table work a per-row function can't express, such as filtering,
-deduplication, sorting, or sampling.</li>
-</ul>
-{fig("process-node", "A Process node: a per-row Python function, run for real against the connected dataset, with results in the same table format as a Run node.")}
+{fig("process-context-menu", "Right-click a dataset node: Create Process creates a connected Process node.")}
+<p>Write <code>def process(df):</code> to transform the input pandas DataFrame. Connect its inputs on
+the canvas; additional named inputs correspond to parameters such as <code>df_reference</code>. Return one
+DataFrame, or a dictionary of named DataFrames for branches. This supports filtering, deduplication,
+sorting, joins and per-row calculations.</p>
+{fig("process-node", "A Process node: a Python DataFrame function, run for real against the connected dataset, with results in the same table format as a Generate node.")}
 <p>Click <strong>Run</strong> to execute it against the connected dataset and see results in the same table format
-as a Run node. A Process node's output can also be exported back out as a new dataset, so you can chain it into a
+as a Generate node. A Process node's output can also be exported back out as a new dataset, so you can chain it into a
 prompt afterward, for example filtering down to just the rows worth sending to a model.</p>
 """),
     ("agent-assistant", "Ask the Agent Assistant", lambda: f"""

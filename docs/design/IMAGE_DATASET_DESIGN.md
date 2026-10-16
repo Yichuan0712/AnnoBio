@@ -1,5 +1,7 @@
 # Dataset 图片支持设计
 
+> 命名更新（2026-10-16）：界面中的 Run 节点现称 **Generate**；操作称 **Run to here / Run this step / Run again**，Settings 的对应页签称 Generate。本文旧称及历史实施记录保留原义；内部 `type: run`、工具名、字段和 API 不变。
+
 状态：第一版核心链路已实现。基于 2026-09-14 当前工作区代码。
 
 已完成图片导入与项目资源管理、Dataset 图片列和预览、Prompt 输入类型、手动/Agent Run、Review 诊断与 Verify/Optimize 的多模态传递，以及含图片数据集导出。模型能力预检、拖放与图片排序等增强项仍按本文后续设计继续推进。

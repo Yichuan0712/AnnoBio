@@ -62,9 +62,9 @@ export const iconPrompt = (size = 14) => svgIcon({
   lines: [[2, 4, 12, 4], [2, 7, 12, 7], [2, 10, 8, 10]],
 });
 
-/** The Run node's filled play triangle, shared with inputs that read a Run. */
+/** A single filled four-point sparkle for Generate, shared with its toolbar and input sources. */
 export const iconRun = (size = 14) => {
-  const svg = svgIcon({ size, viewBox: '0 0 14 14', paths: ['M3 2v10l8-5-8-5z'] });
+  const svg = svgIcon({ size, paths: ['M12 2 14.8 9.2 22 12 14.8 14.8 12 22 9.2 14.8 2 12 9.2 9.2Z'] });
   svg.setAttribute('fill', 'currentColor');
   svg.setAttribute('stroke', 'none');
   return svg;

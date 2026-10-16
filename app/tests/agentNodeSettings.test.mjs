@@ -22,17 +22,29 @@ const canvas = () => upgradeCanvasState({
 const plan = (operations) => planChangeSet(canvas(), operations, { extractInputFields });
 const addRun = (extra = {}) => ({ op: 'add_run', ref: '$run', prompt: 'p', input: 'raw', input_mapping: { text: 'text' }, ...extra });
 
-// Users have no per-Run model or settings and no per-Score review method (Settings holds them),
+test('new Generate defaults avoid legacy default names without migrating stored node types or names', () => {
+  const original = canvas();
+  const before = structuredClone(original);
+  const result = planChangeSet(original, [addRun()], { extractInputFields });
+  const added = result.state.nodes.find((node) => node.nodeId === result.refs.$run);
+  assert.equal(added.runName, 'Generate 2');
+  assert.equal(added.type, 'run');
+  assert.equal(result.state.nodes.find((node) => node.nodeId === 'r').runName, 'Run');
+  assert.deepEqual(original, before);
+  assert.equal(result.items[0].title, 'New Generate "Generate 2"');
+});
+
+// Users have no per-Generate model or settings and no per-Score review method (Settings holds them),
 // so neither does the Agent.
-test('a new Run uses the model chosen in Settings → Run', () => {
+test('a new Run uses the model chosen in Settings → Generate', () => {
   const result = plan([addRun()]);
   const run = result.state.nodes.find((node) => node.nodeId === result.refs.$run);
   assert.equal(run.runCredentialId, undefined);
   assert.equal(run.runSettings, undefined);
-  assert.ok(result.items[0].lines.includes('Model and settings: Settings → Run'));
+  assert.ok(result.items[0].lines.includes('Model and settings: Settings → Generate'));
 });
 
-test('a Run and a Process the Agent adds read their inputs through data connections', () => {
+test('a Generate and a Process the Agent adds read their inputs through data connections', () => {
   const result = plan([addRun(), { op: 'add_process', ref: '$proc', primary_input: 'raw', code: 'def process(df, df_gt):\n    return df\n' }]);
   const { $run: run, $proc: proc } = result.refs;
   assert.deepEqual(result.state.connections.filter((edge) => edge.toId === run && edge.type === DATA_EDGE),
@@ -44,7 +56,7 @@ test('a Run and a Process the Agent adds read their inputs through data connecti
   }
 });
 
-test('the Agent cannot choose a Run model or settings', () => {
+test('the Agent cannot choose a Generate model or settings', () => {
   assert.throws(() => plan([addRun({ credential_id: 'cred-a' })]), ChangeSetError);
   assert.throws(() => plan([addRun({ settings: { run_concurrency: 2 } })]), ChangeSetError);
   assert.throws(() => plan([{ op: 'update', node: 'r', set: { credential_id: 'cred-a' } }]), /cannot set credential_id/);
@@ -56,7 +68,7 @@ test('the Agent cannot choose a review method on a Score', () => {
   assert.throws(() => plan([{ op: 'add_score', run: 'r', ground_truth: 'gt', comparison: [{ field: 'answer', ground_truth_columns: ['answer'] }], review_method: 'gepa' }]), ChangeSetError);
 });
 
-test('inspect_node does not report per-Run settings', () => {
+test('inspect_node does not report per-Generate settings', () => {
   const inspected = inspectWorkflowNode(canvas(), 'r', { extractInputFields });
   assert.equal('settings' in inspected.details, false);
 });
@@ -74,7 +86,7 @@ test('the summary lists pipelines as the Current Pipeline panel shows them', asy
   const summary = await buildWorkspaceSummary(upgradeCanvasState(state), { extractInputFields });
   const pipelines = summary.split('\n\n')[0];
   assert.doesNotMatch(pipelines, /Dataset/);
-  assert.match(pipelines, /Pipeline 1 \[pipeline-1\] \(default route; Current Pipeline panel is not mounted\):\n {2}1\. Run prompt, a picker with 2 choices: "p2" \[p2\] by run "Run B" \[r2\] on "raw" \(default\); "p" \[p\] by run "Run A"/);
+  assert.match(pipelines, /Pipeline 1 \[pipeline-1\] \(default route; Current Pipeline panel is not mounted\):\n {2}1\. Generate, a picker with 2 choices: "p2" \[p2\] by Generate "Run B" \[r2\] on "raw" \(default\); "p" \[p\] by Generate "Run A"/);
   assert.match(pipelines, /Pipeline 2 \[pipeline-2\].*:\n {2}1\. Process data, a picker with 2 choices: "clean" \[clean\] reading "raw" \(default\); "trim"/);
   assert.match(summary, /"p2" \[p2\]: .*; new version of "p"/);
 });
@@ -93,7 +105,7 @@ test('the summary uses the panel selection and identifies Pipeline result proven
   assert.match(summary, /Pipeline 1 \[pipeline-1\] \(current panel selection\)/);
   assert.match(summary, /saved from Pipeline run run-123/);
   assert.deepEqual(inspectWorkflowNode(state, 'copy').details.producedBy, {
-    kind: 'pipeline run result', pipelineRunId: 'run-123', nodeId: 'r', type: 'run', title: 'Run',
+    kind: 'pipeline run result', pipelineRunId: 'run-123', nodeId: 'r', type: 'run', title: 'Generate',
   });
 });
 
@@ -116,12 +128,12 @@ test('Agent names where a saved Dataset came from, also once that node is gone',
       datasetContent: { headers: ['answer'], rows: [['A']] } },
   );
   const inspected = inspectWorkflowNode(state, 'snapshot');
-  assert.deepEqual(inspected.details.producedBy, { kind: 'saved run results', nodeId: 'r', type: 'run', title: 'Run' });
+  assert.deepEqual(inspected.details.producedBy, { kind: 'saved run results', nodeId: 'r', type: 'run', title: 'Generate' });
   assert.deepEqual(inspectWorkflowNode(state, 'r').details.savedAsDatasets, [{ nodeId: 'snapshot', type: 'dataset', title: 'Saved results' }]);
   assert.deepEqual(inspectWorkflowNode(state, 'orphan').details.producedBy, { kind: 'saved process output', sourceRemoved: true });
   const summary = await buildWorkspaceSummary(state, { extractInputFields });
-  assert.match(summary, /"Saved results" \[snapshot\]: .*; saved results of run "Run"/);
-  assert.match(summary, /"Old output" \[orphan\]: .*; saved from a process no longer on the canvas/);
+  assert.match(summary, /"Saved results" \[snapshot\]: .*; saved results of Generate "Generate"/);
+  assert.match(summary, /"Old output" \[orphan\]: .*; saved from a Process no longer on the canvas/);
 });
 
 test('Process code declares its inputs as parameters, each by the alias it already has', () => {
@@ -152,5 +164,5 @@ test('the summary names a step input by the step it reads', async () => {
     connections: [{ fromId: 'p', toId: 'r', type: 'prompt-to-run' }, data('raw', 'r'), data('r', 'clean', 'df')],
   };
   const pipelines = (await buildWorkspaceSummary(state, { extractInputFields })).split('\n\n')[0];
-  assert.match(pipelines, /1\. Run prompt: "Extract" \[p\] by run "Run" \[r\] on "Raw"\n {2}2\. Process data: "Clean" \[clean\] reading the output of "Extract"/);
+  assert.match(pipelines, /1\. Generate: "Extract" \[p\] by Generate "Generate" \[r\] on "Raw"\n {2}2\. Process data: "Clean" \[clean\] reading the output of "Extract"/);
 });

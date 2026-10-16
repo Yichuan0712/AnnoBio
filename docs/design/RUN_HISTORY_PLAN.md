@@ -1,5 +1,7 @@
 # Run / Process 运行历史：计划
 
+> 命名更新（2026-10-16）：界面中的 Run 节点现称 **Generate**；操作称 **Run to here / Run this step / Run again**，Settings 的对应页签称 Generate。本文旧称及历史实施记录保留原义；内部 `type: run`、工具名、字段和 API 不变。
+
 状态：实施中。步骤 0 已提交（`1e85d72`）；步骤 1 的签名与存储基础已提交（`75e671f`），迁移、下游联动与 History 界面尚未启用。产品语义见文末"已定"；桌面版存储性能仍需原型验证。基于 `dee3ea4`。接续 [NODE_MODEL_REVIEW.md](NODE_MODEL_REVIEW.md) §6 的"待讨论：History"。
 
 ## 目标

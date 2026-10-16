@@ -36,7 +36,7 @@ def compile_pipeline(*, canvas_state: dict, route: list, input_dataset_ids: list
     """Return {spec, diagnostics}; explicit input IDs cut saved provenance at a boundary.
 
     run_defaults contains only numeric Run defaults, not credentials. A symbolic
-    model_binding identifies the Run to resolve when a runner/exporter freezes model
+    model_binding identifies the Generate to resolve when a runner/exporter freezes model
     configuration. Missing defaults are explicit runtime requirements, never guesses.
     """
     return _Compiler(canvas_state, route, input_dataset_ids, run_defaults, mapping_policy).compile()
@@ -171,7 +171,7 @@ class _Compiler:
             if valid and kind == "prompt":
                 rid, pid = item["run_node_id"], item["prompt_node_id"]
                 if rid in self.pairs and self.pairs[rid] != pid:
-                    self.report("AMBIGUOUS_PROMPT", rid, "prompt_node_id", "A Run cannot select multiple Prompts.")
+                    self.report("AMBIGUOUS_PROMPT", rid, "prompt_node_id", "A Generate cannot select multiple Prompts.")
                 self.pairs[rid] = pid
         if not isinstance(self.boundaries, list) or any(not isinstance(x, str) for x in self.boundaries):
             self.report("INVALID_INPUTS", "", "input_dataset_ids", "Input boundaries must be a list of Dataset IDs.")
@@ -180,7 +180,7 @@ class _Compiler:
             if self.selected.get(nid, {}).get("type") != "dataset":
                 self.report("INVALID_INPUT", nid, "input_dataset_ids", "An input boundary must be a selected Dataset.")
         if not isinstance(self.defaults, dict):
-            self.report("INVALID_DEFAULTS", "", "run_defaults", "Run defaults must be an object.")
+            self.report("INVALID_DEFAULTS", "", "run_defaults", "Generate defaults must be an object.")
             self.defaults = {}
 
         for nid, node in sorted(self.selected.items()):
@@ -236,9 +236,9 @@ class _Compiler:
             self.report("MISSING_DEPENDENCY", owner, field, f"Required Dataset {nid or '(none)'} is not selected.")
         return aid
 
-    # Where a Run or Process reads its data (docs/design/DATA_FLOW_DESIGN.md §3.3): the `data`
+    # Where a Generate or Process reads its data (docs/design/DATA_FLOW_DESIGN.md §3.3): the `data`
     # connections into it. Only these methods know how the canvas stores it. A source is
-    # (node ID, port): a Dataset, a Run's results, or one output branch of a Process.
+    # (node ID, port): a Dataset, a Generate's results, or one output branch of a Process.
     def data_inputs(self, nid):
         """[((source node id, port), alias as recorded)] for the `data` connections into a node, sorted."""
         found = {((_text(e.get("fromId")), _text(e.get("fromPort")) or "result"), _text(e.get("alias")))
@@ -246,10 +246,10 @@ class _Compiler:
         return sorted(found)
 
     def run_input(self, rid):
-        """The source a Run reads, or ('', 'result') when it has none."""
+        """The source a Generate reads, or ('', 'result') when it has none."""
         sources = self.data_inputs(rid)
         if len(sources) > 1:
-            self.report("MULTIPLE_RUN_INPUTS", rid, "inputs", "A Run reads exactly one input.")
+            self.report("MULTIPLE_RUN_INPUTS", rid, "inputs", "A Generate reads exactly one input.")
         return sources[0][0] if sources else ("", "result")
 
     def process_inputs(self, nid, node):
@@ -324,7 +324,7 @@ class _Compiler:
         run, prompt = self.selected[rid], self.selected[pid]
         jid = f"llm:{rid}"
         if self.inputs_to(rid, "prompt-to-run") != [pid]:
-            self.report("PROMPT_RUN_MISMATCH", rid, "prompt_node_id", "Run must have exactly the selected Prompt as its upstream Prompt.")
+            self.report("PROMPT_RUN_MISMATCH", rid, "prompt_node_id", "Generate must have exactly the selected Prompt as its upstream Prompt.")
         aid = self.input_artifact(rid, self.run_input(rid))
         text = prompt.get("text", "")
         if not isinstance(text, str):
@@ -386,7 +386,7 @@ class _Compiler:
             else:
                 settings[key] = value
         if unresolved:
-            self.report("UNRESOLVED_RUN_DEFAULTS", rid, "runSettings", "Supply Run defaults before starting an execution.", "warning")
+            self.report("UNRESOLVED_RUN_DEFAULTS", rid, "runSettings", "Supply Generate defaults before starting an execution.", "warning")
         mapping = self.obj(run.get("runInputToColumn"), rid, "runInputToColumn")
         self.jobs[jid] = {"id": jid, "type": "llm", "inputs": {"data": aid}, "outputs": {}, "depends_on": [],
                           "config": {"prompt": text, "input_types": types,
@@ -398,7 +398,7 @@ class _Compiler:
         self.source(jid, pid, rid)
 
     def link_outputs(self):
-        """The outputs of each job (docs/design/DATA_FLOW_DESIGN.md §6.2). A Run has its results; a
+        """The outputs of each job (docs/design/DATA_FLOW_DESIGN.md §6.2). A Generate has its results; a
         Process has the branches its code returns, found without running it (process_outputs.py),
         and every branch a selected step reads. A branch nobody reads is still an output of the
         pipeline. Each output is the artifact output:<job>:<port>."""
@@ -417,7 +417,7 @@ class _Compiler:
                 for port, consumers in sorted(used.items()):
                     if port != "result":
                         for consumer in sorted(set(consumers)):
-                            self.report("UNKNOWN_OUTPUT_PORT", consumer, "inputs", f'A Run has one output, "result"; "{port}" does not exist.')
+                            self.report("UNKNOWN_OUTPUT_PORT", consumer, "inputs", f'A Generate has one output, "result"; "{port}" does not exist.')
                 ports = ["result"]
                 names = {"result": self.nodes[pid].get("name") or "Result"}
             else:
@@ -494,7 +494,7 @@ class _Compiler:
                     config["input_mapping"][name] = None
                     self.report("RUNTIME_INPUT_MAPPING", rid, f"runInputToColumn.{name}", f"Resolve {{{name}}} by unique column name when the data arrives.", "warning")
                 else:
-                    title = self.nodes[rid].get("runName") or "Run"
+                    title = self.nodes[rid].get("runName") or "Generate"
                     self.report("UNMAPPED_INPUT", rid, f"runInputToColumn.{name}", f'Open "{title}" and map each input; missing {{{name}}}.')
             elif not runtime and column not in columns:
                 self.report("MISSING_COLUMN", rid, f"runInputToColumn.{name}", f"Prompt maps inputs to missing columns: {column}.")
@@ -502,7 +502,7 @@ class _Compiler:
                 self.report("INPUT_TYPE_MISMATCH", rid, f"runInputToColumn.{name}", f"Input {{{name}}} expects {config['input_types'][name]}, column {column} is {columns[column]}.")
         if runtime:
             self.report("RUNTIME_INPUT_SCHEMA", rid, "inputs", "Check input columns and types against the actual upstream artifact before making model calls.", "warning")
-        # Same display columns as saved Run results. A dynamic input propagates an
+        # Same display columns as saved Generate results. A dynamic input propagates an
         # unknown contract; known output field names alone do not describe the whole table.
         result_schema = {"status": "runtime", "columns": []}
         # Structured keys and display names are fixed by normalization in the compiler.
@@ -514,7 +514,7 @@ class _Compiler:
                 {"name": f"Output: {f['display']}", "type": "text"} for f in config["output_schema"]["fields"]]}
             names = [c["name"] for c in result_schema["columns"]]
             if len(names) != len(set(names)):
-                self.report("MATERIALIZED_COLUMN_COLLISION", rid, "outputs", "Run's materialized columns collide after adding row indices/prefixes.")
+                self.report("MATERIALIZED_COLUMN_COLLISION", rid, "outputs", "Generate's materialized columns collide after adding row indices/prefixes.")
         for aids in job["outputs"].values():
             for aid in aids:
                 self.artifacts[aid]["schema"] = deepcopy(result_schema)

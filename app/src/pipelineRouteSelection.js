@@ -1,3 +1,4 @@
+import { generateDisplayName } from './nodeLabels.js';
 /** Pure Current Pipeline route selection. No DOM, network or canvas mutation. */
 
 function promptRunOptions(step) {
@@ -5,7 +6,7 @@ function promptRunOptions(step) {
   for (const version of step?.versions || []) {
     const runs = Array.isArray(version.runs)
       ? version.runs
-      : (version.runNodeIds || []).map((runNodeId) => ({ runNodeId, runName: 'Run' }));
+      : (version.runNodeIds || []).map((runNodeId) => ({ runNodeId, runName: 'Generate' }));
     for (const run of runs) {
       options.push({
         value: run.runNodeId,
@@ -14,7 +15,7 @@ function promptRunOptions(step) {
         runNodeId: run.runNodeId,
         inputDatasetNodeId: run.inputDatasetNodeId || '',
         promptName: version.promptName,
-        runName: run.runName || 'Run',
+        runName: generateDisplayName(run.runName),
         kind: 'prompt',
       });
     }
@@ -52,7 +53,7 @@ export function buildSelectedRoute(pipeline, selectedByChoiceId) {
 
   /**
    * What a slot offers: the Datasets an input slot lets the first step start from, or, between steps,
-   * the output of the Run the route selected upstream (a Process slot holds one output).
+   * the output of the Generate the route selected upstream (a Process slot holds one output).
    */
   function datasetOptions(step) {
     if (step.outputs) {
@@ -232,7 +233,7 @@ export function buildSelectedRoute(pipeline, selectedByChoiceId) {
 }
 
 /**
- * The route without its Datasets: a Run prompt or Process data chip stands for the Datasets it reads.
+ * The route without its Datasets: a Generate or Process data chip stands for the Datasets it reads.
  * A branch whose lanes hold only Datasets says nothing the merging Process does not, so it is dropped.
  */
 export function getVisibleRoute(route) {
@@ -246,7 +247,7 @@ export function getVisibleRoute(route) {
 }
 
 /**
- * The route as the compiler takes it (pipeline_compile.py): its Prompt Runs and Processes, and the
+ * The route as the compiler takes it (pipeline_compile.py): its Prompt/Generate steps and Processes, and the
  * Datasets they start from. Outputs passed between steps are not listed; the compiler follows them.
  */
 export function exportRoutePayload(route) {

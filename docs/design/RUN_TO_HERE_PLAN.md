@@ -1,5 +1,9 @@
 # 运行到这里：实施计划
 
+> 命名更新（2026-10-16）：界面中的 Run 节点现称 **Generate**；操作称 **Run to here / Run this step / Run again**，Settings 的对应页签称 Generate。本文旧称及历史实施记录保留原义；内部 `type: run`、工具名、字段和 API 不变。
+
+此次命名调整已实施，位置清单、旧名称兼容规则和验证记录见 [GENERATE_RUN_RENAME_PLAN.md](GENERATE_RUN_RENAME_PLAN.md) 第 10 节。下面第 7 步保留原实施历史。
+
 日期：2026-10-16
 设计：[ANNOBIO_V2_FUNCTIONAL_DESIGN.md](ANNOBIO_V2_FUNCTIONAL_DESIGN.md)（先读第 1、3、4、7 节）
 状态见下面的进度表。每做完一步：在表里把那一步改成"✅ 已完成"并写上日期，在那一步的标题后面加"✅"，在那一步下面写"实现记录"（改了哪些文件、测试结果、已知问题）。

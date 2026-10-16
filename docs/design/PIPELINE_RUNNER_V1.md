@@ -1,5 +1,7 @@
 # Pipeline Runner v1
 
+> 命名更新（2026-10-16）：界面中的 Run 节点现称 **Generate**；操作称 **Run to here / Run this step / Run again**，Settings 的对应页签称 Generate。本文旧称及历史实施记录保留原义；内部 `type: run`、工具名、字段和 API 不变。
+
 日期：2026-10-01。状态：Phase 1 Runner、可靠恢复及静态分支兼容验收已在后端实现。目前没有用户入口：Current Pipeline 面板和 Agent 都不能启动整条 Pipeline，Runner 只通过 API 和测试使用。
 
 ## 1. 责任边界

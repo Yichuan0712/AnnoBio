@@ -5,6 +5,7 @@ import { analysisInputKeys } from './runAnalysisHistory.js';
 import { dependentHistoryIds, directHistoryDownstreamIds, directHistoryUpstreamIds } from './runHistoryDeletion.js';
 import { describeHistoryRecord } from './runHistoryPresentation.js';
 import { contentLocks, recordInputRefs } from './contentLocks.js';
+import { generateDisplayName, nodeTypeLabel } from './nodeLabels.js';
 
 /** Record inputs and origin never change, so these are cached per record ID. */
 function recordFacts(record) {
@@ -13,9 +14,10 @@ function recordFacts(record) {
 
 function relationSummary(record, canvasState, currentIds) {
   const node = (canvasState?.nodes || []).find((item) => String(item?.nodeId || item?.id || '') === String(record.nodeId));
-  const nodeName = node?.runName || node?.name || node?.scoreName || node?.promptReviewName || '';
+  const nodeName = node?.type === 'run' ? generateDisplayName(node.runName)
+    : node?.name || node?.scoreName || node?.promptReviewName || '';
   const promptName = record.kind === 'run' ? String(record.inputs?.prompt?.name || record.summary?.promptName || '') : '';
-  const fallback = record.kind === 'score' ? 'Evaluate' : record.kind === 'review' ? 'Optimize' : record.kind ? `${record.kind[0].toUpperCase()}${record.kind.slice(1)}` : 'Record';
+  const fallback = record.kind === 'review' ? 'Optimize' : record.kind ? nodeTypeLabel(record.kind) : 'Record';
   return {
     id: record.id,
     nodeId: record.nodeId,
@@ -94,7 +96,7 @@ export class RunHistorySession {
     return contentLocks((await this.recordFacts()).map((facts) => facts.inputRefs), canvasState);
   }
 
-  /** Index entries of Run / Process results made on the node itself, not imported from a Pipeline run. */
+  /** Index entries of Generate / Process results made on the node itself, not imported from a Pipeline run. */
   async singleNodeRecords() {
     if (!this.projectId) return [];
     const facts = await this.recordFacts();
@@ -215,7 +217,7 @@ export class RunHistorySession {
     const records = await Promise.all(this.index.records.map((entry) => this.storage.loadRecord(this.projectId, entry.id)));
     if (records.some((record) => !record)) throw new Error('A history record is missing.');
     if (!['run', 'process'].includes(records.find((record) => record.id === recordId)?.kind)) {
-      throw new Error('Select a Run or Process history record to delete.');
+      throw new Error('Select a Generate or Process history record to delete.');
     }
     const ids = dependentHistoryIds(records, recordId);
     const removed = new Set(ids);

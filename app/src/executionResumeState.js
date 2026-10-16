@@ -1,9 +1,9 @@
 /** Shared state labels, with task-specific verbs for the three execution buttons. */
 const EXECUTION_LABELS = {
   default: { start: 'Run', again: 'Run again', resume: 'Resume', retry: 'Retry' },
-  generation: { start: 'Generate', again: 'Generate again', resume: 'Resume generation', retry: 'Retry generation' },
-  processing: { start: 'Run code', again: 'Run code again', resume: 'Resume processing', retry: 'Retry processing' },
-  matching: { start: 'Run matching code', again: 'Run matching code again', resume: 'Resume matching', retry: 'Retry matching' },
+  generation: { start: 'Run', again: 'Run again', resume: 'Resume', retry: 'Retry' },
+  processing: { start: 'Run', again: 'Run again', resume: 'Resume', retry: 'Retry' },
+  matching: { start: 'Run', again: 'Run again', resume: 'Resume', retry: 'Retry' },
 };
 
 export function executionIdleLabel({ completed = false, interrupted = false, hasPartial = false, failed = false, task = 'default' } = {}) {

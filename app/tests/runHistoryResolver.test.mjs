@@ -4,9 +4,32 @@ import assert from 'node:assert/strict';
 import { resolveHistoryCanvasState } from '../src/runHistoryResolver.js';
 import { captureHistoryInput } from '../src/runHistoryCapture.js';
 import { stepOutputTable } from '../src/stepOutputs.js';
+import { nodeTitle } from '../src/agent/canvas/workflowNodeInspector.js';
 import { graph, indexOf, recordGraph } from './historyGraphFixture.mjs';
 
-test('stopped Run and Process records restore an explicit Resume state', async () => {
+test('Generate display names preserve legacy history signatures, result IDs and custom node names', async () => {
+  const stored = await recordGraph(graph);
+  const before = structuredClone(stored);
+  const records = Object.fromEntries(stored.records.map((record) => [record.id, record]));
+  const options = { index: indexOf(stored.records), loadRecord: async (id) => records[id] };
+  const original = await resolveHistoryCanvasState(stored.state, options);
+  const signature = (await captureHistoryInput(original.state, 'run', options)).signature;
+  for (const name of ['Run', 'Generate', 'Run 2', 'Runx1 extraction']) {
+    const state = structuredClone(stored.state);
+    state.nodes.find((node) => node.nodeId === 'run').runName = name;
+    const resolved = await resolveHistoryCanvasState(state, options);
+    const node = resolved.state.nodes.find((entry) => entry.nodeId === 'run');
+    assert.equal(nodeTitle(node), name === 'Run' ? 'Generate' : name);
+    assert.equal(node.type, 'run');
+    assert.equal(node.runName, name);
+    assert.deepEqual(resolved.missingResultNodeIds, []);
+    assert.deepEqual(resolved.currentRecordIds, original.currentRecordIds);
+    assert.equal((await captureHistoryInput(resolved.state, 'run', options)).signature, signature);
+  }
+  assert.deepEqual(stored, before);
+});
+
+test('stopped Generate and Process records restore an explicit Resume state', async () => {
   const migrated = await recordGraph(graph);
   const resolveStopped = (kind) => {
     const records = Object.fromEntries(migrated.records.map((record) => [record.id, { ...record, status: record.kind === kind ? 'stopped' : record.status }]));
@@ -14,7 +37,7 @@ test('stopped Run and Process records restore an explicit Resume state', async (
   };
   const run = (await resolveStopped('run')).state.nodes;
   assert.equal(run.find((node) => node.nodeId === 'run').runResumable, true);
-  // The Process reads the stopped Run's output, so it waits for the Run to finish.
+  // The Process reads the stopped Run's output, so it waits for the Generate to finish.
   assert.equal(run.find((node) => node.nodeId === 'process').waitingForUpstream, true);
   const process = (await resolveStopped('process')).state.nodes;
   assert.equal(process.find((node) => node.nodeId === 'process').processResumable, true);
@@ -59,7 +82,7 @@ test('current input signatures restore matching results and clear downstream aft
   const noMatch = await resolve(changed);
   assert.deepEqual(new Set(noMatch.missingResultNodeIds), new Set(['run', 'process']));
   assert.equal(noMatch.state.nodes.find((node) => node.nodeId === 'run').runResults, undefined);
-  // The Process reads the Run, which has no result for its new input: it waits for it.
+  // The Process reads the Generate, which has no result for its new input: it waits for it.
   assert.equal(processOf(noMatch).dfResults, undefined);
   assert.equal(processOf(noMatch).waitingForUpstream, true);
 

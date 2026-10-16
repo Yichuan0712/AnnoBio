@@ -50,7 +50,7 @@ to create only the configurable Sample node. The UI defaults to random without r
 ## Content locks and deletion
 
 `inspect_node.contentLock` reports whether Prompt/Dataset content is locked and which nodes use it.
-Saved Run/Process/Evaluate results and Sample outputs can lock source content. Names and descriptions
+Saved Generate/Process/Evaluate results and Sample outputs can lock source content. Names and descriptions
 remain editable. Use a Prompt version or Dataset duplicate/version for content changes.
 
 Deletion follows canvas rules: disconnect downstream readers before removing their source, or include

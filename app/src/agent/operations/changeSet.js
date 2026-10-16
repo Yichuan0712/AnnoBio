@@ -7,6 +7,7 @@
  * Nodes are referenced by their canvas id, or, for nodes added earlier in the same proposal, by the
  * "$name" ref given when adding them.
  */
+import { generateDisplayName, nodeTypeLabel } from '../../nodeLabels.js';
 import { cloneCell, isAssetCell, moveImageAsset, normalizeDatasetContent } from '../../datasetContent.js';
 import { sampleSourceIndices, sampledOutputs } from '../../samplerQuota.js';
 import { buildSamplerNodeSpec, formatSamplerModeSummary } from './sampler_node_shared.js';
@@ -127,7 +128,7 @@ export function planChangeSet(state, operations, ctx) {
     if (!id) fail(`${label} "${raw}" refers to a node that is not added earlier in this proposal.`);
     const node = byId().get(id);
     if (!node) fail(`${label} "${raw}" is not a node on the canvas.`);
-    if (types && !types.includes(node.type)) fail(`${label} "${raw}" is a ${node.type}, not a ${types.join(' or ')}.`);
+    if (types && !types.includes(node.type)) fail(`${label} "${raw}" is a ${nodeTypeLabel(node.type)}, not a ${types.map(nodeTypeLabel).join(' or ')}.`);
     return node;
   }
 
@@ -135,7 +136,7 @@ export function planChangeSet(state, operations, ctx) {
   const codeChanged = new Set();
 
   /**
-   * A step's input as a user can connect it on the canvas (stepInputs.js candidates): a Dataset, a Run's results,
+   * A step's input as a user can connect it on the canvas (stepInputs.js candidates): a Dataset, a Generate's results,
    * or one branch of a Process (`branch`; a Process with one output needs none). A Process's branches
    * are offered once its code has been checked or it has run, so one added or rewritten in this same
    * proposal cannot be read yet. Reading the step itself or one that reads it would make a loop.
@@ -148,7 +149,7 @@ export function planChangeSet(state, operations, ctx) {
       fail(`${label} "${nodeTitle(node)}" ${node.nodeId === stepId ? 'is this step itself' : 'reads this step\'s output'}, so reading it would make a loop.`);
     }
     if (node.type !== 'process') {
-      if (port && port !== RESULT_PORT) fail(`${label} "${nodeTitle(node)}" is a ${node.type} with one output; it has no branch "${port}".`);
+      if (port && port !== RESULT_PORT) fail(`${label} "${nodeTitle(node)}" is a ${nodeTypeLabel(node.type)} with one output; it has no branch "${port}".`);
       return { nodeId: node.nodeId, port: RESULT_PORT, kind: node.type };
     }
     if (addedIds.has(node.nodeId) || codeChanged.has(node.nodeId)) {
@@ -242,7 +243,7 @@ export function planChangeSet(state, operations, ctx) {
     const portId = clean(op.input);
     const inputs = nodePorts(next, node.nodeId)?.inputs || [];
     const port = inputs.find((item) => item.id === portId);
-    if (!port) fail(`${node.type === 'promptReview' ? 'Optimize' : node.type} "${nodeTitle(node)}" has no input "${portId}". Its inputs: ${inputs.map((item) => item.id).join(', ') || '(none)'}.`);
+    if (!port) fail(`${nodeTypeLabel(node.type)} "${nodeTitle(node)}" has no input "${portId}". Its inputs: ${inputs.map((item) => item.id).join(', ') || '(none)'}.`);
     return port;
   }
 
@@ -395,7 +396,7 @@ export function planChangeSet(state, operations, ctx) {
   }
 
   /**
-   * The mapping a Run gets, checked against the columns of what it reads. Like the Run window, columns
+   * The mapping a Generate gets, checked against the columns of what it reads. Like the Generate window, columns
    * can only be chosen once they are known: an input whose step has no result yet is left unmapped.
    */
   function validateMapping(prompt, source, mapping) {
@@ -423,7 +424,7 @@ export function planChangeSet(state, operations, ctx) {
     return normalized;
   }
 
-  /** What a Run's card says about its input mapping. */
+  /** What a Generate's card says about its input mapping. */
   function mappingLine(mapping, source) {
     const entries = Object.entries(mapping);
     if (entries.length) return `Mapping: ${entries.map(([k, v]) => `${k} ← ${v}`).join(', ')}`;
@@ -582,7 +583,7 @@ export function planChangeSet(state, operations, ctx) {
     if (!ctx.contentLocks?.get(node.nodeId)?.length && !contentLocks([], next).get(node.nodeId)?.length) return;
     const remedy = node.type === 'prompt' ? 'Use add_prompt_version to change a new version.'
       : 'Add a new dataset (add_dataset or duplicate_dataset) with the changed table instead.';
-    fail(`${node.type[0].toUpperCase()}${node.type.slice(1)} "${nodeTitle(node)}" has produced results, so its content is locked. ${remedy}`);
+    fail(`${nodeTypeLabel(node.type)} "${nodeTitle(node)}" has produced results, so its content is locked. ${remedy}`);
   }
 
   // ---------- operations ----------
@@ -785,10 +786,10 @@ export function planChangeSet(state, operations, ctx) {
     add_run(op) {
       if ('input_dataset' in op) fail('add_run reads input (a dataset, run or process) plus input_branch for a process branch; input_dataset is not used.');
       const prompt = op.prompt ? resolve(op.prompt, 'prompt', ['prompt']) : null;
-      // Like the user, the Agent has no per-Run model or settings: Runs use the Run model chosen in Settings → Run.
-      if (op.credential_id != null || op.settings != null) fail('A Run uses the default Run model and settings from Settings; credential_id and settings cannot be set per Run.');
+      // Like the user, the Agent has no per-Generate model or settings: Runs use the Generate model chosen in Settings → Generate.
+      if (op.credential_id != null || op.settings != null) fail('A Generate uses the default Generate model and settings from Settings; credential_id and settings cannot be set per Generate.');
       const runsOfPrompt = new Set(next.connections.filter((c) => c.type === 'prompt-to-run' && c.fromId === prompt?.nodeId).map((c) => c.toId));
-      const name = uniqueName(clean(op.name) || 'Run', takenNames('run', (n) => runsOfPrompt.has(n.nodeId)));
+      const name = uniqueName(generateDisplayName(op.name), takenNames('run', (n) => runsOfPrompt.has(n.nodeId)));
       const node = addNode({ type: 'run', nodeId: generateNodeId(), ...placeNear(prompt), runName: name, nodeOrigin: 'agent' });
       const source = op.input ? resolveSource(op.input, op.input_branch, 'input', node.nodeId) : null;
       if ((!prompt || !source) && Object.keys(op.input_mapping || {}).length) fail('Connect a Prompt and Data input before setting input_mapping.');
@@ -798,11 +799,11 @@ export function planChangeSet(state, operations, ctx) {
       if (prompt) connect(prompt.nodeId, node.nodeId, 'prompt-to-run');
       registerRef(op, node.nodeId);
       return {
-        kind: 'add', type: 'run', title: `New run "${name}"`, nodeIds: [node.nodeId],
+        kind: 'add', type: 'run', title: `New Generate "${name}"`, nodeIds: [node.nodeId],
         lines: [
           prompt ? `Prompt "${nodeTitle(prompt)}"${source ? ` on "${stepSourceLabel(next, source)}"` : '; Data input not connected'}` : 'Prompt input not connected',
           ...(source ? [mappingLine(mapping, source)] : []),
-          'Model and settings: Settings → Run',
+          'Model and settings: Settings → Generate',
           'Not started: it runs when you start it.',
         ],
       };
@@ -834,7 +835,7 @@ export function planChangeSet(state, operations, ctx) {
       connect(run.nodeId, node.nodeId, 'run-to-score');
       registerRef(op, node.nodeId);
       return { kind: 'add', type: 'score', title: `New Evaluate "${name}"`, nodeIds: [node.nodeId],
-        lines: [`Run "${nodeTitle(run)}" vs ground truth "${nodeTitle(groundTruth)}"`, ...lines],
+        lines: [`Generate "${nodeTitle(run)}" vs ground truth "${nodeTitle(groundTruth)}"`, ...lines],
         diffs: node.scoreMatchCode ? [{ label: 'Match code', before: '', after: node.scoreMatchCode }] : ruleDiffs };
     },
 
@@ -864,7 +865,7 @@ export function planChangeSet(state, operations, ctx) {
         const source = runInputSource(next, node.nodeId);
         if (source) lines.push(mappingLine(parseJson(node.runInputToColumn, {}), source));
       }
-      return { kind: 'update', type: node.type, title: `Connect ${node.type} "${nodeTitle(node)}"`, nodeIds: [node.nodeId], lines, diffs };
+      return { kind: 'update', type: node.type, title: `Connect ${nodeTypeLabel(node.type)} "${nodeTitle(node)}"`, nodeIds: [node.nodeId], lines, diffs };
     },
 
     // Leave one input empty, as dragging its line off on the canvas does.
@@ -887,7 +888,7 @@ export function planChangeSet(state, operations, ctx) {
         lines.push(`${port.id} is removed from process()'s parameters.`);
       }
       if (node.type === 'run' && String(node.runInputToColumn || '') !== mappingBefore) lines.push('Its column mapping is cleared.');
-      return { kind: 'update', type: node.type, title: `Disconnect ${node.type} "${nodeTitle(node)}"`, nodeIds: [node.nodeId], lines, diffs };
+      return { kind: 'update', type: node.type, title: `Disconnect ${nodeTypeLabel(node.type)} "${nodeTitle(node)}"`, nodeIds: [node.nodeId], lines, diffs };
     },
 
     update(op) {
@@ -983,18 +984,18 @@ export function planChangeSet(state, operations, ctx) {
       }
 
       if (node.type === 'run') {
-        if (node.runPending) fail(`Run "${before}" is running; stop it before changing it.`);
+        if (node.runPending) fail(`Generate "${before}" is running; stop it before changing it.`);
         if ('prompt' in set || 'input' in set || 'input_branch' in set || 'input_mapping' in set) {
-          // As on the canvas: without History, a Run's Prompt, input and mapping lock once it has results.
+          // As on the canvas: without History, a Generate's Prompt, input and mapping lock once it has results.
           if (next.historyVersion !== 1 && (runResultsExist(node) || node.runCompleted === true || node.runCompleted === '1')) {
-            fail(`Run "${before}" already has results, so its prompt, input and mapping are fixed. Add a new run (add_run) instead.`);
+            fail(`Generate "${before}" already has results, so its prompt, input and mapping are fixed. Add a new Generate (add_run) instead.`);
           }
           const currentPromptId = next.connections.find((c) => c.type === 'prompt-to-run' && c.toId === node.nodeId)?.fromId;
           const prompt = 'prompt' in set
             ? resolve(set.prompt, 'prompt', ['prompt'])
             : resolve(currentPromptId, 'the run\'s prompt', ['prompt']);
           const current = runInputSource(next, node.nodeId);
-          if (!current && !('input' in set)) fail(`Run "${before}" has no input; set input.`);
+          if (!current && !('input' in set)) fail(`Generate "${before}" has no input; set input.`);
           const source = 'input' in set || 'input_branch' in set
             ? resolveSource(set.input ?? current.nodeId, set.input_branch, 'input', node.nodeId)
             : current;
@@ -1027,7 +1028,7 @@ export function planChangeSet(state, operations, ctx) {
           ]);
           for (const key of ['exclude_row_keys', 'include_row_keys']) {
             if (!(key in set)) continue;
-            if (!Array.isArray(set[key]) || set[key].some((value) => !validKeys.has(String(value)))) fail(`${key} must contain existing GT indices ("0", "1", ...) or Run row keys ("run:0", ...).`);
+            if (!Array.isArray(set[key]) || set[key].some((value) => !validKeys.has(String(value)))) fail(`${key} must contain existing GT indices ("0", "1", ...) or model output row keys ("run:0", ...).`);
           }
           const exclude = (set.exclude_row_keys || []).map(String);
           const include = (set.include_row_keys || []).map(String);
@@ -1035,7 +1036,7 @@ export function planChangeSet(state, operations, ctx) {
           for (const key of exclude) excluded[key] = true;
           for (const key of include) delete excluded[key];
           node.scoreRowExcludedFromScoring = excluded;
-          const describeKey = (key) => key.startsWith('run:') ? `Run result row ${Number(key.slice(4)) + 1}` : `GT row ${Number(key) + 1}`;
+          const describeKey = (key) => key.startsWith('run:') ? `Output row ${Number(key.slice(4)) + 1}` : `GT row ${Number(key) + 1}`;
           if (exclude.length) lines.push(`Exclude from scoring and future Optimize inputs: ${exclude.map(describeKey).join(', ')}.`);
           if (include.length) lines.push(`Re-include in scoring and future Optimize inputs: ${include.map(describeKey).join(', ')}.`);
           if (node.reviewResult) {
@@ -1092,15 +1093,15 @@ export function planChangeSet(state, operations, ctx) {
         }
       }
 
-      return { kind: 'update', type: node.type, title: `Change ${node.type === 'promptReview' ? 'Optimize' : node.type === 'score' ? 'Evaluate' : node.type} "${before}"`, nodeIds: [node.nodeId], lines, diffs };
+      return { kind: 'update', type: node.type, title: `Change ${nodeTypeLabel(node.type)} "${before}"`, nodeIds: [node.nodeId], lines, diffs };
     },
 
     save_run_results(op) {
       const run = resolve(op.run, 'run', ['run']);
-      if (run.runPending) fail(`Run "${nodeTitle(run)}" is still running; save its results once it finishes.`);
+      if (run.runPending) fail(`Generate "${nodeTitle(run)}" is still running; save its results once it finishes.`);
       const results = runResultsOf(run);
-      if (!results.length) fail(`Run "${nodeTitle(run)}" has no results yet.`);
-      if (!clean(run.historyRecordId)) fail(`Run "${nodeTitle(run)}" has no History record. Run it again before saving its results.`);
+      if (!results.length) fail(`Generate "${nodeTitle(run)}" has no results yet.`);
+      if (!clean(run.historyRecordId)) fail(`Generate "${nodeTitle(run)}" has no History record. Run it again before saving its results.`);
       // The same table and note as Save results in the UI (savedDatasets.js).
       const saved = savedRunOutput(next, run.nodeId);
       const { table } = saved;
@@ -1117,9 +1118,9 @@ export function planChangeSet(state, operations, ctx) {
         nodeOrigin: 'agent',
       });
       registerRef(op, node.nodeId);
-      const lines = [`${table.rows.length} rows from run "${nodeTitle(run)}"; ${table.headers.length} columns`];
+      const lines = [`${table.rows.length} rows from Generate "${nodeTitle(run)}"; ${table.headers.length} columns`];
       if (!completed) lines.push('The run did not finish, so only the rows it produced are saved.');
-      return { kind: 'add', type: 'dataset', title: `Save the results of run "${nodeTitle(run)}" as "${name}"`, nodeIds: [node.nodeId], lines };
+      return { kind: 'add', type: 'dataset', title: `Save the results of Generate "${nodeTitle(run)}" as "${name}"`, nodeIds: [node.nodeId], lines };
     },
 
     save_process_output(op) {
@@ -1200,7 +1201,7 @@ export function planChangeSet(state, operations, ctx) {
 
     remove(op) {
       const node = resolve(op.node, 'node');
-      if (node.type === 'run' && node.runPending) fail(`Run "${nodeTitle(node)}" is running; stop it before removing it.`);
+      if (node.type === 'run' && node.runPending) fail(`Generate "${nodeTitle(node)}" is running; stop it before removing it.`);
       if (node.type === 'promptReview' && node.reviewPending) fail(`Optimize "${nodeTitle(node)}" is running; stop it before removing it.`);
       if (node.type === 'score' && node.scoreMatchPending) fail(`Evaluate "${nodeTitle(node)}" is matching; stop it before removing it.`);
       const id = node.nodeId;
@@ -1212,14 +1213,14 @@ export function planChangeSet(state, operations, ctx) {
       if (node.type === 'dataset' && next.nodes.some((other) => !removingIds.has(other.nodeId)
         && ((other.type === 'run' && runInputSource(next, other.nodeId)?.nodeId === id)
           || (other.type === 'score' && other.scoreGroundTruthId === id)))) {
-        fail(`Dataset "${nodeTitle(node)}" is selected by a Run or Evaluate. Disconnect it first, or remove the reader in the same proposal.`);
+        fail(`Dataset "${nodeTitle(node)}" is selected by a Generate or Evaluate. Disconnect it first, or remove the reader in the same proposal.`);
       }
       const lines = [];
       // Every step reading this node loses that input (a Process its df or its df_<alias> input).
       for (const edge of next.connections.filter((c) => c.type === DATA_EDGE && c.fromId === id)) {
         const reader = byId().get(edge.toId);
         if (!reader) continue;
-        lines.push(reader.type === 'run' ? `Run "${nodeTitle(reader)}" loses its input`
+        lines.push(reader.type === 'run' ? `Generate "${nodeTitle(reader)}" loses its input`
           : `Process "${nodeTitle(reader)}" loses its input ${edge.alias || 'df'}`);
       }
       for (const other of next.nodes) {
@@ -1233,12 +1234,12 @@ export function planChangeSet(state, operations, ctx) {
         if (c.fromId !== id && c.toId !== id) continue;
         const other = byId().get(c.fromId === id ? c.toId : c.fromId);
         if (other && ['prompt-to-run', 'run-to-score', 'score-to-prompt-review'].includes(c.type) && c.fromId === id) {
-          lines.push(`${other.type === 'promptReview' ? 'Optimize' : other.type === 'score' ? 'Evaluate' : other.type[0].toUpperCase() + other.type.slice(1)} "${nodeTitle(other)}" is disconnected`);
+          lines.push(`${nodeTypeLabel(other.type)} "${nodeTitle(other)}" is disconnected`);
         }
       }
       disconnectWhere((c) => c.fromId === id || c.toId === id);
       next.nodes = next.nodes.filter((n) => n.nodeId !== id);
-      return { kind: 'remove', type: node.type, title: `Remove ${node.type === 'promptReview' ? 'Optimize' : node.type === 'score' ? 'Evaluate' : node.type} "${nodeTitle(node)}"`, nodeIds: [id], lines };
+      return { kind: 'remove', type: node.type, title: `Remove ${nodeTypeLabel(node.type)} "${nodeTitle(node)}"`, nodeIds: [id], lines };
     },
   };
 

@@ -97,7 +97,7 @@ test('each node type has its inputs on the left and outputs on the right', () =>
 
 test('the inputs fixed when a node is created say why', () => {
   const state = canvas();
-  assert.match(nodePorts(state, 'score').inputs[0].fixed, /Run it was created from/);
+  assert.match(nodePorts(state, 'score').inputs[0].fixed, /Generate it was created from/);
   assert.equal(nodePorts(state, 'score').inputs[0].hollow, undefined);
   assert.equal(nodePorts(state, 'score').inputs[1].fixed, undefined);
   assert.equal(nodePorts(state, 'score').inputs[1].hollow, undefined);
@@ -165,7 +165,7 @@ test('steps show source names and icons while preserving port ids, aliases and h
   assert.equal(nodePorts(state, 'fresh').outputs[0].displayLabel, 'Outputs unknown');
   const evaluate = nodePorts(state, 'score');
   assert.deepEqual(evaluate.inputs.map((item) => [item.id, item.displayLabel, item.icon]), [
-    ['run', 'Run', 'run'], ['ground_truth', 'Gold', 'table'],
+    ['run', 'Generate', 'run'], ['ground_truth', 'Gold', 'table'],
   ]);
   assert.equal(evaluate.outputs[0].displayLabel, 'Output');
   assert.equal(evaluate.outputs[0].icon, PORT_TYPES.TABLE);
@@ -194,7 +194,7 @@ test('source labels refresh after rename and replacement without rewriting Proce
   state.nodes.find((node) => node.nodeId === 'abstracts').name = 'Renamed abstracts';
   state.nodes.find((node) => node.nodeId === 'v1').name = 'Extract proteins';
   assert.deepEqual(nodePorts(state, 'extract').inputs.map((item) => item.displayLabel), ['Extract proteins', 'Renamed abstracts']);
-  assert.equal(nodePorts(state, 'split').inputs[0].displayLabel, 'Run');
+  assert.equal(nodePorts(state, 'split').inputs[0].displayLabel, 'Generate');
   state.nodes.find((node) => node.nodeId === 'extract').runName = 'Kinase extraction';
   assert.equal(nodePorts(state, 'split').inputs[0].displayLabel, 'Kinase extraction');
   assert.equal(nodePorts(state, 'score').inputs[0].displayLabel, 'Kinase extraction');
@@ -327,7 +327,7 @@ test('each refused connection says why', () => {
   assert.equal(reason(at('v1', 'prompt'), at('split', 'df')), 'The df input takes a table, not a Prompt.');
   assert.equal(reason(at('abstracts', 'result'), at('extract', 'prompt')), 'The prompt input takes a Prompt, not a table.');
   assert.equal(reason(at('score', 'score'), at('extract', 'input')), 'The input input takes a table, not an Evaluate node.');
-  assert.match(reason(at('gold', 'result'), at('score', 'run')), /Run it was created from/);
+  assert.match(reason(at('gold', 'result'), at('score', 'run')), /Generate it was created from/);
   assert.match(reason(at('v1', 'prompt'), at('review', 'score')), /takes an Evaluate node, not a Prompt/);
   assert.equal(reason(at('extract', 'result'), at('score', 'ground_truth')), 'The ground truth must be a Dataset.');
   assert.match(reason(at('dyn', 'result'), at('extract', 'input')), /once the Process has run/);
@@ -346,7 +346,7 @@ test('a running step keeps its inputs, as its window does', () => {
   assert.match(checkDisconnect(state, at('extract', 'input')).reason, /is running/);
 });
 
-test('without History, a Run with results keeps its prompt and input', () => {
+test('without History, a Generate with results keeps its prompt and input', () => {
   const state = canvas();
   delete state.historyVersion;
   const run = state.nodes.find((node) => node.nodeId === 'extract');
@@ -366,7 +366,7 @@ test('an input can be left empty, except where the plan keeps it', () => {
   assert.deepEqual(checkDisconnect(state, at('extract', 'prompt')), { ok: true, op: { type: 'run-prompt', runId: 'extract', promptId: '' } });
   assert.deepEqual(checkDisconnect(state, at('score', 'ground_truth')), { ok: true, op: { type: 'score-ground-truth', scoreId: 'score', datasetId: '' } });
   assert.deepEqual(checkDisconnect(state, at('split', 'df')), { ok: true, op: { type: 'process-df', processId: 'split', source: null } });
-  assert.match(checkDisconnect(state, at('score', 'run')).reason, /Run it was created from/);
+  assert.match(checkDisconnect(state, at('score', 'run')).reason, /Generate it was created from/);
   assert.match(checkDisconnect(state, at('review', 'score')).reason, /Evaluate node it was created from/);
   assert.match(checkDisconnect(state, at('sampler', 'source')).reason, /Dataset it was created from/);
   assert.deepEqual(checkDisconnect(state, at('merge', 'df_abstracts')).op, { type: 'process-alias-remove', processId: 'merge', alias: 'df_abstracts' });
@@ -549,14 +549,14 @@ test('hover text says what an input reads, what an output gives, and where a nod
   const state = canvas();
   const titles = (nodeId) => portTitles(state, nodeId, nodePorts(state, nodeId));
   assert.deepEqual(titles('extract').inputs, { prompt: 'Input: Extract v1', input: 'Input: Abstracts' });
-  assert.equal(titles('split').inputs.df, 'Input: Run');
+  assert.equal(titles('split').inputs.df, 'Input: Generate');
   assert.equal(titles('extract').outputs.result, 'Output: no output yet');
   assert.equal(titles('extract').lineageOut, 'Create an Evaluate node or save results to workspace.\nCreated Evaluate "Score"\nSaved as Dataset "Saved"');
   assert.equal(titles('abstracts').outputs.result, 'Output: 1 row · pmid, text');
   assert.equal(titles('other').outputs.out, 'Output: out · no output yet');
   assert.equal(titles('merge').inputs.df, 'Input: Split · ready');
   assert.equal(titles('fresh').inputs.df, 'Input: Not connected');
-  assert.match(titles('score').inputs.run, /^Input: Run\nAn Evaluate node compares/);
+  assert.match(titles('score').inputs.run, /^Input: Generate\nAn Evaluate node compares/);
   assert.equal(titles('review').inputs.score, 'Input: Score\nAn Optimize node analyzes the Evaluate node it was created from. Start a new Optimize node from another Evaluate node.');
   assert.match(titles('dyn').outputs.result, /once the Process has run/);
   assert.equal(titles('v2').lineageIn, 'New version of "Extract v1"');
@@ -567,7 +567,7 @@ test('hover text says what an input reads, what an output gives, and where a nod
   assert.equal(titles('sample').lineageIn, 'Sampled by "Sample"');
   assert.equal(titles('sampler').lineageOut, 'Create a sample dataset.\nSample "Sample 20"');
   assert.equal(titles('abstracts').lineageOut, 'Create a Sample or a new dataset version.\nCreated Sample "Sample"');
-  assert.equal(titles('saved').lineageIn, 'Saved from Run of "Extract v1"');
+  assert.equal(titles('saved').lineageIn, 'Saved from Generate using "Extract v1"');
   assert.equal(titles('abstracts').lineageIn, '');
 });
 

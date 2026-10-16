@@ -1,3 +1,4 @@
+import { generateDisplayName } from './nodeLabels.js';
 export function createWorkflowCanvasNames(deps = {}) {
   const {
     nodesLayer,
@@ -104,21 +105,22 @@ export function createWorkflowCanvasNames(deps = {}) {
   }
 
   function isRunNameAlreadyUsedForPromptNodeId(nameToCheck, promptNodeId, excludeRunNodeId = null) {
-    const normalized = (nameToCheck || '').trim().toLowerCase();
+    if (!String(nameToCheck || '').trim()) return true;
+    const normalized = generateDisplayName(nameToCheck).toLowerCase();
     if (!normalized) return true;
     if (!promptNodeId) return false;
     const runEdges = getConnectionsList().filter((c) => c.fromId === promptNodeId && c.type === EDGE_TYPE_PROMPT_TO_RUN);
     for (const edge of runEdges) {
       if (edge.toId === excludeRunNodeId) continue;
       const runNode = getNodeById(edge.toId);
-      const existing = (runNode?.dataset?.runName ?? runNode?.querySelector?.('.workflow-node__title')?.textContent ?? '').trim() || 'Run';
+      const existing = generateDisplayName(runNode?.dataset?.runName ?? runNode?.querySelector?.('.workflow-node__title')?.textContent);
       if (existing.toLowerCase() === normalized) return true;
     }
     return false;
   }
 
   function findUniqueRunName(baseName, promptNodeId) {
-    const base = (baseName || '').trim() || 'Run';
+    const base = generateDisplayName(baseName);
     if (!isRunNameAlreadyUsedForPromptNodeId(base, promptNodeId)) return base;
     let n = 2;
     let candidate = '';

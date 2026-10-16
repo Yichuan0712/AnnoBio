@@ -23,8 +23,8 @@ const modelLabel = (id) => (id === 'cred' ? 'claude-sonnet' : id);
 
 test('the plan reads as inputs, reused results and the steps that run, in order', () => {
   const view = runPlanView(plan(), { modelLabel });
-  assert.equal(view.title, 'Execute to "Score"');
-  assert.equal(runPlanView({ ...plan(), scope: 'this' }).title, 'Execute "Score"');
+  assert.equal(view.title, 'Run to "Score"');
+  assert.equal(runPlanView({ ...plan(), scope: 'this' }).title, 'Run "Score"');
   assert.deepEqual(view.inputs.map((input) => input.text), [
     'Docs · 1,000 rows · read by Extract',
     'Species · 1 row · read by Tidy',
@@ -54,13 +54,13 @@ test('problems sit on their step or input and keep it from starting', () => {
   const view = runPlanView(plan({ problems: [
     { nodeId: 'score', message: '"Score" has no column mapped to {answer}.' },
     { nodeId: 'species', message: 'Input Dataset "Species" has no current result.' },
-    { nodeId: 'elsewhere', message: 'Run to here works on Run and Process steps.' },
+    { nodeId: 'elsewhere', message: 'Run to here works on Generate and Process steps.' },
   ] }), { modelLabel });
   assert.equal(view.canStart, false);
   assert.equal(view.hasProblems, true);
   assert.deepEqual(view.toRun.find((item) => item.nodeId === 'score').problems, ['"Score" has no column mapped to {answer}.']);
   assert.deepEqual(view.inputs[1].problems, ['Input Dataset "Species" has no current result.']);
-  assert.deepEqual(view.otherProblems, ['Run to here works on Run and Process steps.']);
+  assert.deepEqual(view.otherProblems, ['Run to here works on Generate and Process steps.']);
 });
 
 test('a plan that runs only Process steps has no model calls line', () => {

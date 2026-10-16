@@ -11,7 +11,7 @@ const prompt = (nodeId, name, text, returnShape = 'single') => ({
 });
 const run = (nodeId, mapping, extra = {}) => ({ type: 'run', nodeId, runInputToColumn: JSON.stringify(mapping), runCredentialId: 'cred', ...extra });
 const process = (nodeId, name, code = 'def process(df):\n    return df\n', extra = {}) => ({ type: 'process', nodeId, name, dfCode: code, ...extra });
-/** A Run's current complete result over `count` input rows. */
+/** A Generate's current complete result over `count` input rows. */
 const runDone = (count) => ({
   runCompleted: '1',
   runResults: JSON.stringify(Array.from({ length: count }, (_, i) => ({ input_row_index: i, output: { answer: `a${i}` } }))),
@@ -102,7 +102,7 @@ test('two Datasets into one Process are both inputs', () => {
   assert.equal(plan.steps[0].inputRows, 3);
 });
 
-test('a Run stopped part way continues, counting only the rows left', () => {
+test('a Generate stopped part way continues, counting only the rows left', () => {
   const state = chain();
   node(state, 'extract').runResumable = true;
   node(state, 'extract').runResults = JSON.stringify([{ input_row_index: 0, output: {} }, { input_row_index: 1, output: {} }]);
@@ -141,18 +141,18 @@ test('what keeps a step from running is a problem on that step', () => {
     { nodeId: 'extract', message: '"Extract" is already running.' },
     { nodeId: 'tidy', message: 'No Python interpreter is set. Choose one in Settings → Python.' },
     { nodeId: 'score', message: '"Score" has no column mapped to {answer}.' },
-    { nodeId: 'score', message: '"Score" has no usable model. Choose one in Settings → Run.' },
+    { nodeId: 'score', message: '"Score" has no usable model. Choose one in Settings → Generate.' },
   ]);
 });
 
-test('a Run without a Prompt or input, and a Process without process(df), are problems', () => {
+test('a Generate without a Prompt or input, and a Process without process(df), are problems', () => {
   const state = {
     nodes: [run('lonely', {}), process('broken', 'Broken', 'print(1)')],
     connections: [data('lonely', 'broken', 'df')],
   };
   const messages = planRunTo(state, 'broken', context).problems.map((item) => item.message);
-  assert.ok(messages.includes('"Run" is not connected to a Prompt.'));
-  assert.ok(messages.includes('"Run" has no input. Connect a Dataset or a step to it.'));
+  assert.ok(messages.includes('"Generate" is not connected to a Prompt.'));
+  assert.ok(messages.includes('"Generate" has no input. Connect a Dataset or a step to it.'));
   assert.ok(messages.includes('"Broken" does not define process(df).'));
 });
 
@@ -169,12 +169,12 @@ test('a branch the upstream Process is known not to return is a problem', () => 
   assert.ok(messages.includes('Process "Split" does not return branch "right".'), messages.join(' | '));
 });
 
-test('the target must be a Run or a Process', () => {
+test('the target must be a Generate or a Process', () => {
   const state = chain();
   state.nodes.push({ type: 'score', nodeId: 'eval' });
   for (const id of ['eval', 'docs', 'p-extract', 'missing']) {
     const plan = planRunTo(state, id, context);
-    assert.deepEqual(plan.problems, [{ nodeId: id, message: 'Execute works on Run and Process steps.' }]);
+    assert.deepEqual(plan.problems, [{ nodeId: id, message: 'Run works on Generate and Process steps.' }]);
     assert.deepEqual(plan.steps, []);
   }
 });
@@ -194,12 +194,12 @@ test('a step that needs updating runs, and its downstream says why it waits', ()
   assert.deepEqual(plan.problems, []);
 });
 
-test('Execute this step plans only the step, and needs current results before it', () => {
+test('Run this step plans only the step, and needs current results before it', () => {
   const state = chain();
   const waiting = planRunTo(state, 'tidy', context, { onlyThis: true });
   assert.equal(waiting.scope, 'this');
   assert.deepEqual(actions(waiting), [['tidy', 'run']]);
-  assert.deepEqual(waiting.problems.map((item) => item.message), ['"Extract" has no current result. Use Execute to here to run it first.']);
+  assert.deepEqual(waiting.problems.map((item) => item.message), ['"Extract" has no current result. Use Run to here to run it first.']);
   assert.equal(upstreamWithoutResult(state, 'tidy'), 'Extract');
   assert.equal(upstreamWithoutResult(state, 'extract'), null);
 

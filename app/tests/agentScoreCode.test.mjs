@@ -19,7 +19,7 @@ const state = () => ({ nodes: [
   { type: 'run-to-score', fromId: 'run', toId: 'score' }] });
 const response = (body) => ({ ok: true, status: 200, json: async () => body });
 
-test('code scoring shares the Score window dictionaries, retains asset cells and sparse Run row indices', () => {
+test('code scoring shares the Score window dictionaries, retains asset cells and sparse model output row indices', () => {
   const payload = buildCodeMatchInputs({ results, outputFields: [],
     input: { headers: ['image'], rows: [[imageCell(['img'], ['a.png'])], [imageCell()]] },
     groundTruth: { headers: ['PDF'], rows: [[pdfCell(['pdf'], ['a.pdf'])]] },
@@ -27,7 +27,7 @@ test('code scoring shares the Score window dictionaries, retains asset cells and
   assert.deepEqual(payload.runRowIndices, [0, 2]);
   assert.deepEqual(payload.runRows[0], { input_row: { image: imageCell(['img'], ['a.png']) }, output_row: { answer: 'A' } });
   assert.deepEqual(payload.gtRows[0], { gt_row: { PDF: pdfCell(['pdf'], ['a.pdf']) } });
-  assert.throws(() => buildCodeMatchInputs({ results: [], groundTruth }), /No run results/);
+  assert.throws(() => buildCodeMatchInputs({ results: [], groundTruth }), /No model outputs/);
 });
 
 test('Agent runs custom-code Score jobs and reports progress without model calls', async () => {
@@ -92,7 +92,7 @@ test('run_nodes previews and executes a custom-code Score through the canvas API
     const result = await executeRunRequest(request, env);
     assert.equal(result.status, 'completed');
     assert.deepEqual(calls, ['score']);
-    assert.match(result.results[0], /2\/2 Run rows matched/);
+    assert.match(result.results[0], /2\/2 model output rows matched/);
     canvas.nodes.find((node) => node.nodeId === 'score').scoreActiveMatchMode = 'rules';
     assert.match((await previewRunRequest(request, env)).error, /compute automatically/);
   } finally { globalThis.fetch = previousFetch; }

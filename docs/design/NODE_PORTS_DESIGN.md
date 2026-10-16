@@ -1,5 +1,7 @@
 # 节点端口：设计草案（讨论稿）
 
+> 命名更新（2026-10-16）：界面中的 Run 节点现称 **Generate**；操作称 **Run to here / Run this step / Run again**，Settings 的对应页签称 Generate。本文旧称及历史实施记录保留原义；内部 `type: run`、工具名、字段和 API 不变。
+
 状态：第一部分（端口和拖线，第 1–10 节、第 12 节）已实现（2026-10-10，计划的 7 步全部完成，见 [NODE_PORTS_PLAN.md](NODE_PORTS_PLAN.md) §5、§6）。第二部分（统一的运行入口、Pipeline 里的 Prompt，第 11、13 节）待讨论。基于 `261007-data-flow-design` / `790c0a7`（2026-10-09）。
 
 当前交互更新（2026-10-14）：圆点统一为同色实心，不再用空心区分固定来源。除真正多输出的 Process 按分支显示多个输出点外，每个节点右侧只显示一个输出点；保存、创建下一步和新版本都收进该点的菜单，不额外显示 Next steps、New version 或 Save outputs 圆点。新建关系也连接到这个点；Process 保存分支时连接该分支的输出点。固定输入仍不可换源。右键、分支与拖线菜单共用 `outputMenu.js`，包含保存（空 Process 分支也能保存）、创建 Evaluate／Optimize／Sample／新 Prompt 和新版本。空输入拖到空白处通过同一连接校验创建合适的上游节点。松手后保留临时线，选择操作完成连接，点空白或按 Esc 取消。下文关于空心／实心和旧菜单范围的描述为早期设计背景。

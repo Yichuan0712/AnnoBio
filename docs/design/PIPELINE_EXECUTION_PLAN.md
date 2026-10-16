@@ -1,5 +1,7 @@
 # Pipeline 执行体系：整体计划
 
+> 命名更新（2026-10-16）：界面中的 Run 节点现称 **Generate**；操作称 **Run to here / Run this step / Run again**，Settings 的对应页签称 Generate。本文旧称及历史实施记录保留原义；内部 `type: run`、工具名、字段和 API 不变。
+
 日期：2026-09-30。代码基线：`main` / `0b257f9`。
 
 更新（2026-10-16）：界面上的整条运行入口（Run Pipeline、Stop、Resume、Run History、Prepare inputs 窗口）和 Agent 的整条运行操作已删除，改由 Run to here 和 Executions 页签代替，见 [RUN_TO_HERE_PLAN.md](RUN_TO_HERE_PLAN.md)。编译器和导出器照常使用；后端 Runner 和 `/api/pipeline/runs*` 接口保留，界面不再调用。下面是删除前的状态。

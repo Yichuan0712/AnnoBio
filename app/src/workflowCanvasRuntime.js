@@ -271,11 +271,11 @@ export function createWorkflowCanvasRuntime(deps = {}) {
   } = {}) {
     const normalizedRunNodeId = String(runNodeId || '').trim();
     if (!normalizedRunNodeId) {
-      throw new Error('Run node id is required.');
+      throw new Error('Generate node id is required.');
     }
     const node = getNodeById(normalizedRunNodeId);
     if (!node || !node.classList.contains('workflow-node--run')) {
-      throw new Error('Run node was not found.');
+      throw new Error('Generate node was not found.');
     }
 
     const existingPendingRunId = pendingRuns.get(normalizedRunNodeId) || null;
@@ -300,13 +300,13 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     const promptEdge = connections.find((c) => c.toId === normalizedRunNodeId && c.type === 'prompt-to-run');
     const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
     if (!promptNode) {
-      throw new Error('This run node is not connected to an upstream prompt.');
+      throw new Error('This Generate node is not connected to an upstream Prompt.');
     }
 
     // The input's table, or why it has none yet: a Dataset, or another step's complete result (stepOutputs.js).
     const input = readRunInput(node);
     if (!input.source) {
-      throw new Error('This run node has no selected input dataset.');
+      throw new Error('This Generate node has no selected input dataset.');
     }
     if (input.waiting) throw new Error(input.message);
     let existingResults = [];
@@ -386,7 +386,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
 
     const credentialId = await resolveRunCredentialId(node);
     if (!credentialId) {
-      throw new Error('This run node has no selected credential.');
+      throw new Error('This Generate node has no selected credential.');
     }
 
     const nextRowIndex = getNextRowIndex(existingResults, rows.length);
@@ -485,7 +485,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       const runId = String(data?.run_id || '').trim();
       if (!runId) {
         if (historyRecord) {
-          await historySession.putRecord({ ...historyRecord, status: 'failed', updatedAt: new Date().toISOString(), error: 'Backend did not return a Run job ID.' });
+          await historySession.putRecord({ ...historyRecord, status: 'failed', updatedAt: new Date().toISOString(), error: 'Backend did not return a Generate job ID.' });
           pendingRunHistoryRecords.delete(normalizedRunNodeId);
         }
         throw new Error('Run started but no run id was returned by the backend.');
@@ -580,14 +580,14 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     const normalizedRunNodeId = String(runNodeId || '').trim();
     const normalizedGroundTruthNodeId = String(groundTruthNodeId || '').trim();
     if (!normalizedRunNodeId) {
-      throw new Error('Run node id is required.');
+      throw new Error('Generate node id is required.');
     }
     if (!normalizedGroundTruthNodeId) {
       throw new Error('Ground-truth dataset node id is required.');
     }
     const runNode = getNodeById(normalizedRunNodeId);
     if (!runNode || !runNode.classList.contains('workflow-node--run')) {
-      throw new Error('Run node was not found.');
+      throw new Error('Generate node was not found.');
     }
     const groundTruthNode = getNodeById(normalizedGroundTruthNodeId);
     if (!groundTruthNode || !groundTruthNode.classList.contains('workflow-node--dataset')) {
@@ -1031,12 +1031,12 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     const runEdge = connections.find((c) => c.toId === scoreNode.dataset.nodeId && c.type === 'run-to-score');
     const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
     if (!runNode || !runNode.classList.contains('workflow-node--run')) {
-      throw new Error('Evaluate node is not connected to an upstream run.');
+      throw new Error('Evaluate node is not connected to an upstream Generate.');
     }
     const promptEdge = connections.find((c) => c.toId === runNode.dataset.nodeId && c.type === 'prompt-to-run');
     const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
     if (!promptNode || !promptNode.classList.contains('workflow-node--prompt')) {
-      throw new Error('Run node is not connected to an upstream prompt.');
+      throw new Error('Generate node is not connected to an upstream prompt.');
     }
 
     const promptText = promptNode.dataset.promptText || '';
@@ -1050,7 +1050,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       if (!Array.isArray(runResults)) runResults = [];
     } catch (_) {}
     if (runResults.length === 0) {
-      throw new Error('Upstream run must have results before starting optimization.');
+      throw new Error('Upstream Generate must have results before starting optimization.');
     }
 
     let schemaFields = [];
@@ -1312,12 +1312,12 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     const runEdge = connections.find((connection) => connection.toId === scoreNode.dataset.nodeId && connection.type === 'run-to-score');
     const runNode = runEdge ? getNodeById(runEdge.fromId) : null;
     if (!runNode || !runNode.classList.contains('workflow-node--run')) {
-      throw new Error('Evaluate node is not connected to an upstream run.');
+      throw new Error('Evaluate node is not connected to an upstream Generate.');
     }
     const promptEdge = connections.find((connection) => connection.toId === runNode.dataset.nodeId && connection.type === 'prompt-to-run');
     const promptNode = promptEdge ? getNodeById(promptEdge.fromId) : null;
     if (!promptNode || !promptNode.classList.contains('workflow-node--prompt')) {
-      throw new Error('Run node is not connected to an upstream prompt.');
+      throw new Error('Generate node is not connected to an upstream prompt.');
     }
     return { reviewNode, scoreNode, runNode, promptNode };
   }

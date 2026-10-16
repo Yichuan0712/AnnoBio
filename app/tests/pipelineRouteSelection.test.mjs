@@ -36,7 +36,7 @@ test('version and Run choices continue with what their own Run feeds', () => {
   assert.deepEqual([...choices], [['prompt:p1', 'r1']]);
 });
 
-test('a Run whose output nothing reads ends the route there', () => {
+test('a Generate whose output nothing reads ends the route there', () => {
   const state = {
     nodes: [node('dataset', 'raw'), node('prompt', 'p1'), node('prompt', 'p2'), node('run', 'r1'), node('run', 'r2'), node('process', 'clean')],
     connections: [edge('p1', 'p2', 'prompt-to-prompt'), edge('p1', 'r1', 'prompt-to-run'), edge('p2', 'r2', 'prompt-to-run'),
@@ -74,7 +74,7 @@ test('a Dataset read by both Runs and Processes starts one pipeline per step typ
   assert.deepEqual(pipelines.map(routeKinds), [['prompt:p — Run A/p — Run B'], ['process:clean/trim']]);
 });
 
-test('an output read by both a Run and a merging Process splits, keeping the shared upstream in both', () => {
+test('an output read by both a Generate and a merging Process splits, keeping the shared upstream in both', () => {
   const state = {
     nodes: [node('dataset', 'raw'), node('process', 'prep'), node('dataset', 'lookup'),
       node('prompt', 'p'), node('run', 'r'), node('process', 'join')],

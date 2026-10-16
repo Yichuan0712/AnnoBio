@@ -1,5 +1,7 @@
 # Agent 与界面功能对齐
 
+命名：界面中的模型执行节点称 Generate，操作称 Run to here / Run this step；内部 `run` 类型、`add_run`、`run_nodes` 和其他工具参数保持不变。
+
 Agent 的写入继续通过提案卡片确认，执行代码和模型任务通过执行卡片确认。界面的纯布局变化
 不需要新增工具；涉及配置、数据和运行行为的变化应同步到工具定义、校验器、执行入口和指南。
 
@@ -11,8 +13,8 @@ Agent 的写入继续通过提案卡片确认，执行代码和模型任务通�
 | 表格内移动图片 | `move_image`；同一 Dataset 的图片列间移动，源单元格移除，目标追加；遵守内容锁 |
 | Sample 配置及重复抽样 | `add_sampler` 可仅创建配置；`sample_dataset` 使用已有 Sample；与画布共用抽样代码；不放回有限、指定行/放回可重复 |
 | Sample 进度与锁定 | `inspect_node`/workspace summary 显示模式、已抽/剩余次数；首个真实输出后锁定 Sample 设置及原始 Dataset 内容 |
-| 独立 Run/Process | 可先创建空输入节点再 `connect`；Process 可先写代码；`duplicate_process` 复制代码而不复制输入/结果 |
-| 节点输入与分支 | `connect`/`disconnect` 使用共享端口校验；Run/Process 直接读上游结果或 Process 分支 |
+| 独立 Generate/Process | 可先创建空输入节点再 `connect`；Process 可先写代码；`duplicate_process` 复制代码而不复制输入/结果 |
+| 节点输入与分支 | `connect`/`disconnect` 使用共享端口校验；Generate/Process 直接读上游结果或 Process 分支 |
 | 单节点执行 | `run_nodes` 支持 Run、Process、自定义代码 Evaluate、Optimize、verify；规则 Evaluate 自动计算 |
 | Evaluate 自定义代码 | `score` job 复用 Evaluate 窗口的数据字典和匹配 API，存储同样的结果，支持进度及取消后的部分结果 |
 | Evaluate 分组规则及评分行 | `rule_tree` 完整保留嵌套 AND/OR；读取返回原始规则树；`exclude_row_keys` / `include_row_keys` 修改评分行，使用 `read_rows.rowKey`，保留已有 Optimize 的证据 |
@@ -22,7 +24,7 @@ Agent 的写入继续通过提案卡片确认，执行代码和模型任务通�
 | 单节点停止 | `run_nodes` 的 `stop` 请求取消界面或 Agent 启动的任务，Process / code Evaluate 共用瞬时任务取消句柄；已发出的模型请求可能继续完成；建议验证仍不可中途停止 |
 | History | `select_history`/`delete_history` 的预览和应用方法完整传入聊天运行环境；保留原有独立提案要求 |
 | 内容锁与删除 | `inspect_node.contentLock` 显示锁定来源；内容更新受相同锁约束；不能删除仍被下游使用的节点，可按用户要求整组删除 |
-| 运行到这里 | `run_nodes` 的 `run_to` 运行一个步骤和它之前还没有当前结果的步骤，与界面的 Execute to here 共用规划和执行代码，记录在 Executions 页签；加 `only_this` 只跑这一步（同 Execute this step）；都已是当前结果时重跑这一步 |
+| 运行到这里 | `run_nodes` 的 `run_to` 运行一个步骤和它之前还没有当前结果的步骤，与界面的 Run to here 共用规划和执行代码，记录在 Executions 页签；加 `only_this` 只跑这一步（同 Run this step）；都已是当前结果时重跑这一步 |
 | 整条 Pipeline | `pipeline_action` 只做 Python 项目导出（运行改用 `run_to`，2026-10-16 起） |
 
 以下仍由用户在界面操作：选择并上传本地新文件、配置凭据与 Python、选择 Current Pipeline 路线、

@@ -163,7 +163,7 @@ function readSavedPromptSnapshotFromNode(node) {
 }
 
 /**
- * Export format: the prompt text a Run sends + suffix matching backend/llm.py::_run_structured_fallback (approx. JSON Schema).
+ * Export format: the prompt text a Generate sends + suffix matching backend/llm.py::_run_structured_fallback (approx. JSON Schema).
  */
 function buildPromptExportText(snapshot) {
   const runTemplate = String(snapshot.text || '').trim();
@@ -297,8 +297,8 @@ export function openPromptDetailModal({ name = '', text = '', node: sourceNode =
               <div class="prompt-actions">
                 <div class="prompt-actions__trailing">
                   <button type="button" class="btn btn-secondary prompt-detail-export-local" title="Save prompt as a text file">Save as file</button>
-                  <select class="dataset-meta-input model-picker prompt-detail-run-model" aria-label="Model for the new Run"></select>
-                  <button type="button" class="btn btn-primary prompt-detail-sections-btn-run" id="prompt-detail-sections-btn-run">Create Run</button>
+                  <select class="dataset-meta-input model-picker prompt-detail-run-model" aria-label="Model for the new Generate"></select>
+                  <button type="button" class="btn btn-primary prompt-detail-sections-btn-run" id="prompt-detail-sections-btn-run">Create Generate</button>
                 </div>
               </div>
             </div>

@@ -4,6 +4,7 @@
  * Edges use stable node ids and a type field for future extensibility.
  */
 
+import { generateDisplayName } from './nodeLabels.js';
 import { openPromptDetailModal } from './promptDetailModal.js';
 import { extractInputFields } from './promptText.js';
 import { openRunDetailModal, deriveOutputFields } from './runDetailModal.js';
@@ -110,7 +111,7 @@ import { mountExecutionsPanel } from './executionsPanel.js';
 /** Same backend as Run/Review (embeddings API). */
 const SCORE_BACKEND_BASE = BACKEND_API_BASE;
 
-/** Run node may not have dataset.runCredentialId until user opens Run modal; fall back to Settings default. */
+/** Generate node may not have dataset.runCredentialId until user opens Run modal; fall back to Settings default. */
 async function resolveRunCredentialId(runNode) {
   let id = (runNode?.dataset?.runCredentialId || '').trim();
   if (id) return id;
@@ -325,7 +326,7 @@ function evaluateScoreNode(node, runRowIndex, gtRowIndex, resultsByIndex, runWs,
 
 /**
  * Build comparison rows for Review API: same logic as score detail (getRunValue, getGtValue, computeMatchPerRow).
- * `runInput` is the table the Run read (stepInputs.js); `datasetContentByNodeId` supplies the ground truth.
+ * `runInput` is the table the Generate read (stepInputs.js); `datasetContentByNodeId` supplies the ground truth.
  */
 async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNodeId, promptText = '', runInput = null) {
   if ((scoreNode?.dataset?.scoreActiveMatchMode || 'rules') === 'code') {
@@ -433,7 +434,7 @@ async function buildReviewComparisonRows(scoreNode, runNode, datasetContentByNod
   const promptPlaceholderNames = extractInputFields(promptText);
   const hdrsForPrompt = runWsSafe.headers || [];
 
-  /** Keys = `{placeholder}` names in prompt order; values = substituted cell text (Run node mapping). */
+  /** Keys = `{placeholder}` names in prompt order; values = substituted cell text (Generate node mapping). */
   function rowInputAsPromptPlaceholders(inpIdx) {
     const wsRow = runWsSafe.rows && runWsSafe.rows[inpIdx] ? runWsSafe.rows[inpIdx] : [];
     const out = {};
@@ -1240,12 +1241,12 @@ export function buildWorkflowCanvas(root, options = {}) {
     };
   }
 
-  /** The live canvas as the port rules read it (nodePorts.js): with History on, a Run's inputs stay open. */
+  /** The live canvas as the port rules read it (nodePorts.js): with History on, a Generate's inputs stay open. */
   function portState() {
     return { ...liveInputState(), historyVersion: historySession?.projectId && canvasHistoryVersion === 1 ? 1 : undefined };
   }
 
-  /** A Prompt's input names, for the mapping a Run keeps when it gets another Prompt. */
+  /** A Prompt's input names, for the mapping a Generate keeps when it gets another Prompt. */
   function promptInputNames(prompt) {
     return extractInputFields(getPromptDataFromNode(getNodeById(prompt?.nodeId))?.text || '');
   }
@@ -1431,7 +1432,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   const IMAGE_UNDO_WARNING =
     " It contains images or PDFs — undo can bring back the row, but not those files themselves, since unused assets are cleaned up automatically and may already be gone.";
 
-  /** Pending Run jobs: nodeId -> runId. Poll backend and update Run node when done. */
+  /** Pending Run jobs: nodeId -> runId. Poll backend and update Generate node when done. */
   const pendingRuns = new Map();
   const pendingProcesses = new Set();
   const pendingScoreMatches = new Set();
@@ -1614,7 +1615,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         if (!node) {
           const record = pendingRunHistoryRecords.get(nodeId);
           if (record && historySession?.projectId && canvasHistoryVersion === 1) {
-            await historySession.putRecord({ ...record, status: 'failed', updatedAt: new Date().toISOString(), error: 'The Run node was removed while its job ran.' });
+            await historySession.putRecord({ ...record, status: 'failed', updatedAt: new Date().toISOString(), error: 'The Generate node was removed while its job ran.' });
             pendingRunHistoryRecords.delete(nodeId);
           }
           pendingRuns.delete(nodeId);
@@ -1627,7 +1628,7 @@ export function buildWorkflowCanvas(root, options = {}) {
               ...record,
               status: 'stopped',
               updatedAt: new Date().toISOString(),
-              error: 'The Run was interrupted when the app closed. Resume to process the remaining rows.',
+              error: 'The Generate was interrupted when the app closed. Resume to process the remaining rows.',
             });
             node.dataset.runResumable = '1';
             pendingRunHistoryRecords.delete(nodeId);
@@ -1643,7 +1644,7 @@ export function buildWorkflowCanvas(root, options = {}) {
             await fetch(`${RUN_API_BASE}/api/run/cancel/${runId}`, { method: 'POST' }).catch(() => {});
             await historySession.putRecord({
               ...tracked, status: 'stopped', updatedAt: new Date().toISOString(),
-              error: 'Inputs changed while this Run was active.',
+              error: 'Inputs changed while this Generate was active.',
             });
             pendingRunHistoryRecords.delete(nodeId);
             pendingRuns.delete(nodeId);
@@ -1991,8 +1992,8 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   function getOutgoingEdgesFromNode(nodeId) {
     if (!nodeId) return [];
-    // A Dataset read by a Run is reported as a Dataset selection (isDatasetPickedByRunOrScore), not as
-    // downstream; a Run or Process read by another step is downstream.
+    // A Dataset read by a Generate is reported as a Dataset selection (isDatasetPickedByRunOrScore), not as
+    // downstream; a Generate or Process read by another step is downstream.
     const fromDataset = getNodeById(nodeId)?.classList.contains('workflow-node--dataset');
     return connections.filter((c) => c.fromId === nodeId
       && !(fromDataset && c.type === DATA_EDGE && getNodeById(c.toId)?.classList.contains('workflow-node--run')));
@@ -2076,7 +2077,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
 
   /**
-   * What a Run reads (stepOutputs.js): `{ source, table, errorRowCount }`, or `{ source, waiting,
+   * What a Generate reads (stepOutputs.js): `{ source, table, errorRowCount }`, or `{ source, waiting,
    * message }` while its input has no complete result yet.
    */
   function readRunInput(runNode) {
@@ -2088,7 +2089,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       : { source, ...output };
   }
 
-  /** The table a Run reads, or null when it has no input or its input has no result yet. */
+  /** The table a Generate reads, or null when it has no input or its input has no result yet. */
   function readRunInputTable(runNode) {
     return readRunInput(runNode).table || null;
   }
@@ -2170,7 +2171,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     return `${aliases.join(', ')} ${one ? 'is' : 'are'} not connected. Drag an output onto ${one ? 'that port' : 'those ports'} on the canvas, or remove ${one ? 'the parameter' : 'the parameters'} from the code.`;
   }
 
-  /** The sources a Run or Process reads now, on `state`. */
+  /** The sources a Generate or Process reads now, on `state`. */
   function stepNodeInputs(state, stepNode) {
     const id = stepNode?.dataset?.nodeId || '';
     if (stepNode?.classList.contains('workflow-node--run')) return [runInputSource(state, id)].filter(Boolean);
@@ -2179,7 +2180,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
 
   /**
-   * What a Run or Process window says about its inputs (docs/design/DATA_FLOW_DESIGN.md §3.7):
+   * What a Generate or Process window says about its inputs (docs/design/DATA_FLOW_DESIGN.md §3.7):
    * `waiting`, why it cannot run yet (empty when it can).
    */
   function readStepInputStatus(stepNode) {
@@ -2208,7 +2209,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   function describeSource(source) {
     const runNode = source?.kind === 'run' ? getNodeById(source.nodeId) : null;
     const label = runNode
-      ? (runNode.dataset.runName || runNode.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Run'
+      ? generateDisplayName(runNode.dataset.runName || runNode.querySelector('.workflow-node__title')?.textContent)
       : stepSourceLabel(liveInputState(), source);
     return { label, color: sourceColor(source) };
   }
@@ -3559,11 +3560,11 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (!isPortMenu && (isRun || isProcess)) {
       const held = isTaskLocked(node.dataset.nodeId) ? 'This step is part of a run in progress.' : '';
       const waitingFor = held ? null : upstreamWithoutResult(getCanvasState(), node.dataset.nodeId);
-      const thisBlocked = held || (waitingFor ? `"${waitingFor}" has no current result yet. Use Execute to here.` : '');
+      const thisBlocked = held || (waitingFor ? `"${waitingFor}" has no current result yet. Use Run to here.` : '');
       const item = (action, label, blocked) => `<button type="button" class="workflow-node-context-item" data-action="${action}" role="menuitem"${blocked ? ` disabled title="${escapeAttr(blocked)}"` : ''}>${label}</button>`;
-      runItems = item('run-to-here', 'Execute to here', held) + item('run-this-step', 'Execute this step', thisBlocked);
+      runItems = item('run-to-here', 'Run to here', held) + item('run-this-step', 'Run this step', thisBlocked);
     }
-    menu.innerHTML = menuGroup('Execute', runItems) + menuGroup(inputPort !== undefined ? 'Create input' : 'Next steps', nextStepItems) + menuGroup('Manage node', manageItems);
+    menu.innerHTML = menuGroup('Run', runItems) + menuGroup(inputPort !== undefined ? 'Create input' : 'Next steps', nextStepItems) + menuGroup('Manage node', manageItems);
     /** The output an output item starts from. */
     const outputSource = (button) => ({ nodeId: node.dataset.nodeId, port: button.dataset.port || RESULT_PORT, kind: isRun ? 'run' : isProcess ? 'process' : 'dataset' });
 
@@ -3810,14 +3811,14 @@ export function buildWorkflowCanvas(root, options = {}) {
       'edit-run-name': () => {
         if (node.dataset.nodeType !== 'run') return;
         openEditNodeNameModal(node, {
-          modalTitle: 'Edit Run name',
-          fieldLabel: 'Run name',
-          placeholder: 'Run',
-          getCurrentName: () => (node.dataset.runName || node.querySelector('.workflow-node__title')?.textContent || '').trim() || 'Run',
+          modalTitle: 'Edit Generate name',
+          fieldLabel: 'Generate name',
+          placeholder: 'Generate',
+          getCurrentName: () => generateDisplayName(node.dataset.runName || node.querySelector('.workflow-node__title')?.textContent),
           onSave: (name) => {
             node.dataset.runName = name;
             const titleEl = node.querySelector('.workflow-node__title');
-            if (titleEl) titleEl.textContent = name;
+            if (titleEl) titleEl.textContent = generateDisplayName(name);
           },
         });
       },
@@ -4396,7 +4397,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (!Array.isArray(headers) || !Array.isArray(rows)) return;
     const baseName = (scoreName && scoreName.trim()) ? scoreName.trim() + ' comparison' : 'Evaluate comparison';
     const datasetName = findUniqueDatasetExportName(baseName);
-    const notes = `Exported from Evaluate "${(scoreName && scoreName.trim()) ? scoreName.trim() : 'Evaluate'}". Run vs ground truth comparison.`;
+    const notes = `Exported from Evaluate "${(scoreName && scoreName.trim()) ? scoreName.trim() : 'Evaluate'}". Model outputs vs ground truth comparison.`;
     document.dispatchEvent(new CustomEvent('workflow:add-dataset-node', {
       detail: { name: datasetName, notes, headers, rows, at, savedFrom: scoreSavedFrom(scoreNodeId, currentScoreRecordId(scoreNodeId)) },
     }));
@@ -4410,7 +4411,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       && entry.nodeId === scoreNodeId && entry.signature === key.signature)?.id || '';
   }
 
-  /** Save results of a Run: the table its readers get, as a new Dataset beside it (savedDatasets.js). */
+  /** Save results of a Generate: the table its readers get, as a new Dataset beside it (savedDatasets.js). */
   function saveRunOutputAsDataset(runNodeId, { name = '', left, top, at } = {}) {
     let saved;
     try {
@@ -4446,7 +4447,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     });
   }
 
-  // The Run and Process windows save through the same functions as the context menu.
+  // The Generate and Process windows save through the same functions as the context menu.
   document.addEventListener('workflow:save-run-output', (e) => saveRunOutputAsDataset(e.detail?.runNodeId || ''));
   document.addEventListener('workflow:save-process-output', (e) => saveProcessOutputAsDatasets(e.detail?.processNodeId || '', {
     branch: e.detail?.branch, snapshot: e.detail?.snapshot,
@@ -4573,14 +4574,14 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
 
   /**
-   * Adds a Run. Its Prompt and input are connected on the canvas; started from a Prompt or from a
+   * Adds a Generate. Its Prompt and input are connected on the canvas; started from a Prompt or from a
    * step's output (`inputSource`), it begins with that one connected, beside it.
    */
   function newRunNode({ promptNode = null, inputSource = null, open = false, at = null } = {}) {
     const fromPrompt = promptNode?.dataset?.nodeType === 'prompt' || promptNode?.classList?.contains('workflow-node--prompt');
     const sourceNode = inputSource?.nodeId ? getNodeById(inputSource.nodeId) : null;
     const anchor = fromPrompt ? promptNode : sourceNode;
-    const runNode = createRunNode({ ...(anchor ? besideNode(anchor) : visibleNodePosition()), title: 'Run' });
+    const runNode = createRunNode({ ...(anchor ? besideNode(anchor) : visibleNodePosition()), title: 'Generate' });
     placeNewNodeAt(runNode, at);
     if (runNode?.dataset?.nodeId && sourceNode) {
       writeRunInputSource(runNode, inputSource);
@@ -4905,7 +4906,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       if (node.classList.contains('workflow-node--run')) {
         const bar = node.querySelector('.workflow-node__run-progress');
         let pct = bar ? parseInt(bar.getAttribute('aria-valuenow') || '0', 10) : 0;
-        const runName = (node.dataset.runName || '').trim() || node.querySelector('.workflow-node__title')?.textContent?.trim() || 'Run';
+        const runName = (node.dataset.runName || '').trim() || node.querySelector('.workflow-node__title')?.textContent?.trim() || 'Generate';
         let runResults = node.dataset.runResults || undefined;
         if (runResults) {
           try {
@@ -5128,7 +5129,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           left: n.left,
           top: n.top,
           nodeId: n.nodeId || n.id,
-          title: n.runName || 'Run',
+          title: n.runName || 'Generate',
         });
         if (n.nodeOrigin === 'agent') markNodeAsAgentCreated(runNode);
         if (n.runName) runNode.dataset.runName = n.runName;
@@ -5362,7 +5363,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       if (entry.kind === 'run') {
         if (!current) {
           await fetch(`${RUN_API_BASE}/api/run/cancel/${jobId}`, { method: 'POST' }).catch(() => {});
-          await session.putRecord({ ...record, status: 'stopped', updatedAt: new Date().toISOString(), error: 'Inputs changed before this Run could be restored.' });
+          await session.putRecord({ ...record, status: 'stopped', updatedAt: new Date().toISOString(), error: 'Inputs changed before this Generate could be restored.' });
           continue;
         }
         pendingRunHistoryRecords.set(record.nodeId, record);
@@ -5459,14 +5460,15 @@ export function buildWorkflowCanvas(root, options = {}) {
       select: async (recordId, closeModal) => {
         const otherDetails = [...document.querySelectorAll('.modal-overlay')].filter((el) =>
           el.querySelector('.modal-panel--run-detail, .modal-panel--process'));
-        if (otherDetails.length > 1) throw new Error('Close other Run or Process windows before switching History.');
+        if (otherDetails.length > 1) throw new Error('Close other Generate or Process windows before switching History.');
         const staleDetails = [...document.querySelectorAll('.modal-overlay')].some((el) =>
           el.dataset.workingDatasetNodeId || el.querySelector('.modal-panel--score-detail'));
         if (staleDetails) throw new Error('Close open Dataset and Evaluate windows before switching History.');
         const plan = await planHistorySelectionForCanvas(recordId);
         const changed = plan.changedNodeIds.map((id) => {
           const node = getNodeById(id);
-          return (node?.dataset?.datasetName || node?.dataset?.promptName || node?.dataset?.runName || node?.dataset?.processName || id);
+          return node?.dataset?.nodeType === 'run' ? generateDisplayName(node.dataset.runName)
+            : (node?.dataset?.datasetName || node?.dataset?.promptName || node?.dataset?.processName || id);
         });
         if (changed.length) {
           const message = `Switch to this history record and restore inputs on: ${changed.slice(0, 10).join(', ')}${changed.length > 10 ? `, and ${changed.length - 10} more` : ''}?`;
@@ -5532,7 +5534,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
 
   /**
-   * Marks a Run or Process whose input has no result yet (runHistoryResolver.js): it is shown faded,
+   * Marks a Generate or Process whose input has no result yet (runHistoryResolver.js): it is shown faded,
    * naming what it waits for. Neither the attribute nor the tooltip is saved.
    */
   /** Its last result no longer matches its inputs (runHistoryResolver.js historyStaleRecordId). */
@@ -5932,18 +5934,18 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
 
   /**
-   * Execute to here: plans the steps up to `nodeId`, shows the plan when steps before it would run
+   * Run to here: plans the steps up to `nodeId`, shows the plan when steps before it would run
    * or something keeps it from running, and runs it once confirmed. Each step runs as it does from its
    * own window, so its window shows its progress and its Stop stops the whole run. When everything up
    * to it is current, it runs `nodeId` again.
    * @param {{ single?: 'run'|'skip', onShowNode?: () => void, onlyThis?: boolean }} options single:
    *   when only this step needs running, 'run' runs it here and 'skip' returns { status: 'single' } so
    *   the window that asked runs it its own way. onShowNode: called before the plan shows a node on the
-   *   canvas, so the window that asked can close instead of covering it. onlyThis: Execute this step,
+   *   canvas, so the window that asked can close instead of covering it. onlyThis: Run this step,
    *   which runs none of the steps before it
    */
   async function runToHere(nodeId, { single = 'run', onShowNode, onlyThis = false } = {}) {
-    const title = onlyThis ? 'Execute this step' : 'Execute to here';
+    const title = onlyThis ? 'Run this step' : 'Run to here';
     const context = await loadRunPlanContext();
     let planOptions = { onlyThis };
     let plan = planRunTo(getCanvasState(), nodeId, context, planOptions);
@@ -6026,7 +6028,7 @@ export function buildWorkflowCanvas(root, options = {}) {
    * A run refused before any step starts leaves no record. Used by Execute and the Agent's run_to.
    * @param {{ context: object, planOptions?: object, approvedPlan?: object, signal?: AbortSignal,
    *   source?: 'user'|'agent', onStep?: (step: object, task: object) => void }} options planOptions:
-   *   as for planRunTo (Execute this step, run again)
+   *   as for planRunTo (Run this step, run again)
    */
   async function runPlanned(nodeId, { context, planOptions = {}, approvedPlan, signal, source = 'user', onStep } = {}) {
     await ensureExecutionRecords();
@@ -6061,7 +6063,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     }
   }
 
-  /** Ask the backend to stop a Run in flight; the run poll picks up the cancelled status. */
+  /** Ask the backend to stop a Generate in flight; the run poll picks up the cancelled status. */
   async function stopRunNode(nodeId) {
     const runId = pendingRuns.get(nodeId);
     if (!runId) return;

@@ -147,7 +147,7 @@ test('a version of a sampled Dataset keeps provenance without consuming another 
   assert.equal(inspectWorkflowNode(copied.state, drawn.refs.$sample).details.progress.completed, 1);
 });
 
-test('standalone Run and Process nodes can be created first and connected later, like the toolbar', () => {
+test('standalone Generate and Process nodes can be created first and connected later, like the toolbar', () => {
   const created = plan(source(), [
     { op: 'add_run', ref: '$run' },
     { op: 'add_process', ref: '$process' },

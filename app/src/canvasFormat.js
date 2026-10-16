@@ -1,5 +1,5 @@
 /**
- * Brings a saved canvas to the current format. Canvas version 3 stores every Run and Process input
+ * Brings a saved canvas to the current format. Canvas version 3 stores every Generate and Process input
  * as a `data` connection { type: 'data', fromId, fromPort, toId, alias }, and a Dataset saved from a
  * step records that step in `savedFrom` (docs/design/DATA_FLOW_DESIGN.md §3.3, §3.6, §9). Every opened, merged or restored project passes through here, and a
  * merged canvas can mix versions, so each node is converted by the fields it carries rather than by

@@ -45,17 +45,17 @@ const canvas = () => ({
 const plan = (operations, state = canvas()) => planChangeSet(state, operations, { extractInputFields });
 const nodeOf = (state, id) => state.nodes.find((node) => node.nodeId === id);
 
-test('connect points a Run at another input, as dragging a line onto its input does', () => {
+test('connect points a Generate at another input, as dragging a line onto its input does', () => {
   const result = plan([{ op: 'connect', node: 'idle', input: 'input', source: 'split', branch: 'kept' }]);
   assert.deepEqual(runInputSource(result.state, 'idle'), { nodeId: 'split', port: 'kept', kind: 'process' });
-  assert.equal(result.items[0].title, 'Connect run "Idle"');
+  assert.equal(result.items[0].title, 'Connect Generate "Idle"');
   assert.equal(result.items[0].lines[0], 'input reads "Split · kept" instead of "Raw"');
   // The mapping keeps only the columns the new table has, as on the canvas.
   assert.equal(nodeOf(result.state, 'idle').runInputToColumn, '{}');
   assert.match(result.items[0].lines[1], /^Mapping:/);
 });
 
-test('connect gives a Run another Prompt and keeps the mapping of the inputs they share', () => {
+test('connect gives a Generate another Prompt and keeps the mapping of the inputs they share', () => {
   const result = plan([{ op: 'connect', node: 'idle', input: 'prompt', source: 'q' }]);
   assert.deepEqual(result.state.connections.filter((edge) => edge.type === 'prompt-to-run' && edge.toId === 'idle').map((edge) => edge.fromId), ['q']);
   assert.equal(result.items[0].lines[0], 'prompt reads "Judge" instead of "Extract"');
@@ -92,9 +92,9 @@ test('connect refuses what dragging refuses, with the same reason', () => {
   const sameSource = checkConnect(state, { nodeId: 'raw', portId: 'result' }, { nodeId: 'merge', portId: 'df_notes' }).reason;
   assert.equal(sameSource, 'Already df_raw of this Process; disconnect it there first.');
   assert.throws(() => plan([{ op: 'connect', node: 'merge', input: 'df_notes', source: 'raw' }]), new RegExp(`Merge: ${sameSource.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
-  assert.throws(() => plan([{ op: 'connect', node: 's', input: 'run', source: 'idle' }]), /An Evaluate node compares the results of the Run it was created from/);
+  assert.throws(() => plan([{ op: 'connect', node: 's', input: 'run', source: 'idle' }]), /An Evaluate node compares the results of the Generate it was created from/);
   assert.throws(() => plan([{ op: 'connect', node: 'r', input: 'input', source: 'split', branch: 'kept' }]), /would make a loop/);
-  assert.throws(() => plan([{ op: 'connect', node: 'idle', input: 'prompt', source: 'raw' }]), /is a dataset, not a prompt/);
+  assert.throws(() => plan([{ op: 'connect', node: 'idle', input: 'prompt', source: 'raw' }]), /is a Dataset, not a Prompt/);
   assert.throws(() => plan([{ op: 'connect', node: 'idle', input: 'nothing', source: 'raw' }]), /has no input "nothing"\. Its inputs: prompt, input/);
 });
 
@@ -121,7 +121,7 @@ test('disconnect refuses what dragging refuses', () => {
   assert.throws(() => plan([{ op: 'disconnect', node: 'merge', input: 'df_raw' }], state),
     new RegExp(checkDisconnect(state, { nodeId: 'merge', portId: 'df_raw' }).reason.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.throws(() => plan([{ op: 'disconnect', node: 'merge', input: 'df' }]), /df cannot be empty while this Process has other inputs/);
-  assert.throws(() => plan([{ op: 'disconnect', node: 's', input: 'run' }]), /An Evaluate node compares the results of the Run it was created from/);
+  assert.throws(() => plan([{ op: 'disconnect', node: 's', input: 'run' }]), /An Evaluate node compares the results of the Generate it was created from/);
   assert.throws(() => plan([{ op: 'disconnect', node: 'merge', input: 'df_notes' }]), /This input is not connected/);
 });
 
@@ -131,7 +131,7 @@ test('inspect_node lists the ports connect and disconnect use', () => {
   assert.equal(merge.ports.inputs[0].source.branch, 'kept');
   assert.deepEqual(merge.ports.outputs.map((output) => output.id), ['result']);
   const score = inspectWorkflowNode(canvas(), 's', { extractInputFields });
-  assert.match(score.ports.inputs[0].fixed, /Run it was created from/);
+  assert.match(score.ports.inputs[0].fixed, /Generate it was created from/);
   const raw = inspectWorkflowNode(canvas(), 'raw', { extractInputFields });
   assert.deepEqual(raw.ports.outputs[0].readBy.map((reader) => `${reader.nodeId}.${reader.portId}`), ['r.input', 'idle.input', 'merge.df_raw']);
 });

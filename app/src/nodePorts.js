@@ -11,6 +11,7 @@
  * scoreGroundTruthId, scoreMapping; Sampler sourceNodeId; Dataset datasetContent, savedFrom; Prompt
  * sections (through `promptInputs`).
  */
+import { generateDisplayName } from './nodeLabels.js';
 import { resolveDataframeProcessCode } from './processCode.js';
 import { effectiveProcessOutputs } from './processOutputPorts.js';
 import { buildDefaultProcessCode, isUntouchedSampleCode } from './processSampleCode.js';
@@ -37,7 +38,7 @@ export const LINEAGE_EDGE_TYPES = new Set(['prompt-to-prompt', 'prompt-review-to
 
 const TYPE_NOUN = { table: 'a table', prompt: 'a Prompt', score: 'an Evaluate node' };
 const FIXED = {
-  run: 'An Evaluate node compares the results of the Run it was created from. Add a new Evaluate node to evaluate another Run.',
+  run: 'An Evaluate node compares the results of the Generate it was created from. Add a new Evaluate node to evaluate another Generate.',
   score: 'An Optimize node analyzes the Evaluate node it was created from. Start a new Optimize node from another Evaluate node.',
   source: 'A Sampler samples the Dataset it was created from. Add a Sampler to another Dataset.',
 };
@@ -78,7 +79,7 @@ function parsed(value, fallback) {
   try { return JSON.parse(value); } catch (_) { return fallback; }
 }
 
-/** How a node is named in messages: a Run by its Prompt, as everywhere else (stepInputs.js). */
+/** How a node is named in messages: a Generate by its Prompt, as everywhere else (stepInputs.js). */
 function nodeLabel(state, nodeId) {
   const node = findNode(state, nodeId);
   if (!node) return String(nodeId || '');
@@ -246,7 +247,7 @@ function portPresentation(state, node, item, side) {
   if (item.id === ADD_INPUT_PORT) return { displayLabel: 'Add input' };
   const placeholder = item.type === PORT_TYPES.PROMPT ? 'Connect prompt'
     : item.type === PORT_TYPES.SCORE ? 'Connect Evaluate'
-    : node.type === 'score' && item.id === 'run' ? 'Connect Run'
+    : node.type === 'score' && item.id === 'run' ? 'Connect Generate'
     : item.id === 'ground_truth' ? 'Connect ground truth'
     : item.id === 'df' || item.id === 'input' ? 'Connect data'
     : `Connect ${item.id.replace(/^df_/, '').replace(/_/g, ' ')}`;
@@ -257,7 +258,7 @@ function portPresentation(state, node, item, side) {
   };
 }
 
-/** The Prompt evaluated by this step, following its fixed Evaluate/Run inputs. */
+/** The Prompt evaluated by this step, following its fixed Evaluate/Generate inputs. */
 function promptContextOf(state, node) {
   const evaluate = node.type === 'promptReview'
     ? findNode(state, fromOf(state, 'score-to-prompt-review', nodeIdOf(node))) : node;
@@ -338,10 +339,10 @@ const LINEAGE_OUT = {
 };
 const rowsText = (count) => `${count} row${count === 1 ? '' : 's'}`;
 
-/** Canvas source names; a Process reading a Run shows that Run's own title, not its Prompt. */
+/** Canvas source names; a Process reading a Generate shows that Generate's own title, not its Prompt. */
 function sourceName(state, source, consumerType = '') {
   if (source?.kind === 'prompt' || source?.kind === 'score') return nodeLabel(state, source.nodeId);
-  if ((consumerType === 'process' || consumerType === 'score') && source?.kind === 'run') return String(findNode(state, source.nodeId)?.runName || '').trim() || 'Run';
+  if ((consumerType === 'process' || consumerType === 'score') && source?.kind === 'run') return generateDisplayName(findNode(state, source.nodeId)?.runName);
   return stepSourceLabel(state, source);
 }
 
@@ -407,9 +408,9 @@ const refuse = (reason) => ({ ok: false, reason });
 function changeBlocked(state, node, inputId, running) {
   if (isRunning(node, running)) return `"${nodeLabel(state, nodeIdOf(node))}" is running. Stop it before changing its inputs.`;
   if (node && isTaskLocked(nodeIdOf(node))) return `"${nodeLabel(state, nodeIdOf(node))}" is part of a run in progress. Stop the run before changing its inputs.`;
-  // As the Run window: without History, a Run's prompt and input lock once it has results.
+  // As the Generate window: without History, a Generate's prompt and input lock once it has results.
   if (node.type === 'run' && state?.historyVersion !== 1 && hasRunResults(node) && (inputId === 'prompt' || inputId === 'input')) {
-    return 'This Run already has results, so its prompt and input are fixed. Add a new Run instead.';
+    return 'This Generate already has results, so its prompt and input are fixed. Add a new Generate instead.';
   }
   return '';
 }
@@ -501,13 +502,13 @@ export function checkDisconnect(state, to, { running } = {}) {
 
 // ---------- applying ----------
 
-/** The mapping a Run keeps when it gets a Prompt with `inputNames`: only the inputs both share. */
+/** The mapping a Generate keeps when it gets a Prompt with `inputNames`: only the inputs both share. */
 export function keepSharedMapping(mapping, inputNames) {
   const names = new Set(inputNames || []);
   return Object.fromEntries(Object.entries(mapping || {}).filter(([name]) => names.has(name)));
 }
 
-/** The mapping a Run keeps when it reads a table with `headers`: only the columns that table has. */
+/** The mapping a Generate keeps when it reads a table with `headers`: only the columns that table has. */
 export function keepMappedColumns(mapping, headers) {
   const columns = new Set(headers || []);
   return Object.fromEntries(Object.entries(mapping || {}).filter(([, column]) => columns.has(column)));
@@ -521,7 +522,7 @@ const headersOf = (state, source) => (source ? stepOutputTable(state, source).ta
  * `[{ nodeId, field, value }]`, for a caller that keeps nodes elsewhere (the canvas DOM); `value` is
  * what that field holds as text.
  * @param {{ promptInputs?: (promptNode: object) => string[] }} [options] the input names of a Prompt;
- *   without it, a Run's mapping is kept when its Prompt changes
+ *   without it, a Generate's mapping is kept when its Prompt changes
  */
 export function applyPortOp(state, op, { promptInputs } = {}) {
   const fields = [];
@@ -544,7 +545,7 @@ export function applyPortOp(state, op, { promptInputs } = {}) {
     }
     const prompt = op.promptId ? findNode(state, op.promptId) : null;
     if (prompt) connections.push({ fromId: op.promptId, toId: op.runId, type: 'prompt-to-run' });
-    // As the Run window: a new Prompt keeps the mapping of the inputs it shares, no Prompt keeps none.
+    // As the Generate window: a new Prompt keeps the mapping of the inputs it shares, no Prompt keeps none.
     if (!prompt) setMapping(run, {});
     else if (typeof promptInputs === 'function') setMapping(run, keepSharedMapping(mappingOf(run), promptInputs(prompt)));
     return fields;

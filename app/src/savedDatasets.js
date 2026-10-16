@@ -4,6 +4,7 @@
  * that node. Pipelines and History never read it. Pure; works on canvas state as getCanvasState()
  * saves it, so the canvas windows, the context menu and the Agent save the same tables.
  */
+import { generateDisplayName } from './nodeLabels.js';
 import { stepOutputTable, runResultsTable } from './stepOutputs.js';
 
 const RESULT = 'result';
@@ -36,19 +37,19 @@ function promptOf(state, runId) {
 }
 
 /**
- * A Run's results as a new Dataset: the table its readers get (stepOutputs.js), with its input
- * columns, also from a Run that stopped part way.
+ * A Generate's results as a new Dataset: the table its readers get (stepOutputs.js), with its input
+ * columns, also from a Generate that stopped part way.
  * @returns {{ name: string, notes: string, table: { headers, rows, columnTypes }, savedFrom: object }}
  */
 export function savedRunOutput(state, runId) {
   const run = findNode(state, runId);
-  if (!run || run.type !== 'run') throw new Error('Run node was not found.');
+  if (!run || run.type !== 'run') throw new Error('Generate node was not found.');
   const table = runResultsTable(state, run);
-  if (!table?.rows.length) throw new Error('This Run has no results yet.');
+  if (!table?.rows.length) throw new Error('This Generate has no results yet.');
   const recordId = String(run.historyRecordId || '').trim();
-  if (!recordId) throw new Error('This Run has no History record yet. Run it again before saving its results.');
+  if (!recordId) throw new Error('This Generate has no History record yet. Run it again before saving its results.');
   const promptName = String(promptOf(state, nodeIdOf(run))?.name || '').trim() || 'Prompt';
-  const runName = String(run.runName || '').trim() || 'Run';
+  const runName = generateDisplayName(run.runName);
   const completed = run.runCompleted === '1' || run.runCompleted === true;
   return {
     name: `${promptName} ${runName}`,
@@ -103,7 +104,7 @@ export function savedFromLabel(state, savedFrom) {
   if (!from) return '';
   const node = findNode(state, from.nodeId);
   let step = '';
-  if (node?.type === 'run') step = `Run of "${String(promptOf(state, nodeIdOf(node))?.name || '').trim() || 'Prompt'}"`;
+  if (node?.type === 'run') step = `Generate using "${String(promptOf(state, nodeIdOf(node))?.name || '').trim() || 'Prompt'}"`;
   else if (node?.type === 'process') {
     const name = `Process "${String(node.name || '').trim() || 'Process'}"`;
     step = from.port === RESULT ? name : `branch "${from.port}" of ${name}`;

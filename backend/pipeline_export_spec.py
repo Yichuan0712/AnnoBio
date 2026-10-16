@@ -76,7 +76,7 @@ def export_compiled_pipeline(*, spec, name, models=None, author_name="", generat
     if not spec["inputs"]:
         raise render.PipelineExportError("Python export needs at least one starting Dataset.")
     if not spec["jobs"]:
-        raise render.PipelineExportError("Python export needs at least one Process or Prompt Run.")
+        raise render.PipelineExportError("Python export needs at least one Process or Prompt/Generate step.")
     uses_llm = any(j["type"] == "llm" for j in spec["jobs"])
     metadata = render.ExportMetadata.create(author_name, generated_at)
     root = render._slug(name, "pipeline")
@@ -128,7 +128,7 @@ def export_compiled_pipeline(*, spec, name, models=None, author_name="", generat
                 "input_aliases": {data_id[aid]: alias for alias, aid in job["inputs"].items()}, "outputs": outputs})
         else:
             if cfg["unresolved_settings"]:
-                raise render.PipelineExportError(f'Prompt "{title}" needs resolved Run settings.')
+                raise render.PipelineExportError(f'Prompt "{title}" needs resolved Generate settings.')
             model = render._example_model_config(cfg["settings"]["run_max_tokens"],
                                                  cfg["settings"]["run_max_retries"])
             title, prompt_config, module_source = render._prompt_module(title, cfg, model, metadata)

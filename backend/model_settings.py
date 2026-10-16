@@ -1,4 +1,4 @@
-"""Settings a model can have of its own (Settings → Run / Optimize / Agent: the fields that show
+"""Settings a model can have of its own (Settings → Generate / Optimize / Agent: the fields that show
 the values of the model chosen at the top of the tab).
 
 settings["model_settings"] maps a credential id to some of the keys below. A key a model leaves out

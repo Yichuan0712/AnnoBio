@@ -11,13 +11,13 @@ test('interrupted and partial executions use Resume across runnable node types',
 });
 
 test('execution buttons name the work they start or resume', () => {
-  assert.equal(executionIdleLabel({ task: 'generation' }), 'Generate');
-  assert.equal(executionIdleLabel({ task: 'generation', interrupted: true }), 'Resume generation');
-  assert.equal(executionIdleLabel({ task: 'generation', completed: true }), 'Generate again');
-  assert.equal(executionIdleLabel({ task: 'processing' }), 'Run code');
-  assert.equal(executionIdleLabel({ task: 'processing', failed: true }), 'Retry processing');
-  assert.equal(executionIdleLabel({ task: 'matching' }), 'Run matching code');
-  assert.equal(executionIdleLabel({ task: 'matching', interrupted: true }), 'Resume matching');
+  assert.equal(executionIdleLabel({ task: 'generation' }), 'Run');
+  assert.equal(executionIdleLabel({ task: 'generation', interrupted: true }), 'Resume');
+  assert.equal(executionIdleLabel({ task: 'generation', completed: true }), 'Run again');
+  assert.equal(executionIdleLabel({ task: 'processing' }), 'Run');
+  assert.equal(executionIdleLabel({ task: 'processing', failed: true }), 'Retry');
+  assert.equal(executionIdleLabel({ task: 'matching' }), 'Run');
+  assert.equal(executionIdleLabel({ task: 'matching', interrupted: true }), 'Resume');
 });
 
 test('an incomplete Review resumes only when no live stream owns it', () => {
