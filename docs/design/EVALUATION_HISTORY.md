@@ -33,6 +33,9 @@
 
 ## Optimize 的读取约束
 
+Evaluate 的 History 条目被画布上的 Optimize 节点固定绑定时，显示 `Has optimization` 气泡；悬停列出绑定节点的名称。
+按 `evaluateRecordId` 精确对应记录，同配置的其他尝试不继承标记。多个 Optimize 只显示一个气泡，节点改名或删除后重新打开 History 即更新；不改写评估快照。
+
 Optimize 与前方 Evaluate 当前显示的 History 记录不一致时，节点显示 `Historical` 并变淡，Findings 下说明版本不匹配，Apply 禁用。
 窗口打开期间切换 History 也会同步按钮；实际 Apply 和 Agent `apply_review` 均重新校验版本，失败时不创建 Prompt 或修改建议。
 切回绑定的 History 后恢复 Apply。Evaluate 因 Generate 重跑而过期，但仍显示 Optimize 绑定的记录时，不影响 Apply。

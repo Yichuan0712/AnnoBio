@@ -42,6 +42,30 @@ test('each explicit Evaluate Run creates a separate immutable input/result snaps
   assert.equal(payload.prompt, graph.nodes.find(n => n.type === 'prompt').text);
 });
 
+test('Evaluate History marks only records bound by Optimize, including multiple nodes on an older identical attempt', async () => {
+  const f = await fixture(), first = await f.run(), second = await f.run();
+  assert.equal(first.signature, second.signature);
+  f.state.nodes.push(
+    { type: 'promptReview', nodeId: 'opt-a', promptReviewName: 'Optimize A', evaluateRecordId: first.id },
+    { type: 'promptReview', nodeId: 'opt-b', promptReviewName: 'Optimize B', evaluateRecordId: first.id },
+    { type: 'promptReview', nodeId: 'legacy', promptReviewName: 'Legacy without a fixed source' },
+  );
+  const recordsBefore = structuredClone([...f.records.values()]);
+  const entries = await f.session.displayEntriesForNode('score', f.state, { currentRecordIds: { score: second.id } });
+  assert.deepEqual(entries.find(entry => entry.id === first.id).optimizations, [
+    { nodeId: 'opt-a', name: 'Optimize A' }, { nodeId: 'opt-b', name: 'Optimize B' },
+  ]);
+  assert.deepEqual(entries.find(entry => entry.id === second.id).optimizations, []);
+  assert((await f.session.displayEntriesForNode('run', f.state)).every(entry => !entry.optimizations.length));
+  f.state.nodes.find(node => node.nodeId === 'opt-a').promptReviewName = 'Renamed Optimize';
+  f.state.nodes = f.state.nodes.filter(node => node.nodeId !== 'opt-b');
+  assert.deepEqual((await f.session.displayEntriesForNode('score', f.state)).find(entry => entry.id === first.id).optimizations,
+    [{ nodeId: 'opt-a', name: 'Renamed Optimize' }]);
+  f.state.nodes = f.state.nodes.filter(node => node.nodeId !== 'opt-a');
+  assert((await f.session.displayEntriesForNode('score', f.state)).every(entry => !entry.optimizations.length));
+  assert.deepEqual([...f.records.values()], recordsBefore);
+});
+
 test('Evaluate becomes stale after configuration, GT, exclusion or upstream edits and restores the full lineage', async () => {
   const f = await fixture(), record = await f.run();
   const score = f.state.nodes.find(n => n.nodeId === 'score');

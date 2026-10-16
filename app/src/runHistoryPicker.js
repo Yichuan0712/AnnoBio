@@ -83,6 +83,13 @@ export function attachRunHistoryPicker({ overlay, loadEntries, onSelect, onDelet
           current.textContent = 'Current result';
           top.appendChild(current);
         }
+        if (entry.optimizations?.length) {
+          const optimization = document.createElement('span');
+          optimization.className = 'modal-history-popup__status modal-history-popup__optimization';
+          optimization.textContent = 'Has optimization';
+          optimization.title = `Optimize nodes using this evaluation:\n${entry.optimizations.map(node => node.name).join('\n')}`;
+          top.appendChild(optimization);
+        }
         const description = document.createElement('span');
         description.className = 'modal-history-popup__fact';
         description.textContent = item.display.title || '';
