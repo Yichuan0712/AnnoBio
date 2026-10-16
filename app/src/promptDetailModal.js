@@ -101,7 +101,7 @@ function formatSchemaExamplesForView(examples, type) {
   return type === 'str' ? examples.map((ex) => '"' + String(ex ?? '').replace(/"/g, '\\"') + '"').join(', ') : examples.join(', ');
 }
 
-export function schemaToViewHtml(fields, returnShape, { showEmptyTable = false } = {}) {
+export function schemaToViewHtml(fields, returnShape, { showEmptyTable = false, showAllowNone = true } = {}) {
   if (!showEmptyTable && (!fields || fields.length === 0)) return '<p class="prompt-detail-placeholder">No output schema.</p>';
   const isSingle = returnShape === 'single';
   const rowLabel = isSingle ? 'One output row per input' : 'Multiple output rows per input';
@@ -119,12 +119,12 @@ export function schemaToViewHtml(fields, returnShape, { showEmptyTable = false }
     const nameFull = escapeAttr(nameRaw);
     const descFull = escapeAttr(descRaw);
     const exFull = escapeAttr(exRaw);
-    return `<tr><td class="prompt-detail-schema-cell" data-fulltext="${nameFull}">${name}</td><td class="prompt-detail-schema-cell" data-fulltext="${descFull}">${desc}</td><td class="prompt-detail-schema-cell" data-fulltext="${exFull}">${ex}</td><td>${allowNone ? 'Yes' : 'No'}</td></tr>`;
+    return `<tr><td class="prompt-detail-schema-cell" data-fulltext="${nameFull}">${name}</td><td class="prompt-detail-schema-cell" data-fulltext="${descFull}">${desc}</td><td class="prompt-detail-schema-cell" data-fulltext="${exFull}">${ex}</td>${showAllowNone ? `<td>${allowNone ? 'Yes' : 'No'}</td>` : ''}</tr>`;
   }).join('');
   return `<div class="prompt-schema-preview-table-wrap">
   <span class="prompt-schema-preview-return-shape" title="${rowHint}">${rowLabel}</span>
   <table class="prompt-schema-preview-table" aria-readonly="true">
-    <thead><tr><th>Field</th><th>Description</th><th>Examples</th><th>Allow None</th></tr></thead>
+    <thead><tr><th>Field</th><th>Description</th><th>Examples</th>${showAllowNone ? '<th>Allow None</th>' : ''}</tr></thead>
     <tbody>${rows}</tbody>
   </table>
 </div>`;
@@ -253,7 +253,7 @@ export function openPromptDetailModal({ name = '', text = '', node: sourceNode =
     try { inputTypes = JSON.parse(sourceNode.dataset.promptInputTypes || '{}'); } catch (_) {}
   }
   const inputsViewHtml = inputsToViewHtml(text);
-  const schemaViewHtml = schemaToViewHtml(outputFormat.fields, outputFormat.returnShape);
+  const schemaViewHtml = schemaToViewHtml(outputFormat.fields, outputFormat.returnShape, { showAllowNone: false });
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
@@ -560,7 +560,7 @@ export function openPromptDetailModal({ name = '', text = '', node: sourceNode =
           sourceNode.dataset.promptOutputFormat = JSON.stringify(fields);
           sourceNode.dataset.promptOutputReturnShape = returnShape;
         }
-        schemaView.innerHTML = schemaToViewHtml(fields, returnShape);
+        schemaView.innerHTML = schemaToViewHtml(fields, returnShape, { showAllowNone: false });
         document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
       },
       onClose() { activeSchemaEditor = null; syncPromptExportLocalEnabled(); },

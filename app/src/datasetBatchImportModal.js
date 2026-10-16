@@ -52,6 +52,8 @@ export function openDatasetBatchImport({ host, kind, targetColumn, headers, colu
     </div>
     <section class="dataset-batch-preview" aria-label="Target dataset preview">
       <h3 class="prompt-preview-title dataset-batch-preview__heading">Dataset preview</h3>
+      <div class="dataset-batch-preview__content score-detail-preview-content">
+      <div class="dataset-batch-preview__results run-detail-results-card">
       <p class="dataset-image-import-note dataset-batch-preview__hint">Drag ${fileLabel} within the table to move or reorder them. Changes are saved when you click Import.</p>
       <div class="working-dataset-table-wrap dataset-batch-preview__scroll"><table class="dataset-preview-table working-dataset-edit-table dataset-batch-preview__table"></table></div>
       <div class="dataset-detail-preview-toolbar dataset-batch-preview__pages">
@@ -63,11 +65,13 @@ export function openDatasetBatchImport({ host, kind, targetColumn, headers, colu
         <div class="dataset-detail-pagination-btns"><button type="button" class="btn btn-secondary dataset-batch-preview__prev" aria-label="Previous preview page">Previous</button>
         <button type="button" class="btn btn-secondary dataset-batch-preview__next" aria-label="Next preview page">Next</button></div>
       </div>
+      <div class="modal-footer-actions dataset-batch-panel__footer">
+        <button type="button" class="btn btn-secondary dataset-batch-panel__cancel">Close</button>
+        <button type="button" class="btn btn-primary dataset-batch-panel__apply" disabled>Import</button>
+      </div>
+      </div>
+      </div>
     </section>
-    </div>
-    <div class="modal-footer-actions dataset-batch-panel__footer">
-      <button type="button" class="btn btn-secondary dataset-batch-panel__cancel">Close</button>
-      <button type="button" class="btn btn-primary dataset-batch-panel__apply" disabled>Import</button>
     </div>
   `;
   overlay.appendChild(panel);
@@ -98,6 +102,8 @@ export function openDatasetBatchImport({ host, kind, targetColumn, headers, colu
   let errorMessage = '';
   let plan;
   let activePdfPreviews = 0;
+  let columnsResized = false;
+  let stopResizing = () => {};
 
   function buildPlan() {
     return buildBatchAssetPlan({ rows: draft.planningRows(), files, targetColumn, sourceColumn, mode, startRow: startAtRow, manualTargets, kind });
@@ -108,13 +114,13 @@ export function openDatasetBatchImport({ host, kind, targetColumn, headers, colu
     const available = Math.max(0, previewScroll.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0));
     const widths = headers.map((_, index) => Math.max(60, columnWidths[index] ?? (columnTypes[index] === 'image' ? 180 : columnTypes[index] === 'pdf' ? 160 : 140)));
     const naturalWidth = 40 + widths.reduce((sum, width) => sum + width, 0);
-    if (available > naturalWidth && headers.length) {
+    if (!columnsResized && available > naturalWidth && headers.length) {
       const extra = available - naturalWidth;
       const evenExtra = Math.floor(extra / headers.length);
       const remainder = extra - evenExtra * headers.length;
       widths.forEach((width, index) => { widths[index] = width + evenExtra + (index < remainder ? 1 : 0); });
     }
-    previewTable.style.width = `${Math.max(available, naturalWidth)}px`;
+    previewTable.style.width = `${columnsResized ? naturalWidth : Math.max(available, naturalWidth)}px`;
     previewTable.querySelectorAll('col[data-column-index]').forEach((column) => { column.style.width = `${widths[Number(column.dataset.columnIndex)]}px`; });
     fillDatasetTextCells(previewTable, true);
   }
@@ -175,6 +181,7 @@ export function openDatasetBatchImport({ host, kind, targetColumn, headers, colu
   }
 
   function renderPreview() {
+    stopResizing();
     const { scrollLeft, scrollTop } = previewScroll;
     const visibleColumns = headers.map((_, index) => index);
     const planningRows = draft.planningRows();
@@ -197,13 +204,13 @@ export function openDatasetBatchImport({ host, kind, targetColumn, headers, colu
         const content = type === 'image' || type === 'pdf'
           ? `<div class="${type === 'pdf' ? 'wd-pdf-cell' : 'wd-image-cell'}${emptyCell ? (type === 'pdf' ? ' wd-pdf-cell--empty' : ' wd-image-cell--empty') : ''}">${canDrop ? draftAssetHtml(items) : existingAssetHtml(cell, type)}</div>`
           : `<textarea class="wd-cell-inp wd-cell-textarea" readonly rows="2" data-col-index="${columnIndex}" style="height:${rowHeight}px;min-height:${rowHeight}px" aria-label="${escapeHtml(headers[columnIndex])}, row ${rowIndex + 1}" spellcheck="false">${escapeHtml(value)}</textarea>`;
-        return `<td class="dataset-batch-preview__cell${canDrop ? ' dataset-batch-preview__cell--target' : ''}" data-row-index="${rowIndex}" data-column-index="${columnIndex}" data-can-drop="${canDrop}">${content}</td>`;
+        return `<td class="dataset-batch-preview__cell${canDrop ? ' dataset-batch-preview__cell--target' : ''}" data-row-index="${rowIndex}" data-column-index="${columnIndex}" data-can-drop="${canDrop}">${content}<div class="wd-col-resize-handle" aria-label="Resize column"></div><div class="wd-row-resize-handle" aria-label="Resize row"></div></td>`;
       }).join('');
-      previewRows.push(`<tr${rowIndex >= rows.length ? ' class="dataset-batch-preview__new-row"' : ''}><td class="dataset-detail-preview-row-num">${rowIndex + 1}${rowIndex >= rows.length ? '<span class="dataset-batch-preview__new-label">New</span>' : ''}</td>${cells}</tr>`);
+      previewRows.push(`<tr data-row-index="${rowIndex}" style="height:${Math.max(28, rowHeights[rowIndex] ?? 28) + 9}px"${rowIndex >= rows.length ? ' class="dataset-batch-preview__new-row"' : ''}><td class="dataset-detail-preview-row-num wd-row-num-cell">${rowIndex + 1}${rowIndex >= rows.length ? '<span class="dataset-batch-preview__new-label">New</span>' : ''}<div class="wd-row-resize-handle" aria-label="Resize row"></div></td>${cells}</tr>`);
     }
     previewTable.innerHTML = `<colgroup><col style="width:40px">${visibleColumns.map((columnIndex) => `<col data-column-index="${columnIndex}">`).join('')}</colgroup>
       <thead><tr><th scope="col" class="dataset-detail-preview-row-num">#</th>${visibleColumns.map((columnIndex) =>
-        `<th scope="col" class="wd-header-th${columnIndex === targetColumn ? ' dataset-batch-preview__column--target' : ''}" data-column-index="${columnIndex}"><input type="text" class="wd-cell-inp wd-header-inp" readonly tabindex="-1" data-col-index="${columnIndex}" value="${escapeHtml(headers[columnIndex])}" aria-label="${escapeHtml(headers[columnIndex])}"></th>`).join('')}</tr></thead>
+        `<th scope="col" class="wd-header-th${columnIndex === targetColumn ? ' dataset-batch-preview__column--target' : ''}" data-column-index="${columnIndex}"><input type="text" class="wd-cell-inp wd-header-inp" readonly tabindex="-1" data-col-index="${columnIndex}" value="${escapeHtml(headers[columnIndex])}" aria-label="${escapeHtml(headers[columnIndex])}"><div class="wd-col-resize-handle" aria-label="Resize column"></div></th>`).join('')}</tr></thead>
       <tbody>${previewRows.join('')}</tbody>`;
     updatePreviewLayout();
     loadAssetPreviews();
@@ -383,6 +390,7 @@ export function openDatasetBatchImport({ host, kind, targetColumn, headers, colu
 
   const close = mountModalDialog(overlay, () => {
     closed = true;
+    stopResizing();
     endDrag();
     files.forEach(releaseFile);
     previewResizeObserver.disconnect();
@@ -463,6 +471,54 @@ export function openDatasetBatchImport({ host, kind, targetColumn, headers, colu
   cardsEl.addEventListener('dragend', () => {
     endDrag();
     onPlanChange?.(plan);
+  });
+  previewTable.addEventListener('mousedown', (event) => {
+    const columnHandle = event.target.closest('.wd-col-resize-handle');
+    const rowHandle = event.target.closest('.wd-row-resize-handle');
+    if (busy || event.button !== 0 || (!columnHandle && !rowHandle)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    stopResizing();
+    const cell = event.target.closest('td, th');
+    const row = cell.closest('tr');
+    const columnIndex = Number(cell.dataset.columnIndex);
+    const rowIndex = Number(row.dataset.rowIndex);
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startHeight = row.getBoundingClientRect().height;
+    if (columnHandle) {
+      // Start from displayed widths, including any space distributed to fill the preview.
+      previewTable.querySelectorAll('col[data-column-index]').forEach((column) => {
+        columnWidths[Number(column.dataset.columnIndex)] = parseFloat(column.style.width);
+      });
+      columnsResized = true;
+    }
+    const startWidth = columnWidths[columnIndex];
+    const cursorClass = columnHandle ? 'wd-col-resizing' : 'wd-row-resizing';
+    document.body.classList.add(cursorClass);
+    const move = (moveEvent) => {
+      if (columnHandle) columnWidths[columnIndex] = Math.max(60, startWidth + moveEvent.clientX - startX);
+      else {
+        const height = Math.max(28, startHeight - 9 + moveEvent.clientY - startY);
+        rowHeights[rowIndex] = height;
+        row.style.height = `${height + 9}px`;
+        row.querySelectorAll('.wd-cell-textarea').forEach((textarea) => {
+          textarea.style.height = `${height}px`;
+          textarea.style.minHeight = `${height}px`;
+        });
+      }
+      updatePreviewLayout();
+    };
+    stopResizing = () => {
+      document.body.classList.remove(cursorClass);
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', stopResizing);
+      window.removeEventListener('blur', stopResizing);
+      stopResizing = () => {};
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', stopResizing);
+    window.addEventListener('blur', stopResizing);
   });
   previewTable.addEventListener('dragstart', (event) => {
     const asset = event.target.closest('[data-preview-asset-key]');
