@@ -5,7 +5,7 @@ import {
   DATA_EDGE, RESULT_PORT, processCandidateSources, processInputAliases, processInputBindings, processInputEdges,
   processPrimarySource, processRequiredInputs, replaceProcessInputSource, runCandidateSources, runInputEdges, runInputSource,
   runInputTable, setProcessInputs, setProcessPrimarySource, setRunInputSource, sourceKey, stepInputEdges,
-  stepInputErrorNotice, stepInputWaitingMessage, stepSourceLabel, validateStepInputs,
+  stepInputWaitingMessage, stepSourceLabel, validateStepInputs,
 } from '../src/stepInputs.js';
 import { processDatasetInputs } from '../src/processDatasetBindings.js';
 
@@ -272,9 +272,6 @@ test('a step source is named by its Prompt or its Process and branch, in labels 
   assert.equal(stepSourceLabel(s, { nodeId: 'gone', port: RESULT_PORT }), 'gone');
   assert.equal(stepInputWaitingMessage(s, { nodeId: 'split', port: 'rest', kind: 'process' }, 'running'), 'Waiting for upstream results: run "Split" first.');
   assert.equal(stepInputWaitingMessage(s, dataset('raw'), 'no-result'), 'Input Dataset "Raw" has no current result. Run its upstream node first.');
-  assert.equal(stepInputErrorNotice(s, { nodeId: 'run', port: RESULT_PORT }, 0), '');
-  assert.equal(stepInputErrorNotice(s, { nodeId: 'run', port: RESULT_PORT }, 2),
-    'Upstream "Extract" has 2 rows with errors; they are passed on with the error text in their output columns.');
 });
 
 test('a Run reading a step gets the step output table once it is complete', () => {

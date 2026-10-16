@@ -81,16 +81,6 @@ export function stepInputWaitingMessage(state, source, waiting) {
   return `Input Dataset "${stepSourceLabel(state, source)}" has no current result. Run its upstream node first.`;
 }
 
-/**
- * The note a step shows while an upstream Run it reads has rows that failed: they are passed on
- * (§3.7). Empty when there are none.
- */
-export function stepInputErrorNotice(state, source, errorRowCount) {
-  if (!errorRowCount) return '';
-  const rows = `${errorRowCount} row${errorRowCount === 1 ? '' : 's'}`;
-  return `Upstream "${stepSourceLabel(state, source)}" has ${rows} with errors; they are passed on with the error text in their output columns.`;
-}
-
 // ---------- candidates ----------
 
 /** Every node that reads `nodeId`'s data through data connections, directly or further down. */

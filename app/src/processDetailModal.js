@@ -61,7 +61,7 @@ function restoreResults(node, ...keys) {
  *   syncProcessDependencies?: (code: string) => void,
  *   getInputRows?: (code: string) => Array<{ alias: string, nodeId: string, label: string, color: string }>,
  *   revealNode?: (nodeId: string) => void,
- *   getInputStatus?: () => { waiting: string, notices: string[] } }} options
+ *   getInputStatus?: () => { waiting: string } }} options
  *   getProcessInputs: every Dataset and step output (stepInputs.js processInputBindings), marking the
  *   ones the code reads, by source key; a step output without a result yet has no content
  *   getInputRows: df and each parameter of `code`, with what is connected to it (empty label: nothing)
@@ -123,7 +123,6 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
               <span class="run-detail-llm-actions-lead" aria-hidden="true"></span>
               <div class="run-detail-llm-actions-right"><button type="button" class="btn btn-primary run-detail-run-btn process-run-btn">Run code</button></div>
             </div>
-            <p class="process-editor-hint process-upstream-notice" hidden></p>
           </div>
         </div>
         <div class="run-detail-preview-wrap">
@@ -141,7 +140,6 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
   const resultsContent = overlay.querySelector('.process-results-content');
   const branchPicker = overlay.querySelector('.process-branch-picker');
   const runBtn = overlay.querySelector('.process-run-btn');
-  const upstreamNoticeEl = overlay.querySelector('.process-upstream-notice');
   const waitingBannerEl = overlay.querySelector('.run-detail-waiting-banner');
   const editable = new Compartment();
   const editorView = new EditorView({
@@ -323,15 +321,13 @@ export function openProcessDetailModal({ node, runProcessNode, getProcessInputs,
   }
 
   /**
-   * An input without a complete result yet blocks Run and is named in the banner; failed upstream
-   * rows are noted (docs/design/DATA_FLOW_DESIGN.md §3.7).
+   * An input without a complete result yet blocks Run and is named in the banner. Failed upstream
+   * rows are passed on without a note (docs/design/ANNOBIO_V2_FUNCTIONAL_DESIGN.md §7).
    */
   function refreshUpstreamState() {
-    const status = getInputStatus?.() || { waiting: '', notices: [] };
+    const status = getInputStatus?.() || { waiting: '' };
     waitingBannerEl.textContent = status.waiting;
     waitingBannerEl.hidden = !status.waiting;
-    upstreamNoticeEl.textContent = status.notices.join(' ');
-    upstreamNoticeEl.hidden = !status.notices.length;
     if (running) return;
     if (status.waiting) {
       runBtn.disabled = true;
