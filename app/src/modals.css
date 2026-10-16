@@ -7066,6 +7066,7 @@ body.wd-row-resizing {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  margin-bottom: 12px;
 }
 
 .prompt-step-2 .prompt-actions {

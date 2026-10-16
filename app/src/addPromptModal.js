@@ -54,7 +54,7 @@ export function openAddPromptModal(workflowCanvasApi) {
             <div class="prompt-form-error prompt-modal-error" role="alert" aria-live="polite" hidden></div>
             <div class="prompt-actions">
               <button type="button" class="btn btn-secondary prompt-btn-back-from-2">Back</button>
-              <button type="button" class="btn btn-secondary prompt-btn-next-to-3" disabled>Next</button>
+              <button type="button" class="btn btn-secondary prompt-btn-next-to-3">Next</button>
             </div>
           </div>
           <div class="prompt-step prompt-step-3">
@@ -238,16 +238,12 @@ export function openAddPromptModal(workflowCanvasApi) {
   /** The inputs the text uses, as the Prompt window lists them. */
   function updatePreview() {
     const text = textInput.value;
-    const validation = validateStep2();
-    nextToSchemaBtn.disabled = !validation.valid;
-    nextToSchemaBtn.title = validation.message || '';
     previewEl.classList.toggle('prompt-preview--empty', !text.trim());
     if (!text.trim()) {
       previewEl.textContent = 'Write the prompt on the left; each {input} it uses shows here.';
       return;
     }
-    previewEl.innerHTML = extractInputFields(text).length ? inputsToViewHtml(text)
-      : '<p class="prompt-detail-placeholder">No inputs. Add at least one input placeholder, such as <code>{abstract}</code>, to continue.</p>';
+    previewEl.innerHTML = inputsToViewHtml(text);
   }
 
   textInput.addEventListener('input', () => {
