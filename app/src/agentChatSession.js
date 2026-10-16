@@ -442,7 +442,7 @@ export function mountAgentChatSession({
   }
 
   let credentialId = '';
-  // Set when the Agent model's check (Settings → Agent defaults) found it cannot call tools.
+  // Set when the Agent model's check (Settings → Agent) found it cannot call tools.
   let credentialWarning = '';
   let sendInFlight = false;
   let activeAssistantAbortController = null;
@@ -1021,7 +1021,7 @@ export function mountAgentChatSession({
       if (!isMounted()) return;
       credentialId = credential ? String(credential.id || '').trim() : '';
       credentialWarning = credential?.agent_check_ok === false
-        ? `${credential.model} cannot call tools, so the Agent will not work well with it. Choose another model in Settings → Agent defaults.`
+        ? `${credential.model} cannot call tools, so the Agent will not work well with it. Choose another model in Settings → Agent.`
         : '';
     } catch (error) {
       credentialId = '';

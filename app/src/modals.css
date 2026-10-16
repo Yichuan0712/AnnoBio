@@ -3691,6 +3691,21 @@
   flex-shrink: 0;
 }
 
+/* Model picker beside Create Run and Optimize prompt (modelPicker.js): as tall as the button next to it. */
+.model-picker {
+  align-self: stretch;
+  box-sizing: border-box;
+  max-width: 220px;
+  min-width: 0;
+  padding: 0 8px;
+  text-overflow: ellipsis;
+}
+
+.model-picker:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
 /* Review detail modal: 高度同 Prompt 详情；宽度与 Run 详情展开态一致 */
 .modal-panel--review-detail {
   width: 88%;

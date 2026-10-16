@@ -4658,6 +4658,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         left: Number.isFinite(Number(e.detail?.left)) ? Number(e.detail.left) : undefined,
         top: Number.isFinite(Number(e.detail?.top)) ? Number(e.detail.top) : undefined,
         ensureUniqueName: e.detail?.ensureUniqueName === true,
+        reviewCredentialId: e.detail?.reviewCredentialId,
       });
       if (!e.detail) e.detail = {};
       e.detail.reviewNodeId = created.reviewNodeId;
@@ -4996,6 +4997,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           promptReviewName,
           reviewResult: reviewResult || undefined,
           reviewMethodId: node.dataset.reviewMethodId || undefined,
+          reviewCredentialId: (node.dataset.reviewCredentialId || '').trim() || undefined,
         };
         if ((node.dataset.nodeOrigin || '').trim()) out.nodeOrigin = node.dataset.nodeOrigin.trim();
         if (pct > 0) out.reviewProgress = pct;
@@ -5209,6 +5211,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         });
         if (n.nodeOrigin === 'agent') markNodeAsAgentCreated(promptReviewNode);
         if (n.reviewMethodId) promptReviewNode.dataset.reviewMethodId = n.reviewMethodId;
+        if (typeof n.reviewCredentialId === 'string' && n.reviewCredentialId.trim()) promptReviewNode.dataset.reviewCredentialId = n.reviewCredentialId.trim();
         if (n.reviewResult && typeof n.reviewResult === 'string') {
           promptReviewNode.dataset.reviewResult = n.reviewResult;
         }
@@ -5277,6 +5280,14 @@ export function buildWorkflowCanvas(root, options = {}) {
       }
       return null;
     }).filter(Boolean).filter((c) => getNodeById(c.fromId) && getNodeById(c.toId));
+    // Projects from before an Optimize kept its own model: it ran with its Evaluate's model, so
+    // copy that over before the Evaluate's model can change (runAnalysisHistory.js keys on it).
+    connections.forEach((c) => {
+      if (c.type !== EDGE_TYPE_SCORE_TO_PROMPT_REVIEW) return;
+      const reviewNode = getNodeById(c.toId);
+      const scoreModel = (getNodeById(c.fromId)?.dataset.reviewCredentialId || '').trim();
+      if (scoreModel && !(reviewNode.dataset.reviewCredentialId || '').trim()) reviewNode.dataset.reviewCredentialId = scoreModel;
+    });
     nodesLayer.querySelectorAll('.workflow-node--score').forEach((scoreNode) => syncScoreNodeProgressFromUpstreamRun(scoreNode));
     nodesLayer.querySelectorAll('.workflow-node--sampler').forEach(updateSamplerProgress);
     refreshNodePorts();

@@ -201,7 +201,8 @@ async function previewReview(job, ctx) {
   if (score.scoreActiveMatchMode === 'code' && !score.scoreMatchResult) {
     fail(`Evaluate "${nodeTitle(score)}" matches by code and has no code-match result yet; run a score job first.`);
   }
-  const credentialId = String(score.reviewCredentialId || ctx.settings.default_review_credential_id || '').trim();
+  // A resumed Optimize keeps the model it started with (resumeReviewNode).
+  const credentialId = String(existing?.reviewCredentialId || score.reviewCredentialId || ctx.settings.default_review_credential_id || '').trim();
   const credential = ctx.credentialsById.get(credentialId);
   if (!credential) fail('No usable Optimize model: set a default Optimize model in Settings.');
   const rows = await ctx.getScoreComparisonRows(score.nodeId);

@@ -8,6 +8,7 @@ import { python } from '@codemirror/lang-python';
 import { showAlert } from './alertModal.js';
 import { selectPlaceholderLabel, formatResultOutputColumnLabel } from './displayTextNormalize.js';
 import { renderSourceLink } from './nodeSourceLink.js';
+import { fillModelPicker, pickedModel } from './modelPicker.js';
 import { attachModalPaneCycle } from './paneToggleButton.js';
 import { executionIdleLabel } from './executionResumeState.js';
 import { showExecutionError } from './executionErrorPanel.js';
@@ -535,7 +536,7 @@ function parseFlexibleNonNegativeNumber(raw) {
 export async function runReviewFromScore({ scoreNodeId, getReviewPayload, credentialId, at }) {
   const payload = await Promise.resolve(getReviewPayload && getReviewPayload());
   if (!credentialId || !payload || !String(payload.prompt || '').trim()) return Promise.resolve(null);
-  const addEvent = new CustomEvent('workflow:add-prompt-review-node', { detail: { scoreNodeId, at } });
+  const addEvent = new CustomEvent('workflow:add-prompt-review-node', { detail: { scoreNodeId, at, reviewCredentialId: credentialId } });
   document.dispatchEvent(addEvent);
   const reviewNodeId = addEvent.detail?.reviewNodeId || '';
   if (!reviewNodeId) return Promise.resolve(null);
@@ -1458,6 +1459,7 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
               <div class="score-detail-results-footer-row" id="score-detail-results-footer-row" hidden>
                 <button type="button" class="btn btn-secondary score-detail-save-to-workspace" id="score-detail-save-to-workspace" title="Save comparison table as a new dataset in workspace">Save to workspace</button>
                 <div class="score-detail-results-footer-right">
+                  <select class="dataset-meta-input model-picker score-detail-review-model" aria-label="Model for the new Optimize"></select>
                   <button type="button" class="btn btn-primary score-detail-add-prompt-review" id="score-detail-add-prompt-review" title="Create an Optimize node and run analysis with the selected model">Optimize prompt</button>
                   <button type="button" class="btn btn-secondary score-detail-review-payload-preview" id="score-detail-review-payload-preview" title="Temporary: preview Optimize payload by input (model output vs ground-truth tables per group). Does not start an Optimize node job.">Debug</button>
                 </div>
@@ -3372,8 +3374,17 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
     });
   }
 
+  const reviewModelPicker = overlay.querySelector('.score-detail-review-model');
+  void fillModelPicker(reviewModelPicker, {
+    preferredIds: [node?.dataset?.reviewCredentialId],
+    defaultSetting: 'default_review_credential_id',
+  });
+
   addPromptReviewBtn.addEventListener('click', async () => {
     if (!node?.dataset?.nodeId) return;
+    // The picked model becomes this Evaluate's Optimize model, also used by its right-click Optimize.
+    const picked = pickedModel(reviewModelPicker);
+    if (picked) node.dataset.reviewCredentialId = picked;
     if (!(node.dataset.reviewCredentialId || '').trim()) await ensureScoreReviewDefaults(node);
     const credentialId = (node.dataset.reviewCredentialId || '').trim();
     if (!credentialId) {
