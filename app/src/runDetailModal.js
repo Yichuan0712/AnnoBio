@@ -109,7 +109,7 @@ export function openRunDetailModal({
   isRunNameAlreadyUsedForPrompt = () => false,
   getRunMappingsFromCanvas,
   getInputSource = () => null,
-  getInputStatus = () => ({ waiting: '', notices: [] }),
+  getInputStatus = () => ({ waiting: '' }),
   history = null,
 }) {
   (getRunMappingsFromCanvas?.() || []).forEach((parsed) => {
@@ -188,7 +188,6 @@ export function openRunDetailModal({
                 <button type="button" class="btn btn-primary run-detail-run-btn" disabled>Generate</button>
               </div>
             </div>
-            <p class="process-editor-hint run-detail-upstream-notice" hidden></p>
           </div>
         </div>
         <div class="run-detail-preview-wrap">
@@ -217,7 +216,6 @@ export function openRunDetailModal({
     ...inputSource, hint: "Drag a Dataset or a step output onto this Run's input port.", onReveal: () => reveal(inputSource.nodeId),
   });
   const runBtn = overlay.querySelector('.run-detail-run-btn');
-  const upstreamNoticeEl = overlay.querySelector('.run-detail-upstream-notice');
   const waitingBannerEl = overlay.querySelector('.run-detail-waiting-banner');
   const rightCol = overlay.querySelector('.run-detail-preview-content');
 
@@ -283,13 +281,11 @@ export function openRunDetailModal({
     overlay.querySelector('.run-detail-main')?.classList.remove('run-detail-main--locked');
   }
 
-  /** The banner for an input without a result yet, and the note for upstream rows that failed. */
+  /** The banner for an input without a result yet. */
   function refreshInputStatus() {
     const status = getInputStatus();
     waitingBannerEl.textContent = status.waiting;
     waitingBannerEl.hidden = !status.waiting;
-    upstreamNoticeEl.textContent = status.notices.join(' ');
-    upstreamNoticeEl.hidden = !status.notices.length;
     return status;
   }
 

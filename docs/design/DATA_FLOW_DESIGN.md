@@ -177,7 +177,7 @@ Run 的 Save results to workspace、Process 的 Create dataset / Create branch d
 
 上游 Run 已完成但有出错的行时（出错的行算已处理、不重试，记录仍是已完成）：
 
-- 单节点运行时，下游可以运行。出错的行照常传下去，输出列中是错误信息，与现在 Save results 生成的表相同。下游窗口提示 “上游 <名字> 有 N 行出错”。
+- 单节点运行时，下游可以运行。出错的行照常传下去，输出列中是错误信息，与现在 Save results 生成的表相同。（下游窗口原来提示 “上游 <名字> 有 N 行出错”，2026-10-16 去掉，见 [ANNOBIO_V2_FUNCTIONAL_DESIGN.md](ANNOBIO_V2_FUNCTIONAL_DESIGN.md) §7。）
 - Run Pipeline 不变：Runner 只要有出错行就让这个 job 失败，下游不执行。两者不一致是有意的：手动运行时由用户自己判断，整条运行时保守处理。
 
 ### 3.8 History 记录

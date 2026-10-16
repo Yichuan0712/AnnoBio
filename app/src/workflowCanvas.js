@@ -93,7 +93,7 @@ import { CANVAS_VERSION } from './canvasFormat.js';
 import {
   DATA_EDGE, RESULT_PORT, processInputAliases, processInputBindings, processPrimarySource, processRequiredInputs,
   runInputSource, setProcessInputs, setProcessPrimarySource, setRunInputSource,
-  sourceKey, stepInputEdges, stepInputErrorNotice, stepInputWaitingMessage, stepSourceLabel,
+  sourceKey, stepInputEdges, stepInputWaitingMessage, stepSourceLabel,
 } from './stepInputs.js';
 import { stepOutputTable } from './stepOutputs.js';
 import { readSavedFrom, savedFromLabel, savedProcessOutputs, savedRunOutput, scoreSavedFrom } from './savedDatasets.js';
@@ -2173,13 +2173,11 @@ export function buildWorkflowCanvas(root, options = {}) {
 
   /**
    * What a Run or Process window says about its inputs (docs/design/DATA_FLOW_DESIGN.md §3.7):
-   * `waiting`, why it cannot run yet (empty when it can), and a note for each upstream Run whose
-   * failed rows it reads.
+   * `waiting`, why it cannot run yet (empty when it can).
    */
   function readStepInputStatus(stepNode) {
     const state = liveInputState();
     let waiting = '';
-    const notices = [];
     for (const source of stepNodeInputs(state, stepNode)) {
       const output = stepOutputTable(state, source);
       if (output.waiting && !waiting) {
@@ -2187,10 +2185,8 @@ export function buildWorkflowCanvas(root, options = {}) {
           ? stepInputWaitingMessage(state, source, output.waiting)
           : `Waiting for upstream results from "${stepSourceLabel(state, { ...source, port: RESULT_PORT })}".`;
       }
-      const notice = source.kind === 'run' ? stepInputErrorNotice(state, source, output.errorRowCount) : '';
-      if (notice) notices.push(notice);
     }
-    return { waiting, notices };
+    return { waiting };
   }
 
   /** The color a source is shown with: a Dataset's own, or the border its step has now. */
