@@ -76,6 +76,7 @@ import { importPipelineRunHistory, pipelineRunImported } from './pipelineHistory
 import { createWorkspacePanels } from './workspacePanels.js';
 import { setLogPanelAvailable, subscribeAppErrors } from './appErrors.js';
 import { mountBackendLogPanel } from './backendLogPanel.js';
+import { hasNodeExecution, nodeExecutionIdentity, registerNodeJob, stopNodeExecution } from './nodeExecutionControl.js';
 import { mountPromptOptimizationPanel } from './promptOptimizationPanel.js';
 import { iconGitCompareArrows, iconLayoutPanel, iconLayoutSidebarRight } from './icons.js';
 import { runSettingsOverrides, reviewSettingsOverrides } from './nodeSettings.js';
@@ -2088,7 +2089,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   async function runScoreNode(nodeId, { signal, onProgress } = {}) {
     const node = getNodeById(nodeId);
     if (!node?.classList.contains('workflow-node--score')) throw new Error('Evaluate node was not found.');
-    if (pendingScoreMatches.has(nodeId) || node.dataset.scoreMatchUiRunning === '1') throw new Error('Evaluate matching is already running.');
+    if (pendingScoreMatches.has(nodeId) || node.dataset.scoreMatchUiRunning === '1' || hasNodeExecution(nodeId)) throw new Error('Evaluate matching is already running.');
     if (node.dataset.scoreActiveMatchMode !== 'code') throw new Error('Rule-based Evaluate nodes compute automatically; this job runs custom match code.');
     const runId = connections.find((edge) => edge.type === 'run-to-score' && edge.toId === nodeId)?.fromId;
     const run = getNodeById(runId);
@@ -2102,11 +2103,16 @@ export function buildWorkflowCanvas(root, options = {}) {
     const code = String(node.dataset.scoreMatchCode || '');
     if (!code.trim()) throw new Error('Evaluate has no custom match code.');
     pendingScoreMatches.add(nodeId);
+    const control = registerNodeJob(nodeId, async (jobId) => {
+      const res = await fetch(`${RUN_API_BASE}/api/score/match/run/cancel/${jobId}`, { method: 'POST' });
+      if (!res.ok) throw new Error('Could not stop Evaluate matching.');
+    });
     node.dataset.scoreMatchAgentRunning = '1';
     node.dataset.scoreMatchInterrupted = '1';
     delete node.dataset.scoreMatchError;
     try {
       const result = await runScoreCode({ code, results, outputFields: fields, input: readRunInputTable(run), groundTruth, signal,
+        onStarted: (jobId) => control.started(jobId),
         onProgress: (completed, total) => {
           const bar = getNodeById(nodeId)?.querySelector('.workflow-node__score-progress');
           if (bar) bar.style.width = `${total ? Math.min(100, Math.round(completed * 100 / total)) : 0}%`;
@@ -2125,6 +2131,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       if (error.name !== 'AbortError') node.dataset.scoreMatchError = error.message || String(error);
       throw error;
     } finally {
+      control.release();
       delete node.dataset.scoreMatchAgentRunning;
       const live = getNodeById(nodeId);
       if (live) delete live.dataset.scoreMatchAgentRunning;
@@ -3151,6 +3158,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     openPromptDetailModal,
     openRunDetailModal,
     startRunNode: (options) => startRunNode(options),
+    resumeReviewNode: (nodeId) => resumeReviewNode(nodeId),
     openSamplerDetailModal,
     openDatasetDetailModal,
     openScoreDetailModal,
@@ -3197,6 +3205,8 @@ export function buildWorkflowCanvas(root, options = {}) {
     updateScoreRowSelection,
     addPromptReviewNode,
     createAndRunReviewNode,
+    resumeReviewNode,
+    optimizeSuggestion,
     verifyReviewSuggestions,
     acceptReviewSuggestions,
     applyReviewSuggestions,
@@ -3373,6 +3383,11 @@ export function buildWorkflowCanvas(root, options = {}) {
         runProcessNode,
         runScoreNode,
         createAndRunReviewNode,
+        resumeReviewNode,
+        optimizeSuggestion,
+        stopNodeTask,
+        getNodeTaskIdentity: (nodeId) => nodeExecutionIdentity(nodeId) || (pendingRuns.get(nodeId) ? `run:${pendingRuns.get(nodeId)}`
+          : pendingReviews.get(nodeId) ? `review:${pendingReviews.get(nodeId)}` : null),
         stopReviewNode,
         verifyReviewSuggestions,
       },
@@ -5755,6 +5770,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   document.addEventListener('workflow:canvas-changed', scheduleProcessOutputSync);
 
   async function runProcessNode(nodeId, { signal, onStarted, timeoutMs } = {}) {
+    if (pendingProcesses.has(nodeId) || hasNodeExecution(nodeId)) throw new Error('Process is already running.');
     if (historySession?.projectId && canvasHistoryVersion === 1) {
       let sync;
       for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -5776,7 +5792,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       delete processNode.dataset.processResults;
       await reconcileHistory();
     }
-    if (session) pendingProcesses.add(nodeId);
+    pendingProcesses.add(nodeId);
     delete processNode.dataset.processResumable;
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
     const setProgress = (el, percent) => {
@@ -5787,10 +5803,15 @@ export function buildWorkflowCanvas(root, options = {}) {
     };
     setProgress(processNode, 0);
     let execution;
+    const control = registerNodeJob(nodeId, async (jobId) => {
+      const res = await fetch(`${RUN_API_BASE}/api/process/df/run/cancel/${jobId}`, { method: 'POST' });
+      if (!res.ok) throw new Error('Could not stop Process.');
+    });
     try {
       execution = await runProcessCode({
         code, bindings: executionBindings, signal, timeoutMs,
         onStarted: async (jobId) => {
+          await control.started(jobId);
           if (record) {
             record = { ...record, backendJobId: jobId, updatedAt: new Date().toISOString() };
             await session.putRecord(record);
@@ -5805,7 +5826,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         await session.putRecord(record);
       }
       throw error;
-    }
+    } finally { control.release(); }
     const { outputs, cancelled } = execution;
     // The canvas may have been rebuilt while the job ran (an applied proposal); write to the live node.
     const liveNode = getNodeById(nodeId);
@@ -5851,6 +5872,18 @@ export function buildWorkflowCanvas(root, options = {}) {
   /** Ask the backend to stop a Review in flight. */
   async function stopReviewNode(nodeId) {
     await fetch(`${RUN_API_BASE}/api/review/cancel/by-node/${encodeURIComponent(nodeId)}`, { method: 'POST' }).catch(() => {});
+  }
+
+  async function stopNodeTask(nodeId) {
+    if (await stopNodeExecution(nodeId)) return;
+    const node = getNodeById(nodeId);
+    const runId = pendingRuns.get(nodeId);
+    let path;
+    if (node?.dataset.nodeType === 'run' && runId) path = `/api/run/cancel/${encodeURIComponent(runId)}`;
+    else if (pendingReviews.has(nodeId) || pendingReviewNodeIds.has(nodeId)) path = `/api/review/cancel/by-node/${encodeURIComponent(nodeId)}`;
+    else throw new Error('That node has no active task to stop.');
+    const res = await fetch(`${RUN_API_BASE}${path}`, { method: 'POST' });
+    if (!res.ok) throw new Error('The cancellation request failed.');
   }
 
   /** A Score's comparison rows: the saved ones, or rebuilt from its live Run and ground truth. */

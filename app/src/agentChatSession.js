@@ -667,7 +667,7 @@ export function mountAgentChatSession({
   async function buildToolRuntime() {
     const { credentialsById, defaultRunCredential } = await loadCredentialContext();
     const inspectOptions = { credentialsById, defaultRunCredential };
-    const inspectNode = (nodeId) => workspace.inspectNode(nodeId, inspectOptions);
+    const inspectNode = (nodeId, readOptions = {}) => workspace.inspectNode(nodeId, { ...inspectOptions, ...readOptions });
     const buildSummary = () => buildWorkspaceSummary(workspace.getCanvasState(), {
       extractInputFields: workspace.extractInputFields,
       inspectNode,
@@ -909,7 +909,7 @@ export function mountAgentChatSession({
         setStatus('Starting...');
         let result;
         try {
-          result = await runtime.executeRunRequest(request.request, { signal, onStatus: setStatus });
+          result = await runtime.executeRunRequest(request.request, { signal, onStatus: setStatus, approvedPreview: request.preview });
         } catch (error) {
           result = { status: 'failed', error: error instanceof Error ? error.message : String(error), results: [] };
         }

@@ -7,6 +7,10 @@ its Prompt and Data inputs; input mapping is configured after both are connected
 
 A Process node runs one Python function over whole tables. There is no LLM involved.
 
+When testing changes to an existing Process, call `try_process` with `process_node_id` and `code`.
+It reuses the actual connected sources and their fixed aliases, including after renaming a Dataset.
+Only use `primary_input` / `primary_branch` without a Process id when testing a new Process.
+
 ## Contract
 
 ```python

@@ -14,6 +14,9 @@ import {
 } from '../../stepInputs.js';
 import { stepOutputTable } from '../../stepOutputs.js';
 import { readSavedFrom } from '../../savedDatasets.js';
+import { parseScoreMappingBundle } from '../../scoreMappingBundle.js';
+import { suggestionTargetScoreRowIndices } from '../../reviewWorkingText.js';
+import { hasNodeExecution } from '../../nodeExecutionControl.js';
 
 export const MAX_ROWS_PER_READ = 50;
 
@@ -408,7 +411,8 @@ function describeMatch(rule) {
 /** Score rules as {pairing, comparison} lists: pairing rules match Run rows to ground-truth rows,
  * comparison rules judge the outputs. Accepts the v2 {input, output} bundle getCanvasState saves. */
 function describeScoreRules(scoreMapping) {
-  const bundle = parseJsonObject(scoreMapping, {});
+  const { inputRoot, outputRoot } = parseScoreMappingBundle(scoreMapping);
+  const bundle = { input: inputRoot, output: outputRoot };
   const side = (group) => ({
     combinedWith: safeArray(group?.ops).length ? [...new Set(group.ops)].join('/') : undefined,
     rules: flattenRules(group).map((rule) => ({
@@ -419,7 +423,8 @@ function describeScoreRules(scoreMapping) {
   });
   const pairing = side(bundle.input || bundle.inputRoot);
   const comparison = side(bundle.output || bundle.outputRoot);
-  return { pairing, comparison, count: pairing.rules.length + comparison.rules.length };
+  return { pairing, comparison, count: pairing.rules.length + comparison.rules.length,
+    ruleTree: { v: 2, input: inputRoot, output: outputRoot } };
 }
 
 function summarizeComparisonRow(row, index) {
@@ -431,6 +436,8 @@ function summarizeComparisonRow(row, index) {
     output: row?.run_output ?? null,
     expected: row?.expected ?? row?.ground_truth_output ?? null,
     gtRow: typeof row?.source_gt_row_index === 'number' ? row.source_gt_row_index + 1 : null,
+    rowKey: Number.isInteger(row?.source_gt_row_index) && row.source_gt_row_index >= 0 ? String(row.source_gt_row_index)
+      : Number.isInteger(row?.row_index) && !row.gt_only ? `run:${row.row_index}` : null,
   };
 }
 
@@ -463,7 +470,7 @@ function inspectScore(node, ctx) {
       run,
       groundTruth: linkedNode(groundTruth),
       matching: usesCode ? 'custom match code' : `${ruleCount} mapping rule${ruleCount === 1 ? '' : 's'}`,
-      rules: usesCode ? undefined : { pairing: rules.pairing, comparison: rules.comparison },
+      rules: usesCode ? undefined : { pairing: rules.pairing, comparison: rules.comparison, ruleTree: rules.ruleTree },
       matchCode: usesCode ? String(node.scoreMatchCode || '') : undefined,
       executionStatus: node.scoreMatchPending === true ? 'running'
         : usesCode && node.scoreMatchInterrupted === true ? 'interrupted; ready to resume' : undefined,
@@ -487,6 +494,9 @@ function summarizeSuggestion(raw, reviewResult) {
     reason: String(raw?.reason || ''),
     applied: raw?.applied === true,
     verifyState: String(reviewResult?.verify_states?.[id] || 'not verified'),
+    targetRows: suggestionTargetScoreRowIndices(raw),
+    optimization: raw.review_optimization_meta || undefined,
+    optimizedFromSuggestionId: raw.optimized_from_suggestion_id ?? undefined,
   };
   if (verify && typeof verify === 'object' && verify.status === 'complete') {
     const rows = safeArray(verify.verifyRows);
@@ -495,14 +505,19 @@ function summarizeSuggestion(raw, reviewResult) {
       : rows.filter((r) => r?.matched === true && !r?.error).length;
     out.verification = { matched, total: Number(verify.total) || rows.length };
   }
+  if (verify?.status === 'error') out.verificationError = String(verify.message || 'Verification failed.');
   return out;
 }
 
-function inspectReview(node, ctx) {
+function inspectReview(node, ctx, options = {}) {
   const reviewResult = parseJsonObject(node.reviewResult, {});
   const score = upstreamOfType(ctx.canvasState, ctx.nodeLookup, ctx.nodeId, 'score');
   const suggestions = safeArray(reviewResult.suggestions);
   const diagnostics = [];
+  const page = (items) => { const window = rowWindow(items, options, 5); return { rows: window.items, ...window.window }; };
+  const suggestionPage = rowWindow(suggestions, options, 10);
+  const verification = options.section === 'verification' ? reviewResult.verify_results?.[options.suggestionId] : null;
+  if (options.section === 'verification' && !verification) diagnostics.push('No verification result for that suggestion_id.');
   if (!score) diagnostics.push('The Optimize is not connected to an Evaluate node.');
   if (!suggestions.length && !reviewResult.summary && node.reviewPending !== true) diagnostics.push('The review has no result yet.');
   return {
@@ -510,9 +525,20 @@ function inspectReview(node, ctx) {
       score,
       status: node.reviewPending === true ? `running (${Number(node.reviewProgress) || 0}%)`
         : node.reviewInterrupted === true || reviewResult.streamComplete === false ? 'interrupted; ready to resume'
-          : (suggestions.length || reviewResult.summary ? 'finished' : 'not run yet'),
+          : (reviewResult.streamComplete === true || suggestions.length || reviewResult.summary ? 'finished' : 'not run yet'),
       summary: String(reviewResult.summary || ''),
-      suggestions: suggestions.map((s) => summarizeSuggestion(s, reviewResult)),
+      method: node.reviewMethodId || reviewResult.review_method_id || 'default',
+      streamComplete: reviewResult.streamComplete === true,
+      supportsSuggestionOptimization: reviewResult.supports_segment_optimization !== false,
+      suggestionOptimizationRunning: hasNodeExecution(node.nodeId),
+      rowDiagnostics: page(safeArray(reviewResult.row_diagnostics)),
+      dataRefinement: page(safeArray(reviewResult.data_refinement)),
+      stages: page(safeArray(reviewResult.stage_log)),
+      ...(verification ? { verification: { ...verification, verifyRows: page(safeArray(verification.verifyRows)) } } : {}),
+      suggestions: suggestionPage.items.map((s) => summarizeSuggestion(s, reviewResult)),
+      suggestionCount: suggestions.length,
+      verifiedSuggestionCount: suggestions.filter((s) => reviewResult.verify_states?.[s.suggestion_id] === 'verified').length,
+      suggestionsWindow: suggestionPage.window,
       createdPromptVersions: neighbors(ctx.canvasState, ctx.nodeLookup, ctx.nodeId, 'downstream')
         .filter((n) => n.type === 'prompt'),
     },
@@ -544,6 +570,14 @@ export function inspectWorkflowNode(canvasState, nodeId, options = {}) {
   const ctx = { canvasState, nodeLookup, nodeId: id };
   const inspector = INSPECTORS[node.type];
   const { details, diagnostics } = inspector ? inspector(node, ctx, options) : { details: {}, diagnostics: [] };
+  if (node.type === 'promptReview' && options.section && options.section !== 'overview') {
+    const sectionKey = { diagnostics: 'rowDiagnostics', data_refinement: 'dataRefinement', stages: 'stages',
+      suggestions: 'suggestions', verification: 'verification' }[options.section];
+    if (!sectionKey) diagnostics.push('Unknown Optimize section.');
+    else for (const key of ['rowDiagnostics', 'dataRefinement', 'stages', 'suggestions', 'verification']) {
+      if (key !== sectionKey) delete details[key];
+    }
+  }
   // The dots on the node's edges, as the user sees and drags them (nodePorts.js); connect and disconnect use these ids.
   const ports = nodePorts(canvasState, id);
   const lockedBy = (options.contentLocks || contentLocks([], canvasState)).get(id) || [];
@@ -633,7 +667,7 @@ export function readNodeRows(canvasState, nodeId, options = {}) {
   if (node.type === 'process') {
     const outputs = processOutputsOf(node);
     const names = Object.keys(outputs);
-    if (!names.length) return { title: nodeTitle(node), error: 'The process has no saved output. It has to be run from its detail view first.' };
+    if (!names.length) return { title: nodeTitle(node), error: 'The Process has no saved output. Run it with run_nodes (kind: process) or from its detail view first.' };
     if (options.branch && !outputs[options.branch]) return { title: nodeTitle(node), error: `Unknown Process output "${options.branch}". Branches: ${names.join(', ')}.` };
     const branch = options.branch && outputs[options.branch] ? options.branch : names[0];
     const content = normalizeDatasetContent(outputs[branch]);

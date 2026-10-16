@@ -12,6 +12,9 @@ import { getCurrentProjectId } from './currentProject.js';
 import { imageCell } from './datasetContent.js';
 import { runSettingsOverrides, reviewSettingsOverrides } from './nodeSettings.js';
 import { datasetColorAt } from './workflowNodeColors.js';
+import { reviewNeedsResume } from './executionResumeState.js';
+import { optimizeReviewSuggestion, optimizedReviewSuggestion } from './reviewSuggestionOptimizer.js';
+import { registerNodeStop } from './nodeExecutionControl.js';
 
 export function createWorkflowCanvasRuntime(deps = {}) {
   const {
@@ -1235,6 +1238,51 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     };
   }
 
+  async function resumeReviewNode(reviewNodeId) {
+    const { reviewNode, scoreNode } = getReviewContext(reviewNodeId);
+    if (!reviewNeedsResume({ result: parseReviewResult(reviewNode), interrupted: reviewNode.dataset.reviewInterrupted === '1',
+      streaming: pendingReviews.has(reviewNodeId) || pendingReviewNodeIds.has(reviewNodeId) })) throw new Error('This Optimize has no interrupted task to resume.');
+    const { payload } = await buildReviewPayloadForScoreNode(scoreNode);
+    const credentialId = await resolveReviewCredentialId(scoreNode);
+    if (!credentialId) throw new Error('Set a default Optimize model in Settings.');
+    scoreNode.dataset.reviewCredentialId = credentialId;
+    await runReviewStart({ reviewNodeId, payload, credentialId, registerPendingReview });
+    if (!pendingReviews.has(reviewNodeId) && !pendingReviewNodeIds.has(reviewNodeId)) throw new Error('Optimize request did not start successfully.');
+    return { reviewNodeId, started: true, waitRequired: true };
+  }
+
+  async function optimizeSuggestion({ reviewNodeId, suggestionId, signal, onProgress, maxTrials }) {
+    const projectId = getCurrentProjectId();
+    const context = await buildReviewVerificationPayload(reviewNodeId);
+    const { reviewNode, scoreNode, reviewResult, originalText, verificationPayload } = context;
+    if (getCurrentProjectId() !== projectId) throw new Error('The open project changed. Prepare the optimization again.');
+    if (pendingReviews.has(reviewNodeId) || pendingReviewNodeIds.has(reviewNodeId)) throw new Error('Optimize is still running.');
+    if (reviewResult.supports_segment_optimization === false) throw new Error('This Optimize method does not support suggestion-level optimization.');
+    const source = reviewResult.suggestions.find((suggestion) => String(suggestion.suggestion_id) === String(suggestionId));
+    if (!source || String(source.source).toLowerCase() === 'assistant') throw new Error('Choose an existing generated suggestion.');
+    if (reviewResult.verify_states?.[suggestionId] !== 'optimization') throw new Error('Verify this suggestion first; only suggestions that did not fully pass can be optimized.');
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    const release = registerNodeStop(reviewNodeId, abort);
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+    const before = JSON.stringify(reviewResult);
+    try {
+      const result = await optimizeReviewSuggestion({ suggestion: source, suggestions: reviewResult.suggestions, originalText,
+        comparisonRows: reviewResult.comparison_rows, payload: verificationPayload, signal: controller.signal, onProgress, maxTrials });
+      // Re-read before committing: the user may have changed/deleted this Optimize while calls ran.
+      const live = getReviewContext(reviewNodeId);
+      const current = await buildReviewVerificationPayload(reviewNodeId);
+      if (getCurrentProjectId() !== projectId || JSON.stringify(current.reviewResult) !== before || current.originalText !== originalText
+        || JSON.stringify(current.verificationPayload) !== JSON.stringify(verificationPayload)) throw new Error('Optimize inputs or suggestions changed; the candidate was not applied.');
+      const candidate = optimizedReviewSuggestion(source, result, current.reviewResult);
+      current.reviewResult.suggestions.push(candidate);
+      persistReviewResult({ reviewNode: live.reviewNode, scoreNode: live.scoreNode, reviewResult: current.reviewResult });
+      return { suggestionId: String(candidate.suggestion_id), bestRate: result.bestObservedRate,
+        trials: result.trialLog.length, verificationRequired: true };
+    } finally { release(); signal?.removeEventListener('abort', abort); }
+  }
+
   function getReviewNodeById(reviewNodeId) {
     const normalizedReviewNodeId = String(reviewNodeId || '').trim();
     if (!normalizedReviewNodeId) {
@@ -2024,6 +2072,8 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     updateScoreRowSelection,
     addPromptReviewNode,
     createAndRunReviewNode,
+    resumeReviewNode,
+    optimizeSuggestion,
     verifyReviewSuggestions,
     acceptReviewSuggestions,
     applyReviewSuggestions,

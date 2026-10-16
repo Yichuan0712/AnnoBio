@@ -261,7 +261,7 @@ export async function runAgentLoop({ messages, credentialId, runtime, workspaceS
           : await (isPipeline ? runtime.previewPipelineAction(args) : isRun ? runtime.previewRunRequest(args) : runtime.previewProposal(args));
         if (preview.ok) {
           call.preview = isPipeline ? { items: preview.items, action: preview.action, routeKey: preview.routeKey, runId: preview.runId, projectId: preview.projectId, projectIdentity: preview.projectIdentity, requestId: preview.requestId }
-            : isRun ? { items: preview.items, total: preview.total } : { items: preview.items, warnings: preview.warnings };
+            : isRun ? { items: preview.items, total: preview.total, stopGuards: preview.stopGuards, projectIdentity: preview.projectIdentity } : { items: preview.items, warnings: preview.warnings };
           waiting = true;
           if (onMessage) onMessage();
         } else {

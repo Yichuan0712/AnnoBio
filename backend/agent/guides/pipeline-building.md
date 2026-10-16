@@ -81,6 +81,10 @@ Run History lists previous whole-Pipeline runs. When a run finishes, its results
 History of each step it ran and the steps show them; no Datasets are added. The Agent can use `pipeline_action` to request a whole-Pipeline run,
 stop or resume after user confirmation, and `get_pipeline_runs` to read its status and history.
 Use `run_nodes` for a single Run or Process when testing or iterating on one stage.
+Use kind `stop` with a node id to request cancellation of a running Run, Process, code Evaluate,
+Optimize or suggestion optimization, including tasks started in the UI. Refresh the workspace to
+check when it actually stops; a request is not proof that the task has finished. Already issued
+model calls may complete. Suggestion verification cannot be stopped part-way.
 
 ## Advising on a design
 

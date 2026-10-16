@@ -176,8 +176,9 @@ function scoreLine(node, inspection) {
 
 function reviewLine(node, inspection) {
   const d = inspection.details;
-  const verified = d.suggestions.filter((s) => s.verifyState === 'verified').length;
-  const counts = d.suggestions.length ? `; ${d.suggestions.length} suggestions (${verified} verified)` : '';
+  const verified = d.verifiedSuggestionCount ?? d.suggestions.filter((s) => s.verifyState === 'verified').length;
+  const count = d.suggestionCount ?? d.suggestions.length;
+  const counts = count ? `; ${count} suggestions (${verified} verified)` : '';
   return `- ${ref(node)}: reviews Evaluate ${linkRef(d.score, '(none)')}; ${d.status}${counts}`;
 }
 

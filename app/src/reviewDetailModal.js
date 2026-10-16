@@ -6,17 +6,14 @@
 
 import { showConfirm } from './alertModal.js';
 import {
-  runSuggestionOptimizationCompositional,
-  registerOptimizationSession,
-  unregisterOptimizationSession,
   hasActiveOptimizationSessions,
 } from './reviewSuggestionOptimization.js';
 import { comparisonRowIsMatched } from './scoreDetailModal.js';
+import { optimizeReviewSuggestion, optimizedReviewSuggestion } from './reviewSuggestionOptimizer.js';
 import {
   rebuildWorkingFromApplied,
   getLocatableSegment,
   effectiveNewSentenceForApply,
-  paragraphAround,
   suggestionTargetScoreRowIndices,
 } from './reviewWorkingText.js';
 import { normalizeUnicodeDashesForDisplay } from './displayTextNormalize.js';
@@ -31,7 +28,6 @@ import {
   ensureSuggestionObjectId,
   formatSuggestionIdDisplay,
   parseNumericSuggestionId,
-  allocNextReviewSuggestionId,
 } from './reviewSuggestionIds.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { evaluateScoreOutputGt } from './scoreOutputGtMatcher.js';
@@ -1175,23 +1171,7 @@ function buildReviewResultUI(overlay, options) {
    * so no existing card's sugIdx (and therefore its verify-state key) ever shifts.
    */
   function addOptimizedSuggestionCard(sourceSug, result) {
-    const sourceId = sourceSug && sourceSug.suggestion_id != null ? sourceSug.suggestion_id : null;
-    const newId = allocNextReviewSuggestionId({ suggestions: allSuggestions, data_refinement: dataRefinement });
-    const optimizedSug = {
-      ...sourceSug,
-      suggestion_id: newId,
-      new_sentence: result.bestText,
-      review_optimization_completed: true,
-      review_optimization_meta: {
-        bestRate: result.bestObservedRate,
-        trials: result.trialLog.length,
-        optimizationInputNums: result.optimizationInputNums,
-        optimizationExtraInputNums: result.optimizationExtraInputNums,
-        optimizationGtNums: result.optimizationGtNums,
-      },
-      applied: false,
-      optimized_from_suggestion_id: sourceId,
-    };
+    const optimizedSug = optimizedReviewSuggestion(sourceSug, result, { suggestions: allSuggestions, data_refinement: dataRefinement });
     allSuggestions.push(optimizedSug);
     const newIdx = allSuggestions.length - 1;
     // Append just the one new card -- NOT a full renderEditSuggestionCards() rebuild, which
@@ -1740,123 +1720,19 @@ function buildReviewResultUI(overlay, options) {
       }
     }
 
-    /** Run compositional optimization for this suggestion. */
+    /** Same optimization runner and input selection as the Agent execution card. */
     async function runOptimization() {
-      const ac = new AbortController();
-      registerOptimizationSession(ac);
+      const payload = typeof getPayload === 'function' ? await getPayload() : null;
+      let maxTrials = 40;
       try {
-        const payload = typeof getPayload === 'function' ? await getPayload() : null;
-        const credentialId = payload?.run_credential_id;
-        const outputSchema = payload?.output_schema;
-        const outputFields = Array.isArray(payload?.output_fields) ? payload.output_fields : [];
-        const scoreMapping = payload?.score_mapping;
-        const runWs = typeof payload?.getRunWorkingSetContent === 'function'
-          ? payload.getRunWorkingSetContent()
-          : { headers: [], rows: [] };
-        const gtContent = typeof payload?.getGroundTruthContent === 'function'
-          ? payload.getGroundTruthContent()
-          : { headers: [], rows: [] };
-        if (!credentialId) throw new Error('No run credential configured.');
-        if (!outputSchema) throw new Error('No output schema configured.');
-        if (!scoreMapping) throw new Error('No Evaluate mapping configured.');
-
-        // Build inputEntries (same as runVerification)
-        const compRows = Array.isArray(saved.comparison_rows) ? saved.comparison_rows : [];
-        const rowIndices = suggestionTargetScoreRowIndices(sug);
-        const targetRows = rowIndices
-          .map((ri) => compRows.find((r) => Number(r?.row_index) === ri))
-          .filter(Boolean);
-        const inputMap = new Map();
-        for (const row of targetRows) {
-          const inputIdx = row.input_row_index;
-          if (inputIdx == null) continue;
-          if (!inputMap.has(inputIdx)) inputMap.set(inputIdx, { row, gtRows: [] });
-          if (row.ground_truth_output && row.source_gt_row_index != null) {
-            const gtNum = row.source_gt_row_index + 1;
-            const entry = inputMap.get(inputIdx);
-            if (!entry.gtRows.find((g) => g.gtNum === gtNum)) {
-              entry.gtRows.push({ gtNum, gtRowIndex: row.source_gt_row_index });
-            }
-          }
-        }
-        const inputEntries = [...inputMap.entries()].sort(([a], [b]) => a - b);
-        if (inputEntries.length === 0) throw new Error('No inputs found for this suggestion.');
-
-        // Expand with up to 2 extra inputs from all comparison rows.
-        // Prefer inputs where every comparison row is matched (fully correct); fall back to any unused input.
-        const usedInputIdxs = new Set(inputEntries.map(([idx]) => idx));
-        const allGrouped = new Map();
-        for (const row of compRows) {
-          const iIdx = row.input_row_index;
-          if (iIdx == null) continue;
-          if (!allGrouped.has(iIdx)) allGrouped.set(iIdx, { row, allMatched: true, gtRows: [] });
-          const g = allGrouped.get(iIdx);
-          if (!comparisonRowIsMatched(row)) g.allMatched = false;
-          if (row.ground_truth_output && row.source_gt_row_index != null) {
-            const gtNum = row.source_gt_row_index + 1;
-            if (!g.gtRows.find((x) => x.gtNum === gtNum)) {
-              g.gtRows.push({ gtNum, gtRowIndex: row.source_gt_row_index });
-            }
-          }
-        }
-        const extraCandidates = [...allGrouped.entries()]
-          .filter(([iIdx]) => !usedInputIdxs.has(iIdx))
-          .sort(([aIdx, a], [bIdx, b]) => {
-            if (a.allMatched !== b.allMatched) return b.allMatched ? 1 : -1;
-            return aIdx - bIdx;
-          });
-        const extraEntries = extraCandidates.slice(0, 2).map(([iIdx, g]) => [iIdx, { row: g.row, gtRows: g.gtRows }]);
-        const expandedInputEntries = [...inputEntries, ...extraEntries].sort(([a], [b]) => a - b);
-
-        let optimizationMaxTrials = 40;
-        try {
-          const stRes = await fetch(`${API_BASE}/api/settings`);
-          if (stRes.ok) {
-            const st = await stRes.json();
-            const v = parseInt(st?.optimization_max_trials, 10);
-            if (!Number.isNaN(v) && v >= 4) optimizationMaxTrials = Math.min(200, v);
-          }
-        } catch (_) {}
-
-        const result = await runSuggestionOptimizationCompositional({
-          credentialId,
-          oldSentence: sug.old_sentence || '',
-          newSentence: sug.new_sentence || '',
-          improvementRationale: sug.reason || '',
-          promptContext: paragraphAround(originalText, sug.old_sentence || ''),
-          maxSegments: 5,
-          candidatesPerSegment: 4,
-          maxTrials: optimizationMaxTrials,
-          allSuggestions,
-          sugIdx,
-          originalText,
-          inputEntries: expandedInputEntries,
-          outputSchema,
-          outputFields,
-          scoreMapping,
-          runWs,
-          gtContent,
-          abortController: ac,
-          onProgress: ({ trial, trials, bestRate }) => {
-            try {
-              storeVerifyResult({ status: 'running', progress: { completed: trial, total: trials } });
-            } catch (_) {}
-          },
-        });
-
-        // Build human-readable input/GT # strings, bundled onto the result for the caller to
-        // use when building the new, separate suggestion card (see addOptimizedSuggestionCard) --
-        // this suggestion itself is left untouched; optimizing never overwrites it in place.
-        const optimizationInputNums = expandedInputEntries.map(([idx]) => `#${idx + 1}`).join(', ');
-        const optimizationExtraInputNums = extraEntries.length > 0 ? extraEntries.map(([idx]) => `#${idx + 1}`).join(', ') : null;
-        const optimizationGtNums = [...new Set(
-          expandedInputEntries.flatMap(([, { gtRows }]) => gtRows.map((g) => `#${g.gtNum}`)),
-        )].sort((a, b) => parseInt(a.slice(1), 10) - parseInt(b.slice(1), 10)).join(', ');
-
-        return { ...result, optimizationInputNums, optimizationExtraInputNums, optimizationGtNums };
-      } finally {
-        unregisterOptimizationSession(ac);
-      }
+        const res = await fetch(`${API_BASE}/api/settings`);
+        const settings = res.ok ? await res.json() : {};
+        maxTrials = Math.min(200, Math.max(4, Number(settings.optimization_max_trials) || 40));
+      } catch (_) {}
+      return optimizeReviewSuggestion({ suggestion: sug, suggestions: allSuggestions, originalText,
+        comparisonRows: saved.comparison_rows || [], payload, maxTrials, nodeId: reviewNodeId,
+        onProgress: ({ trial, trials }) => storeVerifyResult({ status: 'running', progress: { completed: trial, total: trials } }),
+      });
     }
 
     /** Attach click handlers to verify + optimization pills (re-called after pill rebuild). */
