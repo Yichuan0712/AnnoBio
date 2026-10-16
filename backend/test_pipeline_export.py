@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
+from types import ModuleType, SimpleNamespace
 import unittest
 import uuid
 import zipfile
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from backend.pipeline_export import PipelineExportError, build_pipeline_archive
 
@@ -139,6 +141,7 @@ class PipelineExportTests(unittest.TestCase):
             self.assertNotIn(b"private row", combined)
             self.assertNotIn(b"private cached result", combined)
             self.assertNotIn(b"must-never-be-exported", combined)
+            self.assertNotIn(b"openai/gpt-4.1-mini", combined)
             self.assertIn(b"Edited duplicate content", combined)
             self.assertNotIn(b"Original content", combined)
             self.assertIn(b'Ada "AJ" Lovelace', combined)
@@ -216,6 +219,48 @@ else:
             manifest = json.loads(bundle.read("research-pipeline/pipeline.json"))
         prompt_step = next(step for step in manifest["route"] if step["type"] == "prompt")
         self.assertEqual(prompt_step["input_mapping"], {"text": "text"})
+
+    def test_exported_litellm_engine_routes_models_by_provider(self):
+        _, archive = self.build()
+        with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+            base_source = bundle.read("research-pipeline/engine/base.py")
+            engine_source = bundle.read("research-pipeline/engine/litellm_engine.py")
+        package = ModuleType("exported_engine")
+        package.__path__ = []
+        base = ModuleType("exported_engine.base")
+        engine = ModuleType("exported_engine.litellm_engine")
+        base.__package__ = engine.__package__ = "exported_engine"
+        litellm = ModuleType("litellm")
+        litellm.completion = Mock(return_value=SimpleNamespace(choices=[
+            SimpleNamespace(message=SimpleNamespace(content='{"answer": "ok"}')),
+        ]))
+        cases = [
+            ("google", "gemini-2.5-flash", {}, "gemini/gemini-2.5-flash"),
+            ("gemini", "gemini-2.5-flash", {}, "gemini/gemini-2.5-flash"),
+            ("google", "gemini/gemini-2.5-flash", {}, "gemini/gemini-2.5-flash"),
+            ("anthropic", "claude-sonnet-4-5", {}, "anthropic/claude-sonnet-4-5"),
+            ("deepseek", "deepseek-chat", {}, "deepseek/deepseek-chat"),
+            ("bedrock", "us.anthropic.claude-sonnet-4-5-v1:0", {}, "bedrock/us.anthropic.claude-sonnet-4-5-v1:0"),
+            ("amazon-bedrock", "us.anthropic.claude-sonnet-4-5-v1:0", {}, "bedrock/us.anthropic.claude-sonnet-4-5-v1:0"),
+            ("openrouter", "anthropic/claude-sonnet-4.5", {}, "openrouter/anthropic/claude-sonnet-4.5"),
+            ("openrouter", "openrouter/anthropic/claude-sonnet-4.5", {}, "openrouter/anthropic/claude-sonnet-4.5"),
+            ("openai", "gpt-4.1-mini", {}, "gpt-4.1-mini"),
+            ("", "custom/model", {}, "custom/model"),
+            ("google", "gemini-2.5-flash", {"ANNOBIO_MODEL": "gemini-2.5-pro"}, "gemini/gemini-2.5-pro"),
+            ("google", "gemini-2.5-flash", {"ANNOBIO_MODEL": "openai/gpt-4.1-mini"}, "openai/gpt-4.1-mini"),
+        ]
+        with patch.dict(sys.modules, {"exported_engine": package, "exported_engine.base": base,
+                                     "exported_engine.litellm_engine": engine, "litellm": litellm}):
+            exec(base_source, base.__dict__)
+            exec(engine_source, engine.__dict__)
+            for provider, model, environment, expected in cases:
+                with self.subTest(provider=provider, model=model, environment=environment), \
+                     patch.dict(os.environ, environment, clear=True):
+                    output = engine.LiteLLMEngine().complete(content="Read this.",
+                        output_schema={"fields": [{"key": "answer", "type": "str"}]},
+                        model_config={"provider": provider, "model": model})
+                    self.assertEqual(output, {"answer": "ok"})
+                    self.assertEqual(litellm.completion.call_args.kwargs["model"], expected)
 
     def test_legacy_row_processor_exports_as_a_dataframe_processor(self):
         _, archive = self.build()

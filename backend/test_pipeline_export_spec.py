@@ -59,6 +59,32 @@ class CompiledExportTests(unittest.TestCase):
         self.assertEqual(compiled, snapshot)
         self.assertNotIn("EXCLUDE_THIS", "\n".join(self.files(archive).values()))
 
+    def test_exported_model_settings_are_placeholders_for_linear_and_branched_routes(self):
+        credentials = [{"id": "PRIVATE_CREDENTIAL", "provider": "google",
+                        "model": "gemini-2.5-flash", "api_key": "PRIVATE_KEY",
+                        "base_url": "https://private-api.example.test"}]
+        for state in (simple(), branched()):
+            with self.subTest(nodes=len(state["nodes"])):
+                files = self.files(self.build(state, credentials=credentials)[1])
+                manifest = json.loads(files["pipeline.json"])
+                self.assertEqual(manifest["default_engine"], "litellm")
+                steps = manifest.get("route", manifest.get("graph", {}).get("steps", []))
+                for step in steps:
+                    if step["type"] != "prompt":
+                        continue
+                    self.assertEqual(step["model"]["model"], "YOUR_PROVIDER/YOUR_MODEL")
+                    self.assertEqual(step["model"]["provider"], "")
+                    self.assertEqual(step["model"]["base_url"], "")
+                    self.assertIn("YOUR_PROVIDER/YOUR_MODEL", files[step["source"]])
+                for job in manifest["execution"]["jobs"]:
+                    if job["type"] == "llm":
+                        self.assertEqual(job["config"]["model"]["model"], "YOUR_PROVIDER/YOUR_MODEL")
+                self.assertIn("ANNOBIO_MODEL=YOUR_PROVIDER/YOUR_MODEL", files[".env.example"])
+                self.assertIn("replace `YOUR_PROVIDER/YOUR_MODEL`", files["README.md"])
+                combined = "\n".join(files.values())
+                for value in ("gemini-2.5-flash", "https://private-api.example.test", "PRIVATE_KEY", "PRIVATE_CREDENTIAL"):
+                    self.assertNotIn(value, combined)
+
     def test_multi_input_export_accepts_named_workbooks(self):
         state = {"nodes": [dataset("raw", ["text"]), dataset("lookup", ["suffix"]),
                            process("join",
