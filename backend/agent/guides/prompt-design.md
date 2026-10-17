@@ -7,9 +7,9 @@ part of the text). The text can contain `{variable}` placeholders; every distinc
 input the Generate must map to a Dataset column. Text in doubled braces, such as `{{example}}`, is not
 treated as a variable.
 
-Each input has a type: text, image or pdf. An image or pdf input sends the files in that cell to the
-model, so the Generate's model must support that modality (in the OpenRouter catalog: vision for images,
-file input for pdf).
+An input has no type of its own: it takes the type of the column the Generate maps it to. Mapped to an
+image or pdf column, it sends the files in that cell to the model, so the Generate's model must support
+that modality (in the OpenRouter catalog: vision for images, file input for pdf).
 
 ## Output schema
 

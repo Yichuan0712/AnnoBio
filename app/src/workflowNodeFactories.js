@@ -210,7 +210,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     };
   }
 
-  function createPromptNode({ name = '', note = '', text = '', outputFormat, inputTypes, optimizationMethodId = '', left, top, nodeId: givenNodeId, colorIndex: givenColorIndex }) {
+  function createPromptNode({ name = '', note = '', text = '', outputFormat, optimizationMethodId = '', left, top, nodeId: givenNodeId, colorIndex: givenColorIndex }) {
     const nodeId = givenNodeId || generateNodeId();
     const title = (name && name.trim()) ? name.trim() : 'Prompt';
     const node = document.createElement('div');
@@ -225,7 +225,6 @@ export function createWorkflowNodeFactories(deps = {}) {
     const colorIndex = normalizeDatasetColorIndex(givenColorIndex) ?? chooseAutomaticNodeColorIndex();
     node.dataset.promptColorIndex = String(colorIndex);
     node.style.borderColor = promptColorAt(colorIndex);
-    node.dataset.promptInputTypes = JSON.stringify(inputTypes && typeof inputTypes === 'object' ? inputTypes : {});
     let ofList = outputFormat?.fields ?? (Array.isArray(outputFormat) ? outputFormat : []);
     if (!ofList.length && outputFormat?.columns?.length) {
       ofList = outputFormat.columns.map((key) => ({
@@ -541,9 +540,7 @@ export function createWorkflowNodeFactories(deps = {}) {
           fields = JSON.parse(promptNode.dataset.promptOutputFormat || '[]');
         } catch (_) {}
         const returnShape = promptNode.dataset.promptOutputReturnShape || 'single';
-        let inputTypes = {};
-        try { inputTypes = JSON.parse(promptNode.dataset.promptInputTypes || '{}'); } catch (_) {}
-        return { inputTypes, outputSchema: { return_shape: returnShape, fields } };
+        return { outputSchema: { return_shape: returnShape, fields } };
       }
       openRunDetailModal({
         node,

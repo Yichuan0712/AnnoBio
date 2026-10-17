@@ -13,7 +13,9 @@ function dot(side, item, title, { lineage = false } = {}) {
   const el = document.createElement('span');
   el.className = DOT_CLASS;
   if (lineage) el.classList.add(`${DOT_CLASS}--lineage`);
-  if (item?.unavailable) el.classList.add(`${DOT_CLASS}--unavailable`);
+  // A temporary dot (nodePorts.js missingOutputPorts) cannot be read from either.
+  if (item?.unavailable || item?.missing) el.classList.add(`${DOT_CLASS}--unavailable`);
+  if (item?.missing) el.classList.add(`${DOT_CLASS}--missing`);
   if (item?.fixed) el.classList.add(`${DOT_CLASS}--fixed`);
   el.dataset.portSide = side;
   if (item) {
@@ -39,7 +41,8 @@ function row(side, item, title, lineageTitle, { lineage = false } = {}) {
   el.dataset.portId = item.id;
   const connected = side === 'left' ? !!item.source : !!item.readers?.length;
   if (connected) el.classList.add('workflow-node__port-row--connected');
-  if (item.unavailable) el.classList.add('workflow-node__port-row--unavailable');
+  if (item.unavailable || item.missing) el.classList.add('workflow-node__port-row--unavailable');
+  if (item.missing) el.classList.add('workflow-node__port-row--missing');
   if (item.mismatch) el.classList.add('workflow-node__port-row--mismatch');
   if (item.unconnected) el.classList.add('workflow-node__port-row--unconnected');
   if (item.id === ADD_INPUT_PORT) el.classList.add('workflow-node__port-row--add-input');

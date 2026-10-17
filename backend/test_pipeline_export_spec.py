@@ -47,6 +47,14 @@ class CompiledExportTests(unittest.TestCase):
             self.assertNotIn(value, combined)
         self.assertEqual(state, before)
 
+    def test_image_input_exports_with_the_mapped_columns_type(self):
+        # The canvas has no Prompt input types: an input mapped to an image column sends images.
+        state = simple()
+        state["nodes"][0]["datasetContent"]["columnTypes"] = ["image"]
+        files = self.files(self.build(state)[1])
+        module = next(text for path, text in files.items() if "INPUT_TYPES" in text)
+        self.assertIn("INPUT_TYPES = {'text': 'image'}", module)
+
     def test_renderer_needs_no_canvas_and_uses_frozen_spec(self):
         state = simple()
         compiled = compile_pipeline(canvas_state=state, route=route_for(state), run_defaults=DEFAULTS)["spec"]

@@ -44,7 +44,6 @@ def _canvas_state() -> dict:
                 "nodeId": "prompt-original",
                 "name": "Original prompt",
                 "text": "Original content {text}",
-                "inputTypes": {"text": "text"},
                 "outputFormat": {
                     "returnShape": "single",
                     "fields": [{"key": "answer", "type": "str"}],
@@ -55,7 +54,6 @@ def _canvas_state() -> dict:
                 "nodeId": "prompt-duplicate",
                 "name": "Edited duplicate",
                 "text": "Edited duplicate content {text}",
-                "inputTypes": {"text": "text"},
                 "outputFormat": {
                     "returnShape": "single",
                     "fields": [{"key": "answer", "type": "str", "description": "Final answer"}],
@@ -416,7 +414,7 @@ else:
                 {"type": "dataset", "nodeId": "raw", "name": "Raw", "datasetContent": {"headers": ["text"], "columnTypes": ["text"]}},
                 {"type": "process", "nodeId": "split", "name": "Split", "dfCode": "def process(df):\n    return {'left': df, 'right': df}\n"},
                 {"type": "process", "nodeId": "combine", "name": "Combine", "dfCode": "def process(df):\n    return df\n"},
-                {"type": "prompt", "nodeId": "prompt", "name": "Answer", "text": "Answer {text}", "inputTypes": {"text": "text"}, "outputFormat": {"returnShape": "single", "fields": [{"key": "answer", "type": "str"}]}},
+                {"type": "prompt", "nodeId": "prompt", "name": "Answer", "text": "Answer {text}", "outputFormat": {"returnShape": "single", "fields": [{"key": "answer", "type": "str"}]}},
                 {"type": "run", "nodeId": "run", "runName": "Answer run", "runInputToColumn": json.dumps({"text": "text"})},
             ],
             "connections": [

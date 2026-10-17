@@ -47,7 +47,6 @@ export function exportCanvasDefinition(canvasState, route) {
           note: node.note,
           text: node.text,
           outputFormat: node.outputFormat,
-          inputTypes: node.inputTypes,
         };
       }
       if (node.type === 'run') {

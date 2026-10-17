@@ -82,9 +82,9 @@ def _asset_kind(value: Any) -> str | None:
     return None
 
 
-def compile_prompt_content(template: str, values: dict[str, Any], input_types: dict[str, str],
+def compile_prompt_content(template: str, values: dict[str, Any],
                            project_session_id: str | None) -> str | list[dict[str, Any]]:
-    """Mirror the browser's placeholder and image/PDF substitution contract."""
+    """Mirror the browser's placeholder and image/PDF substitution contract: an input's kind is its cell's."""
     content: list[dict[str, Any]] = []
     attached: set[str] = set()
 
@@ -106,12 +106,7 @@ def compile_prompt_content(template: str, values: dict[str, Any], input_types: d
             continue
         value = values[name]
         actual_kind = _asset_kind(value)
-        expected_kind = str(input_types.get(name) or "text")
         if actual_kind:
-            if expected_kind == "text":
-                raise ValueError(f'Input "{name}" is Text but maps to an asset column.')
-            if expected_kind in {"image", "pdf"} and expected_kind != actual_kind:
-                raise ValueError(f'Input "{name}" requires a {expected_kind} column.')
             asset_ids = value.get("assetIds") or []
             if not asset_ids:
                 raise ValueError(f'Missing {actual_kind} input for "{name}".')
@@ -122,8 +117,6 @@ def compile_prompt_content(template: str, values: dict[str, Any], input_types: d
                                     "asset_id": asset_id})
             attached.add(name)
         else:
-            if expected_kind in {"image", "pdf"}:
-                raise ValueError(f'Input "{name}" requires a {expected_kind} column.')
             append_text("" if value is None else str(value))
         end = match.end()
     append_text(template[end:])
@@ -202,7 +195,7 @@ def execute_llm_job(job: dict, table: dict, credential: dict, project_session_id
             return index, [], "Cancelled"
         try:
             values = {name: row.get(column) for name, column in mapping.items()}
-            prompt = compile_prompt_content(template, values, config.get("input_types") or {}, project_session_id)
+            prompt = compile_prompt_content(template, values, project_session_id)
             last_error: Exception | None = None
             for attempt in range(retries + 1):
                 if cancel_event.is_set():

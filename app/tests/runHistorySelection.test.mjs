@@ -36,7 +36,7 @@ const processRecord = (id, nodeId, bindings) => ({
 const entriesOf = (records) => records.map(({ id, nodeId, kind, signature }) => ({ id, nodeId, kind, signature }));
 
 test('selecting any record of a chain switches its upstream and downstream to one lineage', async () => {
-  const promptSnapshot = { nodeId: 'prompt', name: 'Prompt', text: '', outputFormat: { fields: [] }, inputTypes: {} };
+  const promptSnapshot = { nodeId: 'prompt', name: 'Prompt', text: '', outputFormat: { fields: [] } };
   const runRecord = (id) => ({
     id, nodeId: 'run', kind: 'run', status: 'completed', signature: `${id}-signature`, sourceRecordIds: [],
     inputs: { prompt: promptSnapshot, dataset: { kind: 'dataset', nodeId: 'raw', name: 'Raw', content: table('raw'), signature: 'raw' }, mapping: {} },
@@ -52,7 +52,7 @@ test('selecting any record of a chain switches its upstream and downstream to on
   const state = {
     version: 3,
     nodes: [
-      { type: 'prompt', nodeId: 'prompt', text: '', outputFormat: { fields: [] }, inputTypes: {} },
+      { type: 'prompt', nodeId: 'prompt', text: '', outputFormat: { fields: [] } },
       { type: 'dataset', nodeId: 'raw', datasetContent: table('raw') },
       { type: 'run', nodeId: 'run', historyRecordId: 'run-current' },
       { type: 'process', nodeId: 'tidy', historyRecordId: 'tidy-current', dfCode: 'return df' },

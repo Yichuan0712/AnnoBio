@@ -182,18 +182,18 @@
   pointer-events: none;
 }
 
-/* All lines respond to hover and node selection; missing branches keep their warning colour. */
+/* All lines respond to hover and node selection. */
 .workflow-edge--active .workflow-edge-line,
 .workflow-edge:hover .workflow-edge-line,
 .workflow-edge--compare:focus-visible .workflow-edge-line {
   stroke-width: 3;
+  stroke: var(--text);
   transition: stroke 0.15s ease, stroke-width 0.15s ease;
 }
 
-.workflow-edge--active .workflow-edge-line:not(.workflow-edge--missing-branch),
-.workflow-edge:hover .workflow-edge-line:not(.workflow-edge--missing-branch),
-.workflow-edge--compare:focus-visible .workflow-edge-line:not(.workflow-edge--missing-branch) {
-  stroke: var(--text);
+/* A line reading a branch its Process no longer returns, from that branch's temporary dot. */
+.workflow-edge--missing-branch {
+  stroke-dasharray: 6 4;
 }
 
 .workflow-edge-compare-label {
@@ -605,6 +605,11 @@
 /* Nothing can read this output yet (its branches are not known). */
 .workflow-node__port--unavailable {
   opacity: 0.45;
+}
+
+/* A temporary dot for a branch the Process no longer returns, kept only for the lines still on it. */
+.workflow-node__port--missing {
+  opacity: 1;
 }
 
 /* Dragging a line between ports (workflowPortDrag.js). A dot is easier to hit than it looks. */

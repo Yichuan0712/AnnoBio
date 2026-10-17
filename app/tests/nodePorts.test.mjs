@@ -689,3 +689,24 @@ test('df stays while another input is connected, but not because of an empty par
   nodeOf(state, 'split').dfCode = 'def process(df, df_notes):\n    return df\n';
   assert.equal(checkDisconnect(state, at('split', 'df')).ok, true);
 });
+
+test('a branch a line still reads but its Process no longer returns keeps a temporary dot', () => {
+  const state = canvas();
+  nodeOf(state, 'split').processOutputPorts = detected(['rewrite']);
+  const outputs = nodePorts(state, 'split').outputs;
+  assert.deepEqual(ids(outputs), ['rewrite', 'ready']);
+  const ready = outputs.find((item) => item.id === 'ready');
+  assert.match(ready.missing, /Branch "ready" is not returned by this Process/);
+  assert.deepEqual(ready.readers, [at('merge', 'df')]);
+  assert.deepEqual(edgeEndpoints(state, data('split', 'merge', 'df', 'ready')).from, at('split', 'ready'));
+  assert.match(portTitles(state, 'split', nodePorts(state, 'split')).outputs.ready, /not returned[\s\S]*Reconnect/);
+  const refused = checkConnect(state, at('split', 'ready'), at('merge', 'df_abstracts'));
+  assert.equal(refused.ok, false);
+  assert.match(refused.reason, /not returned/);
+  // Not while the branches are unknown or decided at run time, nor once nothing reads the branch.
+  state.connections.push(data('dyn', 'merge', 'df_x', 'x'), data('fresh', 'merge', 'df_y', 'y'));
+  assert.equal(nodePorts(state, 'dyn').outputs.some((item) => item.missing), false);
+  assert.equal(nodePorts(state, 'fresh').outputs.some((item) => item.missing), false);
+  state.connections = state.connections.filter((edge) => !(edge.fromId === 'split' && edge.fromPort === 'ready'));
+  assert.deepEqual(ids(nodePorts(state, 'split').outputs), ['rewrite']);
+});
