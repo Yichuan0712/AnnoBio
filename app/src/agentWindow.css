@@ -78,7 +78,10 @@
   overflow-x: hidden;
 }
 
+/* The title and its × share one row; score-rule-card itself stacks its head and body in a column. */
 .agent-window__chat-item {
+  flex-direction: row;
+  align-items: stretch;
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
