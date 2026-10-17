@@ -7,9 +7,9 @@ part of the text). The text can contain `{variable}` placeholders; every distinc
 input the Generate must map to a Dataset column. Text in doubled braces, such as `{{example}}`, is not
 treated as a variable.
 
-Each input has a type: text, image or pdf. An image or pdf input sends the files in that cell to the
-model, so the Generate's model must support that modality (in the OpenRouter catalog: vision for images,
-file input for pdf).
+An input has no type of its own: it takes the type of the column the Generate maps it to. Mapped to an
+image or pdf column, it sends the files in that cell to the model, so the Generate's model must support
+that modality (in the OpenRouter catalog: vision for images, file input for pdf).
 
 ## Output schema
 
@@ -59,6 +59,9 @@ connection, so earlier Generate nodes and Evaluate nodes stay comparable. Optimi
 ## Generate nodes
 
 A Generate needs: the Prompt, one input (a Dataset or another step's output), and a mapping from every
-input variable to a column. It uses the Generate model chosen in Settings → Generate. Generate nodes
+input variable to a column. Its model is picked beside **Create Generate** in the Prompt window, from
+the models whose Test passed in Settings → Credentials; without a pick it takes the default Generate
+model from Settings → Generate when it first runs. A Generate keeps the model it started with, so to
+compare models add one Generate per model. Generate nodes
 process rows concurrently and can be stopped and resumed. The next step reads a Generate's results
 directly; save them to the workspace only to freeze or hand-edit them as a Dataset.

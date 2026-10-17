@@ -672,7 +672,6 @@ export function openRunDetailModal({
     const content = input?.table || null;
     const headers = (content?.headers || []).slice();
     const columnTypes = headers.map((_, i) => (content?.columnTypes?.[i] === 'image' || content?.columnTypes?.[i] === 'pdf') ? content.columnTypes[i] : 'text');
-    const inputTypes = getPromptTemplate()?.inputTypes || {};
     const headerSet = new Set(headers);
     inputsListEl.innerHTML = '';
     if (inputFields.length === 0) {
@@ -693,9 +692,6 @@ export function openRunDetailModal({
     }
     inputFields.forEach((inputName) => {
       let col = inputToColumn[inputName] || '';
-      const expected = inputTypes[inputName];
-      const selectedIndex = headers.indexOf(col);
-      if (col && expected && columnTypes[selectedIndex] !== expected) { col = ''; inputToColumn[inputName] = ''; }
       if (col && !headerSet.has(col)) { col = ''; inputToColumn[inputName] = ''; if (node) try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {} }
       if (!col && inputNameToColumnMemory[inputName] && headerSet.has(inputNameToColumnMemory[inputName])) { col = inputNameToColumnMemory[inputName]; inputToColumn[inputName] = col; if (node) try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {} }
     });
@@ -708,9 +704,9 @@ export function openRunDetailModal({
       row.className = 'run-detail-mapping-row';
       row.setAttribute('role', 'row');
       const currentCol = inputToColumn[inputName] || '';
-      const requiredType = inputTypes[inputName];
-      const options = headers.map((h, i) => ({ h, type: columnTypes[i] })).filter((entry) => !requiredType || entry.type === requiredType);
-      row.innerHTML = `<span class="run-detail-mapping-cell run-detail-mapping-cell--column" role="cell"><select class="run-detail-column-select" data-input="${escapeAttr(inputName)}" aria-label="Input column for ${escapeAttr(inputName)}"><option value="">${escapeHtml(selectPlaceholderLabel('Select column'))}</option>${options.map(({ h, type }) => `<option value="${escapeAttr(h)}" ${h === currentCol ? 'selected' : ''}>${escapeHtml(h)}${type === 'image' ? ' 🖼' : type === 'pdf' ? ' 📄' : ''}</option>`).join('')}</select></span><span class="run-detail-mapping-cell run-detail-mapping-cell--arrow" aria-hidden="true">→</span><span class="run-detail-mapping-cell run-detail-mapping-cell--input" role="cell">${escapeHtml(inputName)}${requiredType ? ` <small>(${requiredType})</small>` : ''}</span>`;
+      // Every column is offered; an image or PDF column, marked with its icon, sends its files.
+      const options = headers.map((h, i) => ({ h, type: columnTypes[i] }));
+      row.innerHTML = `<span class="run-detail-mapping-cell run-detail-mapping-cell--column" role="cell"><select class="run-detail-column-select" data-input="${escapeAttr(inputName)}" aria-label="Input column for ${escapeAttr(inputName)}"><option value="">${escapeHtml(selectPlaceholderLabel('Select column'))}</option>${options.map(({ h, type }) => `<option value="${escapeAttr(h)}" ${h === currentCol ? 'selected' : ''}>${escapeHtml(h)}${type === 'image' ? ' 🖼' : type === 'pdf' ? ' 📄' : ''}</option>`).join('')}</select></span><span class="run-detail-mapping-cell run-detail-mapping-cell--arrow" aria-hidden="true">→</span><span class="run-detail-mapping-cell run-detail-mapping-cell--input" role="cell">${escapeHtml(inputName)}</span>`;
       row.querySelector('.run-detail-column-select').addEventListener('change', (e) => {
         inputToColumn[inputName] = (e.target.value || '').trim() || '';
         if (node) try { node.dataset.runInputToColumn = JSON.stringify(inputToColumn); } catch (_) {}

@@ -200,7 +200,6 @@ function credentialLabel(credentialId, options) {
 
 function inspectPrompt(node, ctx, options) {
   const text = String(node.text || '');
-  const inputTypes = parseJsonObject(node.inputTypes, {});
   const inputFields = typeof options.extractInputFields === 'function'
     ? safeArray(options.extractInputFields(text)).map(String)
     : [];
@@ -214,7 +213,8 @@ function inspectPrompt(node, ctx, options) {
     details: {
       note: String(node.note || ''),
       text,
-      inputs: inputFields.map((name) => ({ name, type: inputTypes[name] || 'text' })),
+      // An input has no type: it sends what its mapped column holds (an image or PDF column sends its files).
+      inputs: inputFields,
       output: {
         returnShape: outputFormat.returnShape || 'single',
         fields: safeArray(outputFormat.fields).map((f) => ({

@@ -5,8 +5,9 @@ const ASSET_KINDS = {
   pdf: { test: isPdfCell, refType: 'pdf_ref', label: 'PDF' },
 };
 
-// One compiler shared by manual/Agent runs, Review verification and optimization.
-export function compileInput(template, values, types = {}) {
+// One compiler shared by manual/Agent runs, Review verification and optimization. An input's kind is its
+// cell's: an image or PDF cell is attached as files, anything else is text.
+export function compileInput(template, values) {
   const content = [];
   const attached = new Set();
   const appendText = (text) => {
@@ -21,13 +22,10 @@ export function compileInput(template, values, types = {}) {
     appendText(template.slice(end, match.index));
     const key = match[1];
     const value = values[key];
-    const assetEntry = Object.entries(ASSET_KINDS).find(([, { test }]) => test(value));
-    const [assetKindKey, assetKind] = assetEntry || [];
+    const assetKind = Object.values(ASSET_KINDS).find(({ test }) => test(value));
     if (!Object.prototype.hasOwnProperty.call(values, key)) {
       appendText(match[0]);
     } else if (assetKind) {
-      if (types[key] === 'text') throw new Error(`Input "${key}" is Text but maps to a ${assetKind.label} column. Change its type in Prompt inputs.`);
-      if (types[key] && types[key] !== assetKindKey && types[key] in ASSET_KINDS) throw new Error(`Input "${key}" requires a ${ASSET_KINDS[types[key]].label} column.`);
       if (!value.assetIds.length) throw new Error(`Missing ${assetKind.label.toLowerCase()} for "${key}".`);
       appendText(`\n[${assetKind.label}s: ${key}]\n`);
       if (!attached.has(key)) value.assetIds.forEach((asset_id, index) => {
@@ -35,7 +33,6 @@ export function compileInput(template, values, types = {}) {
       });
       attached.add(key);
     } else {
-      if (types[key] in ASSET_KINDS) throw new Error(`Input "${key}" requires a ${ASSET_KINDS[types[key]].label} column.`);
       appendText(String(value ?? ''));
     }
     end = match.index + match[0].length;
@@ -44,9 +41,9 @@ export function compileInput(template, values, types = {}) {
   return { content: content.length ? content : [{ type: 'text', text: '' }] };
 }
 
-export function compileRows(template, headers, rows, mapping, types = {}) {
+export function compileRows(template, headers, rows, mapping) {
   return rows.map((row) => {
-    try { return compileInput(template, inputValues(headers, row, mapping), types); }
+    try { return compileInput(template, inputValues(headers, row, mapping)); }
     catch (error) { return { content: [], error: error.message }; }
   });
 }

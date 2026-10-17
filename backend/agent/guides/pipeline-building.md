@@ -31,8 +31,8 @@ Evaluate and Optimize sit beside it for evaluation and are not part of the expor
 
 - Steps connect directly through data connections: a step's input is a Dataset or another step's
   output (a Generate's results, or one branch of a Process). There is no Dataset in between.
-- A Generate reads exactly one input and maps every `{variable}` of its Prompt to a column of it. A column's
-  type must fit the variable's input type (text, image or pdf). A Generate's results, as the next step reads
+- A Generate reads exactly one input and maps every `{variable}` of its Prompt to a column of it. Any column
+  fits: an image or pdf column sends its files, any other column its text. A Generate's results, as the next step reads
   them, have the columns `Input: #`, `Input: <column>` for each input column, `Output: #` and
   `Output: <field>` for each output field.
 - A step's columns are known once it has a result, so map a Generate that reads another step after that
@@ -52,7 +52,8 @@ Evaluate and Optimize sit beside it for evaluation and are not part of the expor
   connect and disconnect to change an existing step's inputs.
 - **Save to workspace** in the Generate window (**Save results to workspace** in its context menu) and
   **Create dataset** / **Create branch datasets** in Process save the current output as an ordinary
-  Dataset, only to freeze or hand-edit it. The Dataset records where it came from but does not follow
+  Dataset, only to freeze or hand-edit it. **Save to workspace** in the Evaluate window or its context
+  menu saves the comparison table of its saved result the same way (save_score_results). The Dataset records where it came from but does not follow
   that step; a step reading it starts a new pipeline from it.
 - New prompt versions are linked by `prompt-to-prompt` connections; each version gets its own Generate node.
 

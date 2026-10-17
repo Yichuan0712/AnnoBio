@@ -16,7 +16,7 @@ import { referencedDatasetAliasNames } from '../../processDatasetBindings.js';
 import { rebuildWorkingFromApplied } from '../../reviewWorkingText.js';
 import { optimizationApplyBlockReason } from '../../evaluationHistory.js';
 import { effectiveProcessOutputs } from '../../processOutputPorts.js';
-import { savedProcessOutputs, savedRunOutput } from '../../savedDatasets.js';
+import { savedProcessOutputs, savedRunOutput, scoreSavedFrom } from '../../savedDatasets.js';
 import {
   DATA_EDGE, RESULT_PORT, processInputBindings, processPrimarySource, readsFromStep, runInputSource, setProcessInputs,
   setRunInputSource, stepSourceLabel,
@@ -38,7 +38,8 @@ export class ChangeSetError extends Error {
 
 const NODE_WIDTH = 320;
 const NODE_HEIGHT = 170;
-const INPUT_TYPES = ['text', 'image', 'pdf'];
+const COLUMN_TYPES = ['text', 'image', 'pdf'];
+const NO_INPUT_TYPES = 'Prompt inputs have no type: an input sends what its mapped column holds (an image or PDF column sends its files). Leave out input_types.';
 const OUTPUT_TYPES = ['str', 'float', 'list_str', 'list_float'];
 const RETURN_SHAPES = ['single', 'table'];
 
@@ -89,9 +90,9 @@ function datasetColumns(node) {
   return content.headers.map((name, i) => ({ name, type: content.columnTypes[i] || 'text' }));
 }
 
+/** A Prompt's {variable} inputs. An input takes any column: an image or PDF column sends its files. */
 function promptInputs(node, extractInputFields) {
-  const types = node?.inputTypes && typeof node.inputTypes === 'object' ? node.inputTypes : {};
-  return extractInputFields(node?.text || '').map((name) => ({ name, type: types[name] || 'text' }));
+  return extractInputFields(node?.text || '');
 }
 
 function outputText(output) {
@@ -103,8 +104,10 @@ function outputText(output) {
  * @param {object} state getCanvasState() output
  * @param {object[]} operations
  * @param {{extractInputFields: Function, sources?: object, imported?: Map<number, {headers: string[], rows: string[][]}>,
- *   now?: () => string}} ctx imported holds rows fetched for import
- *   operations (by operation index); without it an import becomes an empty placeholder table.
+ *   now?: () => string, models?: Map<string, object>, scoreTables?: Map<string, object>}} ctx imported holds rows fetched for import
+ *   operations (by operation index); without it an import becomes an empty placeholder table. models holds the
+ *   credentials the model pickers offer (Test passed), by id; scoreTables the table each Evaluate's Save to
+ *   workspace saves ({headers, rows, recordId, stale}), by Evaluate id.
  * @returns {{state: object, items: object[], refs: Record<string, string>, warnings: string[], nodeIds: string[]}}
  */
 export function planChangeSet(state, operations, ctx) {
@@ -215,7 +218,17 @@ export function planChangeSet(state, operations, ctx) {
     }
   }
 
-  const promptInputNames = (prompt) => promptInputs(prompt, ctx.extractInputFields).map((input) => input.name);
+  /** A model the user could pick beside Create Generate or Optimize prompt: a credential whose Test passed. */
+  function pickModel(value) {
+    const model = ctx.models?.get(clean(value));
+    if (model) return model;
+    fail(ctx.models?.size
+      ? `model must be the id of a tested model from the workspace summary: ${[...ctx.models.keys()].join(', ')}.`
+      : 'There are no tested models; the user has to add and test one in Settings → Credentials.');
+  }
+  const modelLabel = (credential) => [credential.provider, credential.model].filter(Boolean).join(' / ') || credential.id;
+
+  const promptInputNames = (prompt) => promptInputs(prompt, ctx.extractInputFields);
   /** How a source an input reads is named on a card: a Prompt by its title, a step or Dataset as its readers name it. */
   const sourceLabel = (source) => (source.kind === 'prompt' ? nodeTitle(byId().get(source.nodeId)) : stepSourceLabel(next, source));
 
@@ -327,16 +340,6 @@ export function planChangeSet(state, operations, ctx) {
     return { returnShape, fields };
   }
 
-  function normalizeInputTypes(value, text) {
-    const names = ctx.extractInputFields(text);
-    const types = value && typeof value === 'object' ? value : {};
-    for (const [name, type] of Object.entries(types)) {
-      if (!names.includes(name)) fail(`input_types names "${name}", which is not a {variable} in the prompt text.`);
-      if (!INPUT_TYPES.includes(type)) fail(`Input "${name}" has type "${type}"; use text, image or pdf.`);
-    }
-    return Object.fromEntries(Object.entries(types).filter(([, type]) => type !== 'text'));
-  }
-
   function normalizeTable(op, current = null) {
     const definitions = Array.isArray(op.columns) ? op.columns : current?.headers || [];
     const columns = definitions.map((c) => clean(typeof c === 'object' ? c?.name : c));
@@ -346,7 +349,7 @@ export function planChangeSet(state, operations, ctx) {
       const previous = current?.headers.indexOf(columns[i]) ?? -1;
       const type = clean(typeof column === 'object' ? column?.type : '')
         || current?.columnTypes[previous >= 0 ? previous : columns.length === current.headers.length ? i : -1] || 'text';
-      if (!INPUT_TYPES.includes(type)) fail(`Column "${columns[i]}" must have type text, image or pdf.`);
+      if (!COLUMN_TYPES.includes(type)) fail(`Column "${columns[i]}" must have type text, image or pdf.`);
       return type;
     });
     const assets = new Map();
@@ -407,7 +410,7 @@ export function planChangeSet(state, operations, ctx) {
     const normalized = Object.fromEntries(Object.entries(mapping && typeof mapping === 'object' ? mapping : {})
       .map(([k, v]) => [clean(k), clean(v)]).filter(([, v]) => v));
     for (const key of Object.keys(normalized)) {
-      if (!inputs.some((i) => i.name === key)) fail(`input_mapping names "${key}", which is not an input of prompt "${nodeTitle(prompt)}".`);
+      if (!inputs.includes(key)) fail(`input_mapping names "${key}", which is not an input of prompt "${nodeTitle(prompt)}".`);
     }
     if (!columns) {
       if (Object.keys(normalized).length) {
@@ -416,11 +419,9 @@ export function planChangeSet(state, operations, ctx) {
       return {};
     }
     for (const input of inputs) {
-      const column = normalized[input.name];
-      if (!column) fail(`input_mapping has no column for prompt input "${input.name}".`);
-      const col = columns.find((c) => c.name === column);
-      if (!col) fail(`"${label}" has no column "${column}". Columns: ${columns.map((c) => c.name).join(', ')}.`);
-      if (col.type !== input.type) fail(`Prompt input "${input.name}" is ${input.type} but column "${column}" is ${col.type}.`);
+      const column = normalized[input];
+      if (!column) fail(`input_mapping has no column for prompt input "${input}".`);
+      if (!columns.some((c) => c.name === column)) fail(`"${label}" has no column "${column}". Columns: ${columns.map((c) => c.name).join(', ')}.`);
     }
     return normalized;
   }
@@ -745,16 +746,16 @@ export function planChangeSet(state, operations, ctx) {
     add_prompt(op) {
       const text = normalizeText(op.text);
       const outputFormat = normalizeOutput(op.output);
-      const inputTypes = normalizeInputTypes(op.input_types, text);
+      if (op.input_types != null) fail(NO_INPUT_TYPES);
       const name = uniqueName(clean(op.name) || 'Prompt', takenNames('prompt'));
       const node = addNode({
         type: 'prompt', nodeId: generateNodeId(), ...placeNear(null), name, note: String(op.note ?? ''),
-        text, outputFormat, inputTypes, nodeOrigin: 'agent',
+        text, outputFormat, nodeOrigin: 'agent',
       });
       registerRef(op, node.nodeId);
       return {
         kind: 'add', type: 'prompt', title: `New prompt "${name}"`, nodeIds: [node.nodeId],
-        lines: [`Inputs: ${promptInputs(node, ctx.extractInputFields).map((i) => `${i.name} (${i.type})`).join(', ') || '(none)'}`],
+        lines: [`Inputs: ${promptInputs(node, ctx.extractInputFields).join(', ') || '(none)'}`],
         diffs: [
           { label: 'Prompt', before: '', after: text },
           { label: 'Output', before: '', after: outputText(outputFormat) },
@@ -766,14 +767,12 @@ export function planChangeSet(state, operations, ctx) {
       const source = resolve(op.prompt, 'prompt', ['prompt']);
       const text = nextText(source.text, op) ?? String(source.text || '');
       const outputFormat = op.output != null ? normalizeOutput(op.output, source.outputFormat) : JSON.parse(JSON.stringify(source.outputFormat || { returnShape: 'single', fields: [] }));
-      const inputTypes = op.input_types != null
-        ? normalizeInputTypes(op.input_types, text)
-        : Object.fromEntries(Object.entries(source.inputTypes || {}).filter(([k]) => ctx.extractInputFields(text).includes(k)));
+      if (op.input_types != null) fail(NO_INPUT_TYPES);
       const name = uniqueName(clean(op.name) || nodeTitle(source), takenNames('prompt'));
       const node = addNode({
         type: 'prompt', nodeId: generateNodeId(), ...placeNear(source), name,
         note: op.note != null ? String(op.note) : String(source.note || ''),
-        text, outputFormat, inputTypes, nodeOrigin: 'agent',
+        text, outputFormat, nodeOrigin: 'agent',
       });
       connect(source.nodeId, node.nodeId, 'prompt-to-prompt');
       registerRef(op, node.nodeId);
@@ -787,11 +786,15 @@ export function planChangeSet(state, operations, ctx) {
     add_run(op) {
       if ('input_dataset' in op) fail('add_run reads input (a dataset, run or process) plus input_branch for a process branch; input_dataset is not used.');
       const prompt = op.prompt ? resolve(op.prompt, 'prompt', ['prompt']) : null;
-      // Like the user, the Agent has no per-Generate model or settings: Runs use the Generate model chosen in Settings → Generate.
-      if (op.credential_id != null || op.settings != null) fail('A Generate uses the default Generate model and settings from Settings; credential_id and settings cannot be set per Generate.');
+      // As Create Generate in the Prompt window: the model picked beside it, else the Settings → Generate default
+      // when it first runs. Number settings belong to the model (Settings), not to the Generate.
+      if (op.credential_id != null) fail('Pass the model as model (a tested model id from the workspace summary), not credential_id.');
+      if (op.settings != null) fail('A Generate uses its model\'s settings from Settings; settings cannot be set per Generate.');
+      const model = op.model != null ? pickModel(op.model) : null;
       const runsOfPrompt = new Set(next.connections.filter((c) => c.type === 'prompt-to-run' && c.fromId === prompt?.nodeId).map((c) => c.toId));
       const name = uniqueName(generateDisplayName(op.name), takenNames('run', (n) => runsOfPrompt.has(n.nodeId)));
-      const node = addNode({ type: 'run', nodeId: generateNodeId(), ...placeNear(prompt), runName: name, nodeOrigin: 'agent' });
+      const node = addNode({ type: 'run', nodeId: generateNodeId(), ...placeNear(prompt), runName: name, nodeOrigin: 'agent',
+        ...(model ? { runCredentialId: model.id } : {}) });
       const source = op.input ? resolveSource(op.input, op.input_branch, 'input', node.nodeId) : null;
       if ((!prompt || !source) && Object.keys(op.input_mapping || {}).length) fail('Connect a Prompt and Data input before setting input_mapping.');
       const mapping = prompt && source ? validateMapping(prompt, source, op.input_mapping) : {};
@@ -804,7 +807,7 @@ export function planChangeSet(state, operations, ctx) {
         lines: [
           prompt ? `Prompt "${nodeTitle(prompt)}"${source ? ` on "${stepSourceLabel(next, source)}"` : '; Data input not connected'}` : 'Prompt input not connected',
           ...(source ? [mappingLine(mapping, source)] : []),
-          'Model and settings: Settings → Generate',
+          model ? `Model: ${modelLabel(model)}` : 'Model: the default Generate model (Settings → Generate)',
           'Not started: it runs when you start it.',
         ],
       };
@@ -902,15 +905,16 @@ export function planChangeSet(state, operations, ctx) {
       const lines = [];
       const diffs = [];
       const allowed = {
-        prompt: ['name', 'note', 'text', 'text_edits', 'input_types', 'output'],
+        prompt: ['name', 'note', 'text', 'text_edits', 'output'],
         dataset: ['name', 'note', 'columns', 'rows', 'row_ids'],
         process: ['name', 'code', 'primary_input', 'primary_branch'],
-        run: ['name', 'prompt', 'input', 'input_branch', 'input_mapping'],
+        run: ['name', 'prompt', 'input', 'input_branch', 'input_mapping', 'model'],
         score: ['name', 'ground_truth', 'pairing', 'comparison', 'combine', 'rule_tree', 'match_code', 'exclude_row_keys', 'include_row_keys'],
         sampler: ['name', 'sampling', 'size', 'size_unit', 'rows'],
         promptReview: ['name'],
       }[node.type] || [];
       if (node.type === 'run' && 'input_dataset' in set) fail('A run reads input (a dataset, run or process) plus input_branch for a process branch; input_dataset is not used.');
+      if (node.type === 'prompt' && 'input_types' in set) fail(NO_INPUT_TYPES);
       const bad = keys.filter((k) => !allowed.includes(k));
       if (bad.length) fail(`A ${node.type} cannot set ${bad.join(', ')}. Settable: ${allowed.join(', ')}.`);
       if (node.type === 'score' && node.scoreMatchPending && keys.some((key) => key !== 'name')) fail(`Evaluate "${before}" is matching; stop it before changing its configuration.`);
@@ -931,7 +935,7 @@ export function planChangeSet(state, operations, ctx) {
       }
 
       // Include samples added earlier in this proposal as well as locks from existing History.
-      const contentKeys = { prompt: ['text', 'text_edits', 'input_types', 'output'], dataset: ['columns', 'rows', 'row_ids'] }[node.type] || [];
+      const contentKeys = { prompt: ['text', 'text_edits', 'output'], dataset: ['columns', 'rows', 'row_ids'] }[node.type] || [];
       if (contentKeys.some((k) => k in set)) assertContentEditable(node);
 
       if (node.type === 'sampler' && ['sampling', 'size', 'size_unit', 'rows'].some((key) => key in set)) {
@@ -951,9 +955,7 @@ export function planChangeSet(state, operations, ctx) {
           const text = nextText(node.text, set);
           diffs.push({ label: 'Prompt', before: String(node.text || ''), after: text });
           node.text = text;
-          node.inputTypes = Object.fromEntries(Object.entries(node.inputTypes || {}).filter(([k]) => ctx.extractInputFields(text).includes(k)));
         }
-        if ('input_types' in set) node.inputTypes = normalizeInputTypes(set.input_types, node.text);
         if ('output' in set) {
           const outputFormat = normalizeOutput(set.output, node.outputFormat);
           diffs.push({ label: 'Output', before: outputText(node.outputFormat), after: outputText(outputFormat) });
@@ -986,6 +988,16 @@ export function planChangeSet(state, operations, ctx) {
 
       if (node.type === 'run') {
         if (node.runPending) fail(`Generate "${before}" is running; stop it before changing it.`);
+        if ('model' in set) {
+          // A Generate keeps the model it started with; before its first run it is still the one Create Generate sets.
+          if (runResultsExist(node) || node.runCompleted === true || node.runCompleted === '1' || node.runResumable
+            || clean(node.historyRecordId) || clean(node.historyStaleRecordId)) {
+            fail(`Generate "${before}" has already run, so its model is fixed. Add a new Generate (add_run) with that model instead.`);
+          }
+          const model = pickModel(set.model);
+          node.runCredentialId = model.id;
+          lines.push(`Model: ${modelLabel(model)}`);
+        }
         if ('prompt' in set || 'input' in set || 'input_branch' in set || 'input_mapping' in set) {
           // As on the canvas: without History, a Generate's Prompt, input and mapping lock once it has results.
           if (next.historyVersion !== 1 && (runResultsExist(node) || node.runCompleted === true || node.runCompleted === '1')) {
@@ -1004,7 +1016,7 @@ export function planChangeSet(state, operations, ctx) {
           const oldMapping = parseJson(node.runInputToColumn, {});
           const keptMapping = prompt.nodeId === currentPromptId
             ? oldMapping
-            : keepSharedMapping(oldMapping, promptInputs(prompt, ctx.extractInputFields).map((input) => input.name));
+            : keepSharedMapping(oldMapping, promptInputs(prompt, ctx.extractInputFields));
           const mapping = validateMapping(prompt, source, set.input_mapping ?? keptMapping);
           // The connections change as dragging them on the canvas would (nodePorts.js); the mapping is the one checked above.
           if (prompt.nodeId !== currentPromptId) {
@@ -1155,6 +1167,31 @@ export function planChangeSet(state, operations, ctx) {
       };
     },
 
+    save_score_results(op) {
+      const score = resolve(op.score, 'score', ['score']);
+      if (score.scoreMatchPending) fail(`Evaluate "${nodeTitle(score)}" is matching; save its results once it finishes.`);
+      // The same Dataset as Save to workspace in the Evaluate window: the table of its displayed History record.
+      const saved = ctx.scoreTables?.get(score.nodeId);
+      if (!saved?.headers?.length) fail(`Evaluate "${nodeTitle(score)}" has no saved result. Run it first (run_nodes score).`);
+      const title = nodeTitle(score);
+      const name = uniqueName(clean(op.name) || `${title} comparison`, takenNames('dataset'));
+      const content = normalizeDatasetContent({ headers: saved.headers, rows: saved.rows });
+      const node = addNode({
+        type: 'dataset',
+        nodeId: generateNodeId(),
+        ...placeNear(score),
+        name,
+        note: String(op.note ?? `Exported from Evaluate "${title}". Model outputs vs ground truth comparison.`),
+        savedFrom: scoreSavedFrom(score.nodeId, saved.recordId),
+        datasetContent: content,
+        nodeOrigin: 'agent',
+      });
+      registerRef(op, node.nodeId);
+      const lines = [`${content.rows.length} rows; columns: ${content.headers.join(', ')}`];
+      if (saved.stale) lines.push('This is its last saved result; its rules or inputs have changed since (Needs update).');
+      return { kind: 'add', type: 'dataset', title: `Save the comparison of Evaluate "${title}" as "${name}"`, nodeIds: [node.nodeId], lines };
+    },
+
     apply_review(op) {
       const review = resolve(op.review, 'review', ['promptReview']);
       if (review.reviewPending) fail(`Optimize "${nodeTitle(review)}" is still running.`);
@@ -1193,7 +1230,6 @@ export function planChangeSet(state, operations, ctx) {
         note: String(op.note ?? `Created from Optimize "${nodeTitle(review)}" (suggestions ${ids.join(', ')}).`),
         text: normalizeText(text),
         outputFormat: JSON.parse(JSON.stringify(sourcePrompt.outputFormat || { returnShape: 'single', fields: [] })),
-        inputTypes: { ...(sourcePrompt.inputTypes || {}) },
         nodeOrigin: 'agent',
       });
       connect(review.nodeId, node.nodeId, 'prompt-review-to-prompt');

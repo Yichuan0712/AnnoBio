@@ -15,7 +15,7 @@ import { legacyCanvas } from './canvasFormatFixture.mjs';
 const content = (value) => ({ headers: ['text'], rows: [[value]], columnTypes: ['text'], rowIds: [`row-${value}`] });
 const data = (fromId, toId, alias, fromPort = 'result') => ({ type: 'data', fromId, fromPort, toId, ...(alias ? { alias } : {}) });
 const prompt = (nodeId, name, text, field) => ({
-  type: 'prompt', nodeId, name, text, inputTypes: {},
+  type: 'prompt', nodeId, name, text,
   outputFormat: { returnShape: 'single', fields: [{ key: field, type: 'str' }] },
 });
 const ports = (list) => ({ ports: list, dynamic: false, error: '', codeHash: 'h' });
@@ -179,7 +179,8 @@ test('two branches of one Process read as df and df_right sign under node:port k
 test('Processes and Runs reading only Datasets keep the signatures recorded before step sources', async () => {
   // The same constants as canvasFormat.test.mjs, found here through the resolver rather than capture.
   const recorded = {
-    run: 'sha256:10fb964d12b807b8088665f5dab8b81eda6ae961a30bbb1ed08ad26bd018c24f',
+    // Recaptured 2026-10-17, when Prompt inputs lost their types and inputTypes left the Generate signature.
+    run: 'sha256:2218771b5160204580496e12df13b804e4904e1aed931f6e72ffbca9335852c0',
     saved: 'sha256:df7ad4207c8f532b737199540ce3b94431998c5d25f51d175e5fae3841cf4651',
     implicit: 'sha256:9b39e52e8028f371fc724317f2cebcee5a77c9f2ed94a74054d90504cbebfdaf',
     clash: 'sha256:612203794f6c2c7208afa1146515c2eb12ab0c86bfc27225c7a6f21e0b530541',

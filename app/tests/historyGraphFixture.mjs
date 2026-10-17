@@ -3,7 +3,7 @@
 import { captureHistoryInput, runningHistoryRecord } from '../src/runHistoryCapture.js';
 
 export const content = (value) => ({ headers: ['text'], rows: [[value]], columnTypes: ['text'], rowIds: [`row-${value}`] });
-export const prompt = { type: 'prompt', nodeId: 'prompt', name: 'Prompt', text: 'Say {{text}}', outputFormat: { returnShape: 'single', fields: [{ key: 'answer', type: 'str' }] }, inputTypes: {} };
+export const prompt = { type: 'prompt', nodeId: 'prompt', name: 'Prompt', text: 'Say {{text}}', outputFormat: { returnShape: 'single', fields: [{ key: 'answer', type: 'str' }] } };
 export const input = { type: 'dataset', nodeId: 'input', name: 'Input', datasetContent: content('hello') };
 export const runResults = [{ row_index: 0, input_row_index: 0, output: { answer: 'world' } }];
 export const run = { type: 'run', nodeId: 'run', runInputToColumn: '{"text":"text"}', runInputContent: JSON.stringify(input.datasetContent), runResults: JSON.stringify(runResults), runCompleted: '1' };

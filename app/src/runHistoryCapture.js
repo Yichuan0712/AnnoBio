@@ -62,7 +62,6 @@ export async function captureHistoryInput(state, targetNodeId, { index, loadReco
     const promptSnapshot = {
       nodeId: nodeId(prompt), name: prompt.name || '', text: String(prompt.text || ''),
       outputFormat: copy(prompt.outputFormat || { returnShape: 'single', fields: [] }),
-      inputTypes: copy(prompt.inputTypes || {}),
     };
     const mapping = parsed(target.runInputToColumn, {});
     const signature = await runInputSignature({

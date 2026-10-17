@@ -21,9 +21,9 @@ const canvas = () => ({
   nodes: [
     { type: 'dataset', nodeId: 'raw', name: 'Raw', datasetContent: raw },
     { type: 'prompt', nodeId: 'p', name: 'Extract', text: 'Read {text}',
-      outputFormat: { returnShape: 'single', fields: [{ key: 'answer', type: 'str' }] }, inputTypes: {} },
+      outputFormat: { returnShape: 'single', fields: [{ key: 'answer', type: 'str' }] } },
     { type: 'prompt', nodeId: 'judge', name: 'Judge', text: 'Judge {answer}',
-      outputFormat: { returnShape: 'single', fields: [{ key: 'verdict', type: 'str' }] }, inputTypes: {} },
+      outputFormat: { returnShape: 'single', fields: [{ key: 'verdict', type: 'str' }] } },
     { type: 'run', nodeId: 'r', runName: 'Run', historyRecordId: 'rec-r', runCompleted: '1', runInputToColumn: JSON.stringify({ text: 'text' }),
       runInputContent: JSON.stringify(raw),
       runResults: JSON.stringify([{ row_index: 0, input_row_index: 0, output: { answer: 'A' } }, { row_index: 1, input_row_index: 1, output: { answer: 'B' } }]) },

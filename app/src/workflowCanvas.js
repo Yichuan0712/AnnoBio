@@ -56,6 +56,7 @@ import {
   attachInputMatchedUnpairedGtDescriptors,
   buildScoreTableGtColumns,
   buildCodeMatchRunToGt,
+  buildCodeMatchTableData,
 } from './scoreDetailModal.js';
 import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
@@ -2784,8 +2785,8 @@ export function buildWorkflowCanvas(root, options = {}) {
       const missing = missingBranch(edge, fromNode);
       line.setAttribute('aria-label', missing ? `Branch "${edge.fromPort}" is not returned by this Process` : 'Selected input');
       if (missing) {
-        // The branch is gone (design §3.4): the line stays, red, and its reader cannot run.
-        line.setAttribute('stroke', 'var(--status-danger)');
+        // The branch is gone (design §3.4): the line stays, dashed, on the branch's temporary dot
+        // (nodePorts.js missingOutputPorts), and its reader cannot run.
         line.classList.add('workflow-edge--missing-branch');
         const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
         title.textContent = `Branch "${edge.fromPort}" is not returned by this Process`;
@@ -2941,7 +2942,6 @@ export function buildWorkflowCanvas(root, options = {}) {
       note: node.dataset.promptNote || '',
       text: node.dataset.promptText || '',
       outputFormat,
-      inputTypes: (() => { try { return JSON.parse(node.dataset.promptInputTypes || '{}'); } catch (_) { return {}; } })(),
     };
   }
 
@@ -3413,6 +3413,14 @@ export function buildWorkflowCanvas(root, options = {}) {
         runPlanned: (nodeId, options) => runPlanned(nodeId, { ...options, source: 'agent' }),
         getScoreComparisonRows,
         getEvaluationPayload,
+        // What Save to workspace in the Evaluate window saves: the table of its displayed History record.
+        getScoreSaveTable: async (nodeId) => {
+          const record = await loadEvaluationRecord(nodeId);
+          const results = record?.results || {};
+          const table = results.table || (results.scoreMatchResult ? buildCodeMatchTableData(results.scoreMatchResult) : null);
+          return table ? { headers: table.headers, rows: table.rows, recordId: record.id,
+            stale: record.id !== getNodeById(nodeId)?.dataset.historyRecordId } : null;
+        },
         getSelectedNodeIds: () => [...selectedNodeIds],
         getPipelineSelections: getAgentPipelineSelections,
         renamePipeline: (pipelineId, name) => {
@@ -3651,7 +3659,6 @@ export function buildWorkflowCanvas(root, options = {}) {
         note: node.dataset.promptNote || '',
         text: node.dataset.promptText || '',
         outputFormat,
-        inputTypes: (() => { try { return JSON.parse(node.dataset.promptInputTypes || '{}'); } catch (_) { return {}; } })(),
         colorIndex: normalizeDatasetColorIndex(node.dataset.promptColorIndex),
         left: isNewVersion ? left + width + NEW_NODE_OFFSET : left,
         top: isNewVersion ? top : top + height + NEW_NODE_OFFSET,
@@ -5128,7 +5135,6 @@ export function buildWorkflowCanvas(root, options = {}) {
         text: node.dataset.promptText || '',
         outputFormat,
         optimizationMethodId: node.dataset.optimizationMethodId || undefined,
-        inputTypes: (() => { try { return JSON.parse(node.dataset.promptInputTypes || '{}'); } catch (_) { return {}; } })(),
         nodeOrigin: (node.dataset.nodeOrigin || '').trim() || undefined,
       };
     });
@@ -5341,7 +5347,6 @@ export function buildWorkflowCanvas(root, options = {}) {
           text: typeof n.text === 'string' ? n.text : '',
           optimizationMethodId: n.optimizationMethodId || '',
           outputFormat: n.outputFormat,
-          inputTypes: n.inputTypes,
           left: n.left,
           top: n.top,
           nodeId: n.nodeId || n.id,

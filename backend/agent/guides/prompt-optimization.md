@@ -50,6 +50,10 @@ recall and F1 as the table. Compare versions from those numbers rather than esti
 
 ## Optimize methods
 
+An Optimize uses the model picked beside **Optimize prompt** in the Evaluate window (it becomes that
+Evaluate's Optimize model), or else the default Optimize model from Settings → Optimize; a resumed
+Optimize keeps the model it started with.
+
 Optimize nodes use the review method set in Settings → Optimize:
 - Thompson Prompt Search (the default): issue analysis followed by targeted sentence-level edits.
 - GEPA: reflective evolution of the prompt across candidates.

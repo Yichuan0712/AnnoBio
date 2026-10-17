@@ -108,7 +108,6 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     note = '',
     text = '',
     outputFormat,
-    inputTypes,
     left,
     top,
     ensureUniqueName = true,
@@ -123,7 +122,6 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       note: String(note || ''),
       text: String(text || ''),
       outputFormat,
-      inputTypes,
       left,
       top,
     });
@@ -246,7 +244,6 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       note: 'Exported from Optimize.',
       text: resolvedText,
       outputFormat: sourcePromptData?.outputFormat || undefined,
-      inputTypes: sourcePromptData?.inputTypes || {},
       left: resolvedLeft,
       top: resolvedTop,
       ensureUniqueName: false,
@@ -435,9 +432,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       };
     }
 
-    let inputTypes = {};
-    try { inputTypes = JSON.parse(promptNode.dataset.promptInputTypes || '{}'); } catch (_) {}
-    const samples = compileRows(templateText, headers, rowsToRun, runInputToColumn, inputTypes);
+    const samples = compileRows(templateText, headers, rowsToRun, runInputToColumn);
     let historyRecord = historySession ? (await historySession.reserve(getCanvasState(), normalizedRunNodeId, { fresh: startFresh })).record : null;
     if (historyRecord) node.dataset.historyRecordId = historyRecord.id;
     if (historyRecord) {

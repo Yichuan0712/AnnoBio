@@ -124,7 +124,6 @@ export async function planHistorySelection(state, recordId, { loadRecord, record
         if (!prompt?.nodeId || !dataset?.nodeId) throw new Error(`Generate history inputs are incomplete: ${id}`);
         demand(prompt.nodeId, 'prompt', {
           text: String(prompt.text || ''), outputFormat: prompt.outputFormat || { returnShape: 'single', fields: [] },
-          inputTypes: prompt.inputTypes || {},
         });
         const input = await visitInput(dataset);
         const selectionSignature = await runInputSignature({
