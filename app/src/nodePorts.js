@@ -226,6 +226,22 @@ function outputPorts(node) {
   })];
 }
 
+/**
+ * A branch a line still reads that its Process no longer returns (DATA_FLOW_DESIGN.md §3.4) keeps a
+ * temporary dot, so the line stays joined to the node until the user reconnects it; nothing new can be
+ * connected to it. Not while the branches are unknown or decided at run time.
+ */
+function missingOutputPorts(node, known, edges) {
+  if (node.type !== 'process') return [];
+  const outputs = effectiveProcessOutputs({ detected: node.processOutputPorts, dfResults: node.dfResults });
+  if (outputs.source === 'none' || outputs.dynamic) return [];
+  const id = nodeIdOf(node);
+  const ids = new Set(known.map((item) => item.id));
+  const names = new Set(edges.filter(({ ends }) => !ends.from.lineage && ends.from.nodeId === id && !ids.has(ends.from.portId))
+    .map(({ ends }) => ends.from.portId));
+  return [...names].map((name) => port(name, PORT_TYPES.TABLE, name, { missing: `Branch "${name}" is not returned by this Process.` }));
+}
+
 const LABELED_STEP_TYPES = new Set(['run', 'process', 'score', 'promptReview']);
 
 /** Steps show their input sources and outputs; other nodes label sides with several ports. */
@@ -273,8 +289,9 @@ function promptContextOf(state, node) {
  * The ports of one node, or null when it is not on the canvas.
  * - `inputs[]`: `{ id, type, label, showLabel, source, fixed?, displayLabel?, icon?, unconnected? }`. `source` is what it reads
  *   (`{ nodeId, port, kind }`) or null; `fixed` says why it cannot be replaced or disconnected.
- * - `outputs[]`: `{ id, type, label, showLabel, readers, unavailable?, mismatch? }`. `readers` are the
- *   input ports reading it; `unavailable` says why nothing can read it yet.
+ * - `outputs[]`: `{ id, type, label, showLabel, readers, unavailable?, mismatch?, missing? }`. `readers` are the
+ *   input ports reading it; `unavailable` says why nothing can read it yet; `missing` marks the temporary
+ *   dot of a branch its Process no longer returns, which only existing lines read.
  * - `lineageIn` / `lineageOut`: whether the node has a provenance/creation port on that side.
  * - `lineageOutput`: optional label and icon for its creation port.
  * - `promptContext`: the upstream Prompt shown above Evaluate/Optimize ports, when applicable.
@@ -285,7 +302,8 @@ export function nodePorts(state, nodeId) {
   const id = nodeIdOf(node);
   const edges = allEdges(state).map((edge) => ({ edge, ends: edgeEndpoints(state, edge) })).filter((item) => item.ends);
   const inputs = inputPorts(state, node);
-  const outputs = outputPorts(node).map((item) => ({
+  const known = outputPorts(node);
+  const outputs = [...known, ...missingOutputPorts(node, known, edges)].map((item) => ({
     ...item,
     readers: edges.filter(({ ends }) => !ends.from.lineage && ends.from.nodeId === id && ends.from.portId === item.id).map(({ ends }) => ends.to),
   }));
@@ -369,7 +387,8 @@ export function portTitles(state, nodeId, ports) {
     const name = item.displayLabel || (item.id === RESULT_PORT ? 'Output' : item.label);
     const named = name === 'Output' ? '' : `${name} · `;
     let text = item.type === PORT_TYPES.SCORE ? 'Output: Evaluation results' : `Output: ${name}`;
-    if (item.unavailable) text = `Output: ${item.unavailable}`;
+    if (item.missing) text = [`Output: ${item.missing}`, 'Reconnect what reads it to another output.'].join('\n');
+    else if (item.unavailable) text = `Output: ${item.unavailable}`;
     else if (item.type === PORT_TYPES.TABLE) {
       const output = stepOutputTable(state, { nodeId: id, port: item.id, kind: node?.type });
       const headers = node?.type === 'run'
@@ -447,7 +466,7 @@ export function checkConnect(state, from, to, { running } = {}) {
   if (output.type !== input.type) return refuse(`The ${input.label} input takes ${TYPE_NOUN[input.type]}, not ${TYPE_NOUN[output.type]}.`);
   if (input.fixed) return refuse(input.fixed);
   if (input.id === 'ground_truth' && sourceNode.type !== 'dataset') return refuse('The ground truth must be a Dataset.');
-  if (output.unavailable) return refuse(output.unavailable);
+  if (output.unavailable || output.missing) return refuse(output.unavailable || output.missing);
   const sourceId = nodeIdOf(sourceNode);
   const targetId = nodeIdOf(targetNode);
   const source = { nodeId: sourceId, port: output.id, kind: sourceNode.type };

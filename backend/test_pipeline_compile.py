@@ -154,14 +154,17 @@ class PipelineCompileTests(unittest.TestCase):
         self.error(state, "MISSING_COLUMN")
 
     def test_multimodal_types_and_table_shape(self):
+        # A Prompt input has no type of its own: it takes its mapped column's.
         state = simple()
         state["nodes"][0]["datasetContent"]["columnTypes"] = ["pdf"]
-        state["nodes"][1]["inputTypes"] = {"text": "pdf"}
         state["nodes"][1]["outputFormat"]["returnShape"] = "table"
         spec = self.valid(state)
         self.assertEqual(spec["jobs"][0]["config"]["output_schema"]["return_shape"], "table")
-        state["nodes"][1]["inputTypes"] = {"text": "image"}
-        self.error(state, "INPUT_TYPE_MISMATCH")
+        self.assertEqual(spec["jobs"][0]["config"]["input_types"], {"text": "pdf"})
+        state["nodes"][0]["datasetContent"]["columnTypes"] = ["image"]
+        self.assertEqual(self.valid(state)["jobs"][0]["config"]["input_types"], {"text": "image"})
+        state["nodes"][0]["datasetContent"]["columnTypes"] = ["text"]
+        self.assertEqual(self.valid(state)["jobs"][0]["config"]["input_types"], {"text": "text"})
 
     def test_legacy_mapping_inference_escaped_braces_and_ambiguity(self):
         state = simple()

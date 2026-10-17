@@ -40,7 +40,6 @@ export async function runInputSignature({ promptNodeId, prompt, datasetNodeId, d
       text: String(prompt?.text || ''),
       outputFormat: prompt?.outputFormat || [],
       returnShape: prompt?.returnShape || 'single',
-      inputTypes: prompt?.inputTypes || {},
     },
     mapping: mapping || {},
   });

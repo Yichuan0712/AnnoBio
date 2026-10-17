@@ -2,7 +2,7 @@ import { fillModelPicker, pickedModel } from './modelPicker.js';
 import { attachModalPaneCycle } from './paneToggleButton.js';
 import { isTaskLocked } from './runTaskLocks.js';
 import { openPromptSchemaEditor } from './promptSchemaUi.js';
-import { extractInputFields, promptPlaceholders } from './promptText.js';
+import { promptPlaceholders } from './promptText.js';
 
 /**
  * Prompt detail modal: view/edit the prompt text (in place) and the output schema.
@@ -245,14 +245,12 @@ export function openPromptDetailModal({ name = '', text = '', node: sourceNode =
   const emptyTextPlaceholder = locked ? 'No prompt text.' : 'Click to write the prompt.';
 
   let outputFormat = { returnShape: 'table', fields: [] };
-  let inputTypes = {};
   if (sourceNode) {
     try {
       const raw = JSON.parse(sourceNode.dataset.promptOutputFormat || '[]');
       const fields = (Array.isArray(raw) ? raw : []).map((o) => ({ key: o.key || '', type: o.type || 'str', description: o.description ?? '', examples: o.examples || [], allowNone: o.allowNone === true }));
       outputFormat = { returnShape: sourceNode.dataset.promptOutputReturnShape || 'table', fields };
     } catch (_) {}
-    try { inputTypes = JSON.parse(sourceNode.dataset.promptInputTypes || '{}'); } catch (_) {}
   }
   const inputsViewHtml = inputsToViewHtml(text);
   const schemaViewHtml = schemaToViewHtml(outputFormat.fields, outputFormat.returnShape, { showAllowNone: false });
@@ -378,9 +376,6 @@ export function openPromptDetailModal({ name = '', text = '', node: sourceNode =
     currentText = next;
     if (!sourceNode) return;
     sourceNode.dataset.promptText = currentText;
-    const used = new Set(extractInputFields(currentText));
-    Object.keys(inputTypes).forEach((key) => { if (!used.has(key)) delete inputTypes[key]; });
-    sourceNode.dataset.promptInputTypes = JSON.stringify(inputTypes);
     inputsContentEl.innerHTML = inputsToViewHtml(currentText);
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
   }

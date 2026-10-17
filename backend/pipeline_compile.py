@@ -334,14 +334,6 @@ class _Compiler:
         if not text:
             self.report("EMPTY_PROMPT", pid, "text", "Prompt must have text.")
         placeholders = list(dict.fromkeys(PLACEHOLDER.findall(text)))
-        input_types = self.obj(prompt.get("inputTypes"), pid, "inputTypes")
-        types = {}
-        for name in placeholders:
-            typ = input_types.get(name, "text")
-            if not isinstance(typ, str) or typ not in CELL_TYPES:
-                self.report("INVALID_INPUT_TYPE", pid, f"inputTypes.{name}", "Prompt input type must be text, image or pdf.")
-                typ = "text"
-            types[name] = typ
         raw_format = prompt.get("outputFormat", {})
         if isinstance(raw_format, (str, list)):
             try:
@@ -389,7 +381,8 @@ class _Compiler:
             self.report("UNRESOLVED_RUN_DEFAULTS", rid, "runSettings", "Supply Generate defaults before starting an execution.", "warning")
         mapping = self.obj(run.get("runInputToColumn"), rid, "runInputToColumn")
         self.jobs[jid] = {"id": jid, "type": "llm", "inputs": {"data": aid}, "outputs": {}, "depends_on": [],
-                          "config": {"prompt": text, "input_types": types,
+                          # input_types is filled from the mapped columns in validate_llm_inputs.
+                          "config": {"prompt": text, "input_types": {name: "text" for name in placeholders},
                                      "input_mapping": {name: mapping.get(name) for name in placeholders},
                                      "output_schema": {"return_shape": shape, "fields": normalize_output_fields(normalized)},
                                      "mapping_policy": self.mapping_policy,
@@ -498,8 +491,10 @@ class _Compiler:
                     self.report("UNMAPPED_INPUT", rid, f"runInputToColumn.{name}", f'Open "{title}" and map each input; missing {{{name}}}.')
             elif not runtime and column not in columns:
                 self.report("MISSING_COLUMN", rid, f"runInputToColumn.{name}", f"Prompt maps inputs to missing columns: {column}.")
-            elif not runtime and columns[column] != config["input_types"][name]:
-                self.report("INPUT_TYPE_MISMATCH", rid, f"runInputToColumn.{name}", f"Input {{{name}}} expects {config['input_types'][name]}, column {column} is {columns[column]}.")
+            elif not runtime:
+                # A Prompt input has no type of its own: it takes its mapped column's, so an image or
+                # PDF column's paths are sent as files. A column known only at run time stays text.
+                config["input_types"][name] = columns[column]
         if runtime:
             self.report("RUNTIME_INPUT_SCHEMA", rid, "inputs", "Check input columns and types against the actual upstream artifact before making model calls.", "warning")
         # Same display columns as saved Generate results. A dynamic input propagates an

@@ -83,7 +83,3 @@ export function inputValues(headers, row, mapping) {
   return Object.fromEntries(Object.entries(mapping || {}).map(([name, column]) =>
     [name, cloneCell(row[headers.indexOf(column)])]));
 }
-
-export function readInputTypes(node) {
-  try { return JSON.parse(node?.dataset?.promptInputTypes || '{}'); } catch { return {}; }
-}

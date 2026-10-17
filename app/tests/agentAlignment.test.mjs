@@ -351,7 +351,7 @@ test('canvas Apply reconciles History and blocks a version change before creatin
 test('canvas Apply uses the bound evaluation Prompt schema and rechecks its version after loading the snapshot', async () => {
   for (const changeVersion of [false, true]) {
     let elements, created;
-    const snapshot = { name: 'Original', text: 'Read {text}', outputFormat: { returnShape: 'table', fields: [{ key: 'old-field', type: 'str' }] }, inputTypes: { text: 'pdf' } };
+    const snapshot = { name: 'Original', text: 'Read {text}', outputFormat: { returnShape: 'table', fields: [{ key: 'old-field', type: 'str' }] } };
     const harness = runtimeHarness(reviewResult(), {
       getEvaluationPayload: async () => {
         if (changeVersion) elements.get('s').dataset.historyRecordId = 'evaluation-2';
@@ -376,7 +376,6 @@ test('canvas Apply uses the bound evaluation Prompt schema and rechecks its vers
     } else {
       assert.equal((await applying).nodeId, 'new-prompt');
       assert.deepEqual(created.outputFormat, snapshot.outputFormat);
-      assert.deepEqual(created.inputTypes, snapshot.inputTypes);
       assert.equal(created.name, 'Original');
     }
   }
@@ -384,7 +383,7 @@ test('canvas Apply uses the bound evaluation Prompt schema and rechecks its vers
 
 test('Agent Apply loads the original schema for preview and apply and refuses a version change during that load', async () => withSettings(async () => {
   let state = canvas(), race = true;
-  const snapshot = { name: 'Original', text: 'Read {text}', outputFormat: { returnShape: 'table', fields: [{ key: 'original', type: 'str' }] }, inputTypes: { text: 'image' } };
+  const snapshot = { name: 'Original', text: 'Read {text}', outputFormat: { returnShape: 'table', fields: [{ key: 'original', type: 'str' }] } };
   find(state, 'p').outputFormat = { fields: [{ key: 'changed' }] };
   const proposal = { operations: [{ op: 'apply_review', review: 'rev', suggestion_ids: ['1'] }] };
   const workspace = { getCanvasState: () => state, extractInputFields,
@@ -403,7 +402,6 @@ test('Agent Apply loads the original schema for preview and apply and refuses a 
   assert.equal((await previewProposal(proposal, workspace)).ok, true);
   assert.equal((await applyProposal(proposal, workspace)).status, 'applied');
   assert.deepEqual(state.nodes.at(-1).outputFormat, snapshot.outputFormat);
-  assert.deepEqual(state.nodes.at(-1).inputTypes, snapshot.inputTypes);
 }));
 
 test('the canvas Resume entry reuses the existing Optimize node and shared payload checks', async () => {

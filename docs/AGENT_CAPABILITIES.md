@@ -7,7 +7,7 @@ Agent 的写入继续通过提案卡片确认，执行代码和模型任务通�
 
 | 功能 | Agent 入口与规则 |
 | --- | --- |
-| Prompt 文本、输出 schema | `add_prompt`、`add_prompt_version`、`update`；文本整段替换（`text`）或按片段替换（`text_edits`，每个 old 只出现一次）；保留 Allow None、数字和嵌套列表示例；字段名大小写不敏感地唯一 |
+| Prompt 文本、输出 schema | `add_prompt`、`add_prompt_version`、`update`；文本整段替换（`text`）或按片段替换（`text_edits`，每个 old 只出现一次）；保留 Allow None、数字和嵌套列表示例；字段名大小写不敏感地唯一。Prompt 输入没有类型（2026-10-17 起）：输入取所映射列的类型，图片/PDF 列发送文件，其他列发送文本；三个操作都拒绝 `input_types`，导出时由所映射的列推导 `INPUT_TYPES` |
 | 模型选择 | 与 Prompt 窗口 Create Generate 旁、Evaluate 窗口 Optimize prompt 旁的模型下拉框一致：可选的只有 Settings → Credentials 中 Test 通过的模型，工作区摘要末尾的 Models 列出它们的 id 并标出默认模型。`add_run` 的 `model` 写入新 Generate；`update` 的 `model` 只能改尚未运行过的 Generate（运行过的保持原模型，界面也不能改）；`review` job 的 `model` 用于新 Optimize，并像界面一样成为该 Evaluate 的 Optimize 模型；`resume_review` 保持原模型。不给 `model` 时使用 Settings 默认模型。Agent 在新建 Generate 或启动 Optimize 前用 `ask_user` 询问用户用哪个模型，用户已说明或只有一个可选模型时不问。 |
 | Dataset 行列与类型 | `add_dataset`、`update`；Text/Image/PDF 列；已有文件单元格保持结构，`row_ids` 保留删除/重排行的身份（重排与改列类型界面暂无对应，见文末） |
 | Dataset 副本与版本 | `duplicate_dataset`；版本通过 Dataset 版本边连接，保留行身份；副本独立；均不计为新的 Sample 输出 |
@@ -37,7 +37,7 @@ Agent 的指南会说明实际入口，
 桌面底部另有 Log 标签，用于后端日志与前端错误；Agent 不具备读取该日志的工具。
 
 尚未对齐、待决定（2026-10-17 核对）：以下是 Agent 能做而界面没有对应控件的，需决定给界面加入口还是从 Agent 去掉：
-Prompt 的 `input_types`（界面控件在 2026-09-15 移除，但它仍影响 Generate 映射可选的列）；Dataset 行列重排与直接改列类型；
+Dataset 行列重排与直接改列类型；
 把已上传图片/PDF 复制到任意 Dataset 的单元格（界面只能在同一 Dataset 内拖动图片）；自定义导出文件名。
 反方向的小缺口：界面能创建尚无 ground truth 的 Evaluate，`add_score` 要求 `ground_truth`；Optimize 窗口能单独 Accept/Revert
 建议而不生成新 Prompt，Agent 只有 `apply_review`；右键 Stop 一个在整次 pipeline 运行中排队的节点会停止整次运行，Agent 的 `stop`

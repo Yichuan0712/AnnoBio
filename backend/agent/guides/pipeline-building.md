@@ -31,8 +31,8 @@ Evaluate and Optimize sit beside it for evaluation and are not part of the expor
 
 - Steps connect directly through data connections: a step's input is a Dataset or another step's
   output (a Generate's results, or one branch of a Process). There is no Dataset in between.
-- A Generate reads exactly one input and maps every `{variable}` of its Prompt to a column of it. A column's
-  type must fit the variable's input type (text, image or pdf). A Generate's results, as the next step reads
+- A Generate reads exactly one input and maps every `{variable}` of its Prompt to a column of it. Any column
+  fits: an image or pdf column sends its files, any other column its text. A Generate's results, as the next step reads
   them, have the columns `Input: #`, `Input: <column>` for each input column, `Output: #` and
   `Output: <field>` for each output field.
 - A step's columns are known once it has a result, so map a Generate that reads another step after that
