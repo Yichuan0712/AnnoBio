@@ -56,6 +56,7 @@ import {
   attachInputMatchedUnpairedGtDescriptors,
   buildScoreTableGtColumns,
   buildCodeMatchRunToGt,
+  buildCodeMatchTableData,
 } from './scoreDetailModal.js';
 import { openSamplerDetailModal } from './samplerDetailModal.js';
 import { openDatasetDetailModal } from './datasetDetailModal.js';
@@ -3413,6 +3414,14 @@ export function buildWorkflowCanvas(root, options = {}) {
         runPlanned: (nodeId, options) => runPlanned(nodeId, { ...options, source: 'agent' }),
         getScoreComparisonRows,
         getEvaluationPayload,
+        // What Save to workspace in the Evaluate window saves: the table of its displayed History record.
+        getScoreSaveTable: async (nodeId) => {
+          const record = await loadEvaluationRecord(nodeId);
+          const results = record?.results || {};
+          const table = results.table || (results.scoreMatchResult ? buildCodeMatchTableData(results.scoreMatchResult) : null);
+          return table ? { headers: table.headers, rows: table.rows, recordId: record.id,
+            stale: record.id !== getNodeById(nodeId)?.dataset.historyRecordId } : null;
+        },
         getSelectedNodeIds: () => [...selectedNodeIds],
         getPipelineSelections: getAgentPipelineSelections,
         renamePipeline: (pipelineId, name) => {

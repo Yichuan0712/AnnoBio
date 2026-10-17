@@ -10,6 +10,7 @@ import { detectPipelines } from '../../pipelineDetection.js';
 import { buildSelectedRoute, getVisibleRoute } from '../../pipelineRouteSelection.js';
 import { processInputSources, runInputSource, stepSourceLabel } from '../../stepInputs.js';
 import { readSavedFrom } from '../../savedDatasets.js';
+import { testedModels } from '../../modelPicker.js';
 import { buildPromptFamilies } from '../../promptOptimization.js';
 import { formatScoreMetrics } from '../canvas/scoreComparisonPrf.js';
 import {
@@ -193,15 +194,28 @@ const SECTION_ORDER = [
   ['promptReview', 'Optimize nodes'],
 ];
 
+/** The models the pickers beside Create Generate and Optimize prompt offer: what add_run and review take as model. */
+function modelLines(options) {
+  if (!options.credentialsById) return [];
+  const models = testedModels([...options.credentialsById.values()]);
+  if (!models.length) return ['Models: none tested. The user adds and tests one in Settings → Credentials.'];
+  const defaults = (c) => [c.id === options.defaultRunCredential?.id && 'default Generate',
+    c.id === options.defaultReviewCredential?.id && 'default Optimize'].filter(Boolean);
+  return ['Models (tested in Settings → Credentials; pass the id in brackets as model):',
+    ...models.map((c) => `- ${[c.provider, c.model].filter(Boolean).join(' / ') || c.id} [${c.id}]${defaults(c).length ? ` (${defaults(c).join(', ')})` : ''}`)];
+}
+
 /**
  * @param {object} canvasState getCanvasState() output
  * @param {{extractInputFields: Function, inspectNode: (id: string) => Promise<object>,
- *   credentialsById: Map, defaultRunCredential: object|null, selectedNodeIds?: string[]}} options
+ *   credentialsById: Map, defaultRunCredential: object|null, defaultReviewCredential?: object|null,
+ *   selectedNodeIds?: string[]}} options
  *   inspectNode is the canvas's own (it adds live score metrics).
  */
 export async function buildWorkspaceSummary(canvasState, options = {}) {
   const nodes = Array.isArray(canvasState?.nodes) ? canvasState.nodes : [];
-  if (!nodes.length) return 'The canvas is empty.';
+  const models = modelLines(options);
+  if (!nodes.length) return ['The canvas is empty.', ...(models.length ? ['', ...models] : [])].join('\n');
   const lookup = buildNodeLookup(canvasState);
   const inspectOptions = {
     extractInputFields: options.extractInputFields,
@@ -238,5 +252,6 @@ export async function buildWorkspaceSummary(canvasState, options = {}) {
   lines.push(selected.length
     ? `Selected on the canvas: ${selected.map(ref).join(', ')}`
     : 'Nothing is selected on the canvas.');
+  if (models.length) lines.push('', ...models);
   return lines.join('\n');
 }

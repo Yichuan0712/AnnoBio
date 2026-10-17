@@ -1,7 +1,9 @@
 /**
- * A node's model and settings. Run and Review use the models chosen in Settings → Generate / Optimize; there
- * are no per-node settings controls. The default model (and review method) is written onto the node
- * the first time it is needed, so a Generate keeps the model it started with when it resumes.
+ * A node's model and settings. A Generate's model is the one picked beside Create Generate (Prompt window), an
+ * Optimize's the one picked beside Optimize prompt (Evaluate window); without a pick they use the models chosen in
+ * Settings → Generate / Optimize. There are no per-node number settings controls. The default model (and review
+ * method) is written onto the node the first time it is needed, so a Generate keeps the model it started with
+ * when it resumes.
  *
  * Node fields: model → runCredentialId / reviewCredentialId, review method → reviewMethod, number
  * overrides → runSettings / reviewSettings (JSON, keyed by the backend settings names; sent as the

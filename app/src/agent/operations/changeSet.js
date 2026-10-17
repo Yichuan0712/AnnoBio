@@ -16,7 +16,7 @@ import { referencedDatasetAliasNames } from '../../processDatasetBindings.js';
 import { rebuildWorkingFromApplied } from '../../reviewWorkingText.js';
 import { optimizationApplyBlockReason } from '../../evaluationHistory.js';
 import { effectiveProcessOutputs } from '../../processOutputPorts.js';
-import { savedProcessOutputs, savedRunOutput } from '../../savedDatasets.js';
+import { savedProcessOutputs, savedRunOutput, scoreSavedFrom } from '../../savedDatasets.js';
 import {
   DATA_EDGE, RESULT_PORT, processInputBindings, processPrimarySource, readsFromStep, runInputSource, setProcessInputs,
   setRunInputSource, stepSourceLabel,
@@ -103,8 +103,10 @@ function outputText(output) {
  * @param {object} state getCanvasState() output
  * @param {object[]} operations
  * @param {{extractInputFields: Function, sources?: object, imported?: Map<number, {headers: string[], rows: string[][]}>,
- *   now?: () => string}} ctx imported holds rows fetched for import
- *   operations (by operation index); without it an import becomes an empty placeholder table.
+ *   now?: () => string, models?: Map<string, object>, scoreTables?: Map<string, object>}} ctx imported holds rows fetched for import
+ *   operations (by operation index); without it an import becomes an empty placeholder table. models holds the
+ *   credentials the model pickers offer (Test passed), by id; scoreTables the table each Evaluate's Save to
+ *   workspace saves ({headers, rows, recordId, stale}), by Evaluate id.
  * @returns {{state: object, items: object[], refs: Record<string, string>, warnings: string[], nodeIds: string[]}}
  */
 export function planChangeSet(state, operations, ctx) {
@@ -214,6 +216,16 @@ export function planChangeSet(state, operations, ctx) {
       next.connections.push({ fromId, toId, type });
     }
   }
+
+  /** A model the user could pick beside Create Generate or Optimize prompt: a credential whose Test passed. */
+  function pickModel(value) {
+    const model = ctx.models?.get(clean(value));
+    if (model) return model;
+    fail(ctx.models?.size
+      ? `model must be the id of a tested model from the workspace summary: ${[...ctx.models.keys()].join(', ')}.`
+      : 'There are no tested models; the user has to add and test one in Settings → Credentials.');
+  }
+  const modelLabel = (credential) => [credential.provider, credential.model].filter(Boolean).join(' / ') || credential.id;
 
   const promptInputNames = (prompt) => promptInputs(prompt, ctx.extractInputFields).map((input) => input.name);
   /** How a source an input reads is named on a card: a Prompt by its title, a step or Dataset as its readers name it. */
@@ -787,11 +799,15 @@ export function planChangeSet(state, operations, ctx) {
     add_run(op) {
       if ('input_dataset' in op) fail('add_run reads input (a dataset, run or process) plus input_branch for a process branch; input_dataset is not used.');
       const prompt = op.prompt ? resolve(op.prompt, 'prompt', ['prompt']) : null;
-      // Like the user, the Agent has no per-Generate model or settings: Runs use the Generate model chosen in Settings → Generate.
-      if (op.credential_id != null || op.settings != null) fail('A Generate uses the default Generate model and settings from Settings; credential_id and settings cannot be set per Generate.');
+      // As Create Generate in the Prompt window: the model picked beside it, else the Settings → Generate default
+      // when it first runs. Number settings belong to the model (Settings), not to the Generate.
+      if (op.credential_id != null) fail('Pass the model as model (a tested model id from the workspace summary), not credential_id.');
+      if (op.settings != null) fail('A Generate uses its model\'s settings from Settings; settings cannot be set per Generate.');
+      const model = op.model != null ? pickModel(op.model) : null;
       const runsOfPrompt = new Set(next.connections.filter((c) => c.type === 'prompt-to-run' && c.fromId === prompt?.nodeId).map((c) => c.toId));
       const name = uniqueName(generateDisplayName(op.name), takenNames('run', (n) => runsOfPrompt.has(n.nodeId)));
-      const node = addNode({ type: 'run', nodeId: generateNodeId(), ...placeNear(prompt), runName: name, nodeOrigin: 'agent' });
+      const node = addNode({ type: 'run', nodeId: generateNodeId(), ...placeNear(prompt), runName: name, nodeOrigin: 'agent',
+        ...(model ? { runCredentialId: model.id } : {}) });
       const source = op.input ? resolveSource(op.input, op.input_branch, 'input', node.nodeId) : null;
       if ((!prompt || !source) && Object.keys(op.input_mapping || {}).length) fail('Connect a Prompt and Data input before setting input_mapping.');
       const mapping = prompt && source ? validateMapping(prompt, source, op.input_mapping) : {};
@@ -804,7 +820,7 @@ export function planChangeSet(state, operations, ctx) {
         lines: [
           prompt ? `Prompt "${nodeTitle(prompt)}"${source ? ` on "${stepSourceLabel(next, source)}"` : '; Data input not connected'}` : 'Prompt input not connected',
           ...(source ? [mappingLine(mapping, source)] : []),
-          'Model and settings: Settings → Generate',
+          model ? `Model: ${modelLabel(model)}` : 'Model: the default Generate model (Settings → Generate)',
           'Not started: it runs when you start it.',
         ],
       };
@@ -905,7 +921,7 @@ export function planChangeSet(state, operations, ctx) {
         prompt: ['name', 'note', 'text', 'text_edits', 'input_types', 'output'],
         dataset: ['name', 'note', 'columns', 'rows', 'row_ids'],
         process: ['name', 'code', 'primary_input', 'primary_branch'],
-        run: ['name', 'prompt', 'input', 'input_branch', 'input_mapping'],
+        run: ['name', 'prompt', 'input', 'input_branch', 'input_mapping', 'model'],
         score: ['name', 'ground_truth', 'pairing', 'comparison', 'combine', 'rule_tree', 'match_code', 'exclude_row_keys', 'include_row_keys'],
         sampler: ['name', 'sampling', 'size', 'size_unit', 'rows'],
         promptReview: ['name'],
@@ -986,6 +1002,16 @@ export function planChangeSet(state, operations, ctx) {
 
       if (node.type === 'run') {
         if (node.runPending) fail(`Generate "${before}" is running; stop it before changing it.`);
+        if ('model' in set) {
+          // A Generate keeps the model it started with; before its first run it is still the one Create Generate sets.
+          if (runResultsExist(node) || node.runCompleted === true || node.runCompleted === '1' || node.runResumable
+            || clean(node.historyRecordId) || clean(node.historyStaleRecordId)) {
+            fail(`Generate "${before}" has already run, so its model is fixed. Add a new Generate (add_run) with that model instead.`);
+          }
+          const model = pickModel(set.model);
+          node.runCredentialId = model.id;
+          lines.push(`Model: ${modelLabel(model)}`);
+        }
         if ('prompt' in set || 'input' in set || 'input_branch' in set || 'input_mapping' in set) {
           // As on the canvas: without History, a Generate's Prompt, input and mapping lock once it has results.
           if (next.historyVersion !== 1 && (runResultsExist(node) || node.runCompleted === true || node.runCompleted === '1')) {
@@ -1153,6 +1179,31 @@ export function planChangeSet(state, operations, ctx) {
         kind: 'add', type: 'dataset', title: `Save branch "${branch}" of process "${title}" as "${name}"`, nodeIds: [node.nodeId],
         lines: [`${content.rows.length} rows; columns: ${content.headers.join(', ')}`],
       };
+    },
+
+    save_score_results(op) {
+      const score = resolve(op.score, 'score', ['score']);
+      if (score.scoreMatchPending) fail(`Evaluate "${nodeTitle(score)}" is matching; save its results once it finishes.`);
+      // The same Dataset as Save to workspace in the Evaluate window: the table of its displayed History record.
+      const saved = ctx.scoreTables?.get(score.nodeId);
+      if (!saved?.headers?.length) fail(`Evaluate "${nodeTitle(score)}" has no saved result. Run it first (run_nodes score).`);
+      const title = nodeTitle(score);
+      const name = uniqueName(clean(op.name) || `${title} comparison`, takenNames('dataset'));
+      const content = normalizeDatasetContent({ headers: saved.headers, rows: saved.rows });
+      const node = addNode({
+        type: 'dataset',
+        nodeId: generateNodeId(),
+        ...placeNear(score),
+        name,
+        note: String(op.note ?? `Exported from Evaluate "${title}". Model outputs vs ground truth comparison.`),
+        savedFrom: scoreSavedFrom(score.nodeId, saved.recordId),
+        datasetContent: content,
+        nodeOrigin: 'agent',
+      });
+      registerRef(op, node.nodeId);
+      const lines = [`${content.rows.length} rows; columns: ${content.headers.join(', ')}`];
+      if (saved.stale) lines.push('This is its last saved result; its rules or inputs have changed since (Needs update).');
+      return { kind: 'add', type: 'dataset', title: `Save the comparison of Evaluate "${title}" as "${name}"`, nodeIds: [node.nodeId], lines };
     },
 
     apply_review(op) {
