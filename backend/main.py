@@ -1319,13 +1319,13 @@ def agent_context(credential_id: str = ""):
 
 @app.get("/api/agent/sources")
 def agent_sources():
-    """External sources the Agent can import from: id kind, importable fields, keyword search support."""
+    """External sources the Agent can search: id kind, importable fields, keyword search and import support."""
     return describe_agent_sources()
 
 
 @app.post("/api/agent/search")
 def agent_search(body: AgentSourceSearchRequest):
-    """Keyword search of PubMed / ClinicalTrials.gov / ChEMBL; returns matching ids and a few samples."""
+    """Keyword search of an import source or a lookup source (Europe PMC, OpenAlex, UniProt, Wikipedia)."""
     settings = _load_settings()
     try:
         return search_agent_source(
@@ -2662,6 +2662,124 @@ def cancel_chembl_import(job_id: str):
         _chembl_cancelled.add(job_id)
         _touch_chembl_activity(job_id)
     return {"ok": True, "status": "cancelling"}
+
+
+# ---------- Europe PMC / OpenAlex / UniProt / Wikipedia import (reference_import.py) ----------
+# One job runner for the four, at /api/<source>/import like the sources above, so the dataset tabs and the
+# Agent's import_dataset poll them the same way. Jobs are kept in memory only: an import is short, and a
+# job left "running" by a restart could never finish.
+
+class ReferenceImportRequest(BaseModel):
+    ids: list[str] = Field(..., min_length=1, description="Ids to fetch, in the source's id format")
+    fields: list[str] = Field(..., min_length=1, description="Field keys from reference_import.REFERENCE_IMPORTERS[source]['fields']")
+
+
+class _ReferenceStopSignal(Exception):
+    pass
+
+
+_reference_jobs: dict[str, dict] = {}
+_reference_jobs_lock = threading.Lock()
+_reference_cancelled: set[str] = set()
+_reference_last_activity: dict[str, float] = {}
+
+
+def _do_reference_import_work(job_id: str, source: str, req: ReferenceImportRequest) -> None:
+    from reference_import import REFERENCE_IMPORTERS, fetch_records
+
+    try:
+        field_labels = REFERENCE_IMPORTERS[source]["fields"]
+        fields = [f for f in req.fields if f in field_labels]
+        if not fields:
+            with _reference_jobs_lock:
+                _reference_jobs[job_id] = {"status": "done", "error": "No valid fields selected"}
+            return
+        with _reference_jobs_lock:
+            _reference_jobs[job_id].update(headers=[field_labels[f] for f in fields], rows=[], not_found=[])
+
+        def on_batch(rows: list[dict], not_found: list[str], completed: int, total: int) -> None:
+            is_abandoned = (time.time() - _reference_last_activity.get(job_id, time.time())) > RUN_ABANDON_TIMEOUT_SEC
+            with _reference_jobs_lock:
+                job = _reference_jobs[job_id]
+                job["rows"].extend([row.get(f, "") for f in fields] for row in rows)
+                job["not_found"].extend(not_found)
+                job["completed"], job["total"] = completed, total
+            if job_id in _reference_cancelled or is_abandoned:
+                raise _ReferenceStopSignal()
+
+        try:
+            fetch_records(source, req.ids, fields, on_batch=on_batch)
+        except _ReferenceStopSignal:
+            with _reference_jobs_lock:
+                _reference_jobs[job_id]["status"] = "cancelled" if job_id in _reference_cancelled else "done"
+            return
+        with _reference_jobs_lock:
+            _reference_jobs[job_id]["status"] = "done"
+    except Exception as e:
+        with _reference_jobs_lock:
+            _reference_jobs[job_id] = {"status": "done", "error": str(e)}
+
+
+def _reference_job(job_id: str) -> dict:
+    job = _reference_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Import job not found")
+    return job
+
+
+def _register_reference_import_routes(source: str, label: str) -> None:
+    from fastapi.responses import JSONResponse
+
+    def start(body: ReferenceImportRequest):
+        job_id = str(uuid.uuid4())
+        with _reference_jobs_lock:
+            _reference_jobs[job_id] = {"status": "running", "completed": 0, "total": 0, "headers": [], "rows": []}
+            _reference_last_activity[job_id] = time.time()
+        threading.Thread(target=_do_reference_import_work, args=(job_id, source, body), daemon=True).start()
+        return JSONResponse(status_code=202, content={"job_id": job_id})
+
+    def result(job_id: str):
+        with _reference_jobs_lock:
+            job = _reference_job(job_id)
+            if job.get("status") == "running":
+                _reference_last_activity[job_id] = time.time()
+            snapshot = {**job, "rows": list(job.get("rows") or []), "not_found": list(job.get("not_found") or [])}
+        if snapshot.get("status") == "running":
+            return JSONResponse(status_code=202, content={key: snapshot.get(key) for key in ("status", "completed", "total", "headers", "rows")})
+        if snapshot.get("error"):
+            return {"status": "done", "error": snapshot["error"], "headers": [], "rows": []}
+        return {key: snapshot.get(key) for key in ("status", "completed", "total", "headers", "rows", "not_found")}
+
+    def cancel(job_id: str):
+        with _reference_jobs_lock:
+            job = _reference_job(job_id)
+            if job.get("status") != "running":
+                return {"ok": True, "status": job.get("status")}
+            _reference_cancelled.add(job_id)
+            _reference_last_activity[job_id] = time.time()
+        return {"ok": True, "status": "cancelling"}
+
+    app.add_api_route(f"/api/{source}/import", start, methods=["POST"], summary=f"Start a {label} import by id")
+    app.add_api_route(f"/api/{source}/import/result/{{job_id}}", result, methods=["GET"], summary=f"Poll a {label} import")
+    app.add_api_route(f"/api/{source}/import/cancel/{{job_id}}", cancel, methods=["POST"], summary=f"Cancel a {label} import")
+
+
+def _register_reference_imports() -> None:
+    from reference_import import REFERENCE_IMPORTERS
+
+    for key, importer in REFERENCE_IMPORTERS.items():
+        _register_reference_import_routes(key, importer["label"])
+
+
+_register_reference_imports()
+
+
+@app.get("/api/reference/import/sources")
+def reference_import_sources():
+    """Fields (key → label) and default fields of the Europe PMC, OpenAlex, UniProt and Wikipedia imports."""
+    from reference_import import describe_importers
+
+    return describe_importers()
 
 
 # ---------- Process node (runs a user Python function per dataset row, delegates to process_exec.py) ----------
