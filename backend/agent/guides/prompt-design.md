@@ -59,6 +59,9 @@ connection, so earlier Generate nodes and Evaluate nodes stay comparable. Optimi
 ## Generate nodes
 
 A Generate needs: the Prompt, one input (a Dataset or another step's output), and a mapping from every
-input variable to a column. It uses the Generate model chosen in Settings → Generate. Generate nodes
+input variable to a column. Its model is picked beside **Create Generate** in the Prompt window, from
+the models whose Test passed in Settings → Credentials; without a pick it takes the default Generate
+model from Settings → Generate when it first runs. A Generate keeps the model it started with, so to
+compare models add one Generate per model. Generate nodes
 process rows concurrently and can be stopped and resumed. The next step reads a Generate's results
 directly; save them to the workspace only to freeze or hand-edit them as a Dataset.

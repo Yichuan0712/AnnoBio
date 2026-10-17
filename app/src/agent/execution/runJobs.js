@@ -6,6 +6,7 @@
  */
 import { nodeTypeLabel } from '../../nodeLabels.js';
 import { BACKEND_API_BASE } from '../../backendConfig.js';
+import { testedModels } from '../../modelPicker.js';
 import { displayCell } from '../../datasetContent.js';
 import { processPrimarySource, runInputSource, stepInputWaitingMessage, stepSourceLabel } from '../../stepInputs.js';
 import { stepOutputTable } from '../../stepOutputs.js';
@@ -192,8 +193,14 @@ async function previewReview(job, ctx) {
   const score = existing ? upstream(ctx.state, existing.nodeId, 'score-to-prompt-review') : findNode(ctx.state, job.score, 'score', 'score');
   if (!score) fail('Optimize is not connected to an Evaluate node.');
   if (ctx.state.historyVersion === 1 && (existing ? !existing.evaluateRecordId : !score.historyRecordId || score.historyStaleRecordId)) fail('Run Evaluate before creating Optimize. Each Optimize needs a completed evaluation snapshot.');
-  // A resumed Optimize keeps the model it started with (resumeReviewNode).
-  const credentialId = String(existing?.reviewCredentialId || score.reviewCredentialId || ctx.settings.default_review_credential_id || '').trim();
+  // A resumed Optimize keeps the model it started with (resumeReviewNode). A new one takes `model` as the picker
+  // beside Optimize prompt does (it becomes the Evaluate's Optimize model too), else the Evaluate's or Settings' one.
+  const picked = String(job.model ?? '').trim();
+  if (picked && existing) fail('A resumed Optimize keeps the model it started with; model applies only to a new review job.');
+  if (picked && !testedModels([...ctx.credentialsById.values()]).some((c) => c.id === picked)) {
+    fail(`model "${picked}" is not a tested model; use an id from the workspace summary's Models list.`);
+  }
+  const credentialId = String(picked || existing?.reviewCredentialId || score.reviewCredentialId || ctx.settings.default_review_credential_id || '').trim();
   const credential = ctx.credentialsById.get(credentialId);
   if (!credential) fail('No usable Optimize model: set a default Optimize model in Settings.');
   const rows = existing ? JSON.parse(existing.reviewResult || '{}').comparison_rows || [] : await ctx.getScoreComparisonRows(score.nodeId);
@@ -209,7 +216,8 @@ async function previewReview(job, ctx) {
       ? `Analyses ${analysed} failing input${analysed === 1 ? '' : 's'}${failingInputs > cap ? ` (of ${failingInputs}, capped in Settings)` : ''}: about one model call each plus a few to group issues and draft edits; the exact number depends on the method.`
       : 'Every row currently matches, so the review has little to work with.',
   ];
-  return { kind: existing ? 'resume_review' : 'review', title: `${existing ? 'Resume Optimize' : 'Optimize prompt'} using "${nodeTitle(score)}"`, nodeIds: [existing?.nodeId || score.nodeId], lines, usd: null, calls: analysed, priced: false };
+  return { kind: existing ? 'resume_review' : 'review', title: `${existing ? 'Resume Optimize' : 'Optimize prompt'} using "${nodeTitle(score)}"`, nodeIds: [existing?.nodeId || score.nodeId], lines, usd: null, calls: analysed, priced: false,
+    ...(picked ? { credentialId: picked } : {}) };
 }
 
 function previewSuggestionOptimization(job, ctx) {
@@ -396,7 +404,7 @@ async function executeProcess(item, env, options) {
 async function executeReview(item, env, { signal, onStatus, job }) {
   onStatus('Starting prompt optimization...');
   const created = item.kind === 'resume_review' ? await env.resumeReviewNode(item.nodeIds[0])
-    : await env.createAndRunReviewNode({ scoreNodeId: item.nodeIds[0], name: job.name || '' });
+    : await env.createAndRunReviewNode({ scoreNodeId: item.nodeIds[0], name: job.name || '', reviewCredentialId: item.credentialId || '' });
   const reviewId = created.reviewNodeId;
   const outcome = await waitWhile(() => currentNode(env, reviewId)?.reviewPending === true, {
     signal,

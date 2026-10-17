@@ -4,6 +4,7 @@
  * re-validates everything; imports are fetched only at apply time.
  */
 import { BACKEND_API_BASE } from '../../backendConfig.js';
+import { testedModels } from '../../modelPicker.js';
 import { planChangeSet } from './changeSet.js';
 
 /** Keep the full canvas API: History operations need more than table-editing methods. */
@@ -32,6 +33,21 @@ async function evaluationPromptsFor(operations, workspace) {
   }
   return prompts;
 }
+
+/** What Save to workspace saves for each Evaluate an operation saves, by Evaluate id. */
+async function scoreTablesFor(operations, workspace) {
+  const tables = new Map();
+  for (const op of operations || []) {
+    const id = String(op?.score || '').trim();
+    if (op?.op !== 'save_score_results' || !id || tables.has(id) || !workspace.getScoreSaveTable) continue;
+    const table = await workspace.getScoreSaveTable(id);
+    if (table) tables.set(id, table);
+  }
+  return tables;
+}
+
+/** The models the Create Generate and Optimize prompt pickers offer, by credential id. */
+const pickableModels = (workspace) => new Map(testedModels([...(workspace.credentialsById?.values() || [])]).map((c) => [c.id, c]));
 
 /** Importable sources and their fields, from GET /api/agent/sources (cached per session). */
 export function loadSources() {
@@ -100,11 +116,14 @@ export async function previewProposal(proposal, workspace) {
     const sources = await loadSources();
     const contentLocks = await workspace.getContentLocks?.();
     const evaluationPrompts = await evaluationPromptsFor(proposal?.operations, workspace);
+    const scoreTables = await scoreTablesFor(proposal?.operations, workspace);
     const plan = planChangeSet(workspace.getCanvasState(), proposal?.operations, {
       extractInputFields: workspace.extractInputFields,
       sources,
       contentLocks,
       evaluationPrompts,
+      models: pickableModels(workspace),
+      scoreTables,
     });
     return {
       ok: true,
@@ -142,12 +161,15 @@ export async function applyProposal(proposal, workspace, { signal, onStatus } = 
   }
   const contentLocks = await workspace.getContentLocks?.();
   const evaluationPrompts = await evaluationPromptsFor(operations, workspace);
+  const scoreTables = await scoreTablesFor(operations, workspace);
   const plan = planChangeSet(workspace.getCanvasState(), operations, {
     extractInputFields: workspace.extractInputFields,
     sources,
     imported,
     contentLocks,
     evaluationPrompts,
+    models: pickableModels(workspace),
+    scoreTables,
   });
   workspace.applyCanvasState(plan.state, { highlightNodeIds: plan.nodeIds });
   const byId = new Map(plan.state.nodes.map((n) => [n.nodeId, n]));

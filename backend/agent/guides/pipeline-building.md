@@ -52,7 +52,8 @@ Evaluate and Optimize sit beside it for evaluation and are not part of the expor
   connect and disconnect to change an existing step's inputs.
 - **Save to workspace** in the Generate window (**Save results to workspace** in its context menu) and
   **Create dataset** / **Create branch datasets** in Process save the current output as an ordinary
-  Dataset, only to freeze or hand-edit it. The Dataset records where it came from but does not follow
+  Dataset, only to freeze or hand-edit it. **Save to workspace** in the Evaluate window or its context
+  menu saves the comparison table of its saved result the same way (save_score_results). The Dataset records where it came from but does not follow
   that step; a step reading it starts a new pipeline from it.
 - New prompt versions are linked by `prompt-to-prompt` connections; each version gets its own Generate node.
 

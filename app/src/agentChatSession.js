@@ -403,7 +403,8 @@ async function loadCredentialContext() {
   ]);
   const credentialsById = new Map((Array.isArray(credentials) ? credentials : []).map((c) => [c.id, c]));
   const defaultRunCredential = credentialsById.get(String(settings?.default_run_credential_id || '').trim()) || null;
-  return { credentialsById, defaultRunCredential };
+  const defaultReviewCredential = credentialsById.get(String(settings?.default_review_credential_id || '').trim()) || null;
+  return { credentialsById, defaultRunCredential, defaultReviewCredential };
 }
 
 async function requestTitle(credentialId, messages) {
@@ -665,7 +666,7 @@ export function mountAgentChatSession({
   // ---------- the agent turn ----------
 
   async function buildToolRuntime() {
-    const { credentialsById, defaultRunCredential } = await loadCredentialContext();
+    const { credentialsById, defaultRunCredential, defaultReviewCredential } = await loadCredentialContext();
     const inspectOptions = { credentialsById, defaultRunCredential };
     const inspectNode = (nodeId, readOptions = {}) => workspace.inspectNode(nodeId, { ...inspectOptions, ...readOptions });
     const buildSummary = () => buildWorkspaceSummary(workspace.getCanvasState(), {
@@ -673,6 +674,7 @@ export function mountAgentChatSession({
       inspectNode,
       credentialsById,
       defaultRunCredential,
+      defaultReviewCredential,
       selectedNodeIds: workspace.getSelectedNodeIds?.() || [],
       pipelineSelections: workspace.getPipelineSelections?.() || [],
     });

@@ -1708,41 +1708,6 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
   }
 
-  /** Raw {headers, rows} for a code-match run -- shared by the results table and the "Save to workspace" export. */
-  function buildCodeMatchTableData(result) {
-    const { runRowIndices, outcomes, runRows, gtRows } = result;
-    const inputCols = [];
-    const outputCols = [];
-    runRows.forEach((r) => {
-      Object.keys(r.input_row || {}).forEach((k) => { if (!inputCols.includes(k)) inputCols.push(k); });
-      Object.keys(r.output_row || {}).forEach((k) => { if (!outputCols.includes(k)) outputCols.push(k); });
-    });
-    const gtCols = [];
-    gtRows.forEach((r) => Object.keys(r.gt_row || {}).forEach((k) => { if (!gtCols.includes(k)) gtCols.push(k); }));
-
-    const headers = [
-      'model output row',
-      ...inputCols.map((c) => `Input: ${c}`),
-      ...outputCols.map((c) => `Output: ${c}`),
-      'Matched GT row',
-      ...gtCols.map((c) => `GT: ${c}`),
-      'Status',
-    ];
-    const rows = outcomes.map((outcome, i) => {
-      const runRowLabel = String((runRowIndices[i] ?? i) + 1);
-      const runRow = runRows[i] || { input_row: {}, output_row: {} };
-      const inputVals = inputCols.map((c) => runRow.input_row?.[c] ?? '');
-      const outputVals = outputCols.map((c) => runRow.output_row?.[c] ?? '');
-      if (!outcome.ok) {
-        return [runRowLabel, ...inputVals, ...outputVals, '', ...gtCols.map(() => ''), `Error: ${outcome.error || 'Unknown error'}`];
-      }
-      const matched = typeof outcome.matched_gt_index === 'number';
-      const gtRowDict = matched ? (gtRows[outcome.matched_gt_index]?.gt_row || {}) : null;
-      const gtVals = gtCols.map((c) => (matched ? (gtRowDict?.[c] ?? '') : ''));
-      return [runRowLabel, ...inputVals, ...outputVals, matched ? String(outcome.matched_gt_index + 1) : '', ...gtVals, matched ? 'Matched' : 'No match'];
-    });
-    return { headers, rows, inputColsCount: inputCols.length, outputColsCount: outputCols.length };
-  }
 
 
   async function pollCodeMatchJob(jobId, total, runRowIndices, runRows, gtRows) {
@@ -3654,6 +3619,42 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
       addPromptReviewBtn.click();
     }, 200);
   }
+}
+
+/** Raw {headers, rows} for a code-match run -- shared by the results table and the "Save to workspace" export. */
+export function buildCodeMatchTableData(result) {
+  const { runRowIndices, outcomes, runRows, gtRows } = result;
+  const inputCols = [];
+  const outputCols = [];
+  runRows.forEach((r) => {
+    Object.keys(r.input_row || {}).forEach((k) => { if (!inputCols.includes(k)) inputCols.push(k); });
+    Object.keys(r.output_row || {}).forEach((k) => { if (!outputCols.includes(k)) outputCols.push(k); });
+  });
+  const gtCols = [];
+  gtRows.forEach((r) => Object.keys(r.gt_row || {}).forEach((k) => { if (!gtCols.includes(k)) gtCols.push(k); }));
+
+  const headers = [
+    'model output row',
+    ...inputCols.map((c) => `Input: ${c}`),
+    ...outputCols.map((c) => `Output: ${c}`),
+    'Matched GT row',
+    ...gtCols.map((c) => `GT: ${c}`),
+    'Status',
+  ];
+  const rows = outcomes.map((outcome, i) => {
+    const runRowLabel = String((runRowIndices[i] ?? i) + 1);
+    const runRow = runRows[i] || { input_row: {}, output_row: {} };
+    const inputVals = inputCols.map((c) => runRow.input_row?.[c] ?? '');
+    const outputVals = outputCols.map((c) => runRow.output_row?.[c] ?? '');
+    if (!outcome.ok) {
+      return [runRowLabel, ...inputVals, ...outputVals, '', ...gtCols.map(() => ''), `Error: ${outcome.error || 'Unknown error'}`];
+    }
+    const matched = typeof outcome.matched_gt_index === 'number';
+    const gtRowDict = matched ? (gtRows[outcome.matched_gt_index]?.gt_row || {}) : null;
+    const gtVals = gtCols.map((c) => (matched ? (gtRowDict?.[c] ?? '') : ''));
+    return [runRowLabel, ...inputVals, ...outputVals, matched ? String(outcome.matched_gt_index + 1) : '', ...gtVals, matched ? 'Matched' : 'No match'];
+  });
+  return { headers, rows, inputColsCount: inputCols.length, outputColsCount: outputCols.length };
 }
 
 /**

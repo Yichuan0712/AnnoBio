@@ -36,12 +36,12 @@ test('new Generate defaults avoid legacy default names without migrating stored 
 
 // Users have no per-Generate model or settings and no per-Score review method (Settings holds them),
 // so neither does the Agent.
-test('a new Run uses the model chosen in Settings → Generate', () => {
+test('a new Generate without a model uses the model chosen in Settings → Generate', () => {
   const result = plan([addRun()]);
   const run = result.state.nodes.find((node) => node.nodeId === result.refs.$run);
   assert.equal(run.runCredentialId, undefined);
   assert.equal(run.runSettings, undefined);
-  assert.ok(result.items[0].lines.includes('Model and settings: Settings → Generate'));
+  assert.ok(result.items[0].lines.includes('Model: the default Generate model (Settings → Generate)'));
 });
 
 test('a Generate and a Process the Agent adds read their inputs through data connections', () => {
@@ -56,7 +56,7 @@ test('a Generate and a Process the Agent adds read their inputs through data con
   }
 });
 
-test('the Agent cannot choose a Generate model or settings', () => {
+test('the Agent sets a Generate model only through model, never credential_id or settings', () => {
   assert.throws(() => plan([addRun({ credential_id: 'cred-a' })]), ChangeSetError);
   assert.throws(() => plan([addRun({ settings: { run_concurrency: 2 } })]), ChangeSetError);
   assert.throws(() => plan([{ op: 'update', node: 'r', set: { credential_id: 'cred-a' } }]), /cannot set credential_id/);
