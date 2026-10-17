@@ -1,4 +1,5 @@
 import { mountModalDialog as mountPromptDialog } from './modalDialog.js';
+import { iconPlus, iconTrash, iconX } from './icons.js';
 
 function escapeHtml(str) {
   return String(str ?? '').replace(/[&<>"']/g, (char) => ({
@@ -122,23 +123,35 @@ function renderFieldEditorScalarRow(typeVal, value, rowIdx) {
   const inp = isFloat
     ? `<input type="number" step="any" class="dataset-meta-input field-editor-scalar-inp" data-row-index="${rowIdx}"${valAttr} aria-label="Example" />`
     : `<textarea class="dataset-meta-input dataset-meta-textarea field-editor-scalar-inp" rows="1" data-row-index="${rowIdx}" aria-label="Example">${escapeHtml(String(v))}</textarea>`;
-  return `<div class="field-editor-scalar-row" data-row-index="${rowIdx}"><div class="field-editor-scalar-input-wrap">${inp}</div><button type="button" class="btn btn-secondary field-editor-scalar-del" aria-label="Delete example">Delete</button></div>`;
+  return `<div class="field-editor-scalar-row field-editor-input-box" data-row-index="${rowIdx}"><div class="field-editor-scalar-input-wrap">${inp}</div>${renderFieldEditorIconButton('field-editor-scalar-del', 'Delete example', iconX(14))}</div>`;
+}
+
+function renderFieldEditorIconButton(className, label, icon) {
+  return `<button type="button" class="field-editor-icon-btn ${className}" aria-label="${label}" title="${label}">${icon.outerHTML}</button>`;
+}
+
+function renderFieldEditorAddButton(className, label, block = false) {
+  return `<button type="button" class="field-editor-add-btn${block ? ' field-editor-add-btn--block' : ''} ${className}">${iconPlus(14).outerHTML}<span>${label}</span></button>`;
+}
+
+function renderFieldEditorElementRow(isListStr, val, elIdx) {
+  const hasValue = val != null && String(val) !== '';
+  const v = escapeHtml(hasValue ? String(val) : '');
+  const inp = isListStr
+    ? `<textarea class="dataset-meta-input dataset-meta-textarea field-editor-element-inp" rows="1" data-el-index="${elIdx}">${v}</textarea>`
+    : `<input type="number" step="any" class="dataset-meta-input field-editor-element-inp" value="${v}" data-el-index="${elIdx}" />`;
+  return `<div class="field-editor-element-row field-editor-input-box"><div class="field-editor-element-input-wrap">${inp}</div>${renderFieldEditorIconButton('field-editor-del-element', 'Delete element', iconX(14))}</div>`;
 }
 
 function renderFieldEditorListRow(typeVal, elements, exIdx) {
-  const elList = Array.isArray(elements) ? elements : [];
+  const elList = Array.isArray(elements) && elements.length > 0 ? elements : [''];
   const isListStr = typeVal === 'list_str';
-  const makeElementRow = (val, elIdx) => {
-    const hasValue = val != null && String(val) !== '';
-    const v = escapeHtml(hasValue ? String(val) : '');
-    const inp = isListStr
-      ? `<textarea class="dataset-meta-input dataset-meta-textarea field-editor-element-inp" rows="1" data-el-index="${elIdx}">${v}</textarea>`
-      : `<input type="number" step="any" class="dataset-meta-input field-editor-element-inp" value="${v}" data-el-index="${elIdx}" />`;
-    return `<div class="field-editor-element-row"><div class="field-editor-element-input-wrap">${inp}</div><button type="button" class="btn btn-secondary field-editor-del-element" aria-label="Delete element">Delete</button></div>`;
-  };
-  const rows = elList.length > 0 ? elList.map((el, i) => makeElementRow(el, i)) : [makeElementRow('', 0)];
-  const rowsHtml = rows.join('');
-  return `<div class="field-editor-list-example-block" data-ex-index="${exIdx}"><div class="field-editor-element-rows">${rowsHtml}</div><div class="field-editor-list-example-actions"><button type="button" class="btn btn-secondary field-editor-add-element" data-ex-index="${exIdx}">+ Add element</button><button type="button" class="btn btn-secondary field-editor-del-example" aria-label="Delete list example" data-ex-index="${exIdx}">Delete list</button></div></div>`;
+  const rowsHtml = elList.map((el, i) => renderFieldEditorElementRow(isListStr, el, i)).join('');
+  return `<div class="field-editor-list-example-block" data-ex-index="${exIdx}">`
+    + `<div class="field-editor-list-example-head"><span class="field-editor-list-example-title">Example ${exIdx + 1}</span>${renderFieldEditorIconButton('field-editor-del-example', 'Delete list example', iconTrash(15))}</div>`
+    + `<div class="field-editor-element-rows">${rowsHtml}</div>`
+    + renderFieldEditorAddButton('field-editor-add-element', 'Add element')
+    + '</div>';
 }
 
 /** Fit example text, including wrapped lines, padding and both borders. */
@@ -217,11 +230,11 @@ export function openPromptFieldEditor({ fields, fieldIndex = null, outputTypes =
             <label class="dataset-meta-label">Examples</label>
             <div id="field-editor-examples-scalar" class="field-editor-examples-scalar" style="${isListType ? 'display:none' : ''}">
               <div class="field-editor-scalar-rows"></div>
-              <button type="button" class="btn btn-secondary field-editor-add-scalar-row">+ Add example</button>
+              ${renderFieldEditorAddButton('field-editor-add-scalar-row', 'Add example', true)}
             </div>
             <div id="field-editor-examples-list" class="field-editor-examples-list prompt-output-examples-wrap" style="${isListType ? '' : 'display:none'}">
               <div class="prompt-output-examples-list field-editor-list-rows"></div>
-              <button type="button" class="btn btn-secondary field-editor-add-list-row">+ Add list example</button>
+              ${renderFieldEditorAddButton('field-editor-add-list-row', 'Add list example', true)}
             </div>
           </div>
         </div>
@@ -272,41 +285,41 @@ export function openPromptFieldEditor({ fields, fieldIndex = null, outputTypes =
   }
 
   function buildScalarExamplesUI(typeVal, examples) {
-    const list = Array.isArray(examples) ? examples : [];
-    scalarRowsContainer.innerHTML = '';
-    if (list.length === 0) {
-      scalarRowsContainer.insertAdjacentHTML('beforeend', renderFieldEditorScalarRow(typeVal, '', 0));
-    } else {
-      list.forEach((val, i) => {
-        scalarRowsContainer.insertAdjacentHTML('beforeend', renderFieldEditorScalarRow(typeVal, val, i));
-      });
-    }
-    wireScalarExampleEvents(typeVal);
+    const list = Array.isArray(examples) && examples.length > 0 ? examples : [''];
+    scalarRowsContainer.innerHTML = list.map((val, i) => renderFieldEditorScalarRow(typeVal, val, i)).join('');
+    syncExampleRows();
   }
 
-  function wireScalarExampleEvents(typeVal) {
-    scalarRowsContainer.querySelectorAll('.field-editor-scalar-del').forEach((btn) => {
-      btn.replaceWith(btn.cloneNode(true));
-    });
-    scalarRowsContainer.querySelectorAll('.field-editor-scalar-del').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const row = btn.closest('.field-editor-scalar-row');
-        const rows = scalarRowsContainer.querySelectorAll('.field-editor-scalar-row');
-        if (rows.length > 1 && row) row.remove();
-        reindexScalarRows();
-        wireScalarExampleEvents(getCurrentType());
-      });
-    });
-  }
-
-  function reindexScalarRows() {
-    const rows = scalarRowsContainer.querySelectorAll('.field-editor-scalar-row');
-    rows.forEach((row, i) => {
+  /** Renumbers rows and lists; the last example, list or element keeps a disabled remove button. */
+  function syncExampleRows() {
+    const scalarRows = scalarRowsContainer.querySelectorAll('.field-editor-scalar-row');
+    scalarRows.forEach((row, i) => {
       row.setAttribute('data-row-index', String(i));
-      const inp = row.querySelector('.field-editor-scalar-inp');
-      if (inp) inp.setAttribute('data-row-index', String(i));
+      row.querySelector('.field-editor-scalar-inp')?.setAttribute('data-row-index', String(i));
+      row.querySelector('.field-editor-scalar-del').disabled = scalarRows.length < 2;
+    });
+    const blocks = listRowsContainer.querySelectorAll('.field-editor-list-example-block');
+    blocks.forEach((block, i) => {
+      block.setAttribute('data-ex-index', String(i));
+      block.querySelector('.field-editor-list-example-title').textContent = `Example ${i + 1}`;
+      block.querySelector('.field-editor-del-example').disabled = blocks.length < 2;
+      const elementDels = block.querySelectorAll('.field-editor-del-element');
+      elementDels.forEach((btn) => { btn.disabled = elementDels.length < 2; });
     });
   }
+
+  /** Focus moves to the input that takes the removed row's place, so keyboard users keep their spot. */
+  function removeExampleRow(row, inputSelector) {
+    const next = row.nextElementSibling ?? row.previousElementSibling;
+    row.remove();
+    syncExampleRows();
+    next?.querySelector(inputSelector)?.focus();
+  }
+
+  scalarRowsContainer.addEventListener('click', (e) => {
+    const btn = e.target.closest('.field-editor-scalar-del');
+    if (btn && !btn.disabled) removeExampleRow(btn.closest('.field-editor-scalar-row'), '.field-editor-scalar-inp');
+  });
 
   function readListExamplesFromDOM() {
     const blocks = listRowsContainer.querySelectorAll('.field-editor-list-example-block');
@@ -316,90 +329,42 @@ export function openPromptFieldEditor({ fields, fieldIndex = null, outputTypes =
   }
 
   function buildListExamplesUI(typeVal, examples) {
-    const list = Array.isArray(examples) ? examples : [];
-    listRowsContainer.innerHTML = '';
-    if (list.length === 0) {
-      listRowsContainer.innerHTML = renderFieldEditorListRow(typeVal, [], 0);
-    } else {
-      list.forEach((arr, exIdx) => {
-        listRowsContainer.insertAdjacentHTML('beforeend', renderFieldEditorListRow(typeVal, arr, exIdx));
-      });
+    const list = Array.isArray(examples) && examples.length > 0 ? examples : [[]];
+    listRowsContainer.innerHTML = list.map((arr, exIdx) => renderFieldEditorListRow(typeVal, arr, exIdx)).join('');
+    syncExampleRows();
+  }
+
+  listRowsContainer.addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn || btn.disabled) return;
+    if (btn.classList.contains('field-editor-del-element')) {
+      removeExampleRow(btn.closest('.field-editor-element-row'), '.field-editor-element-inp');
+    } else if (btn.classList.contains('field-editor-del-example')) {
+      removeExampleRow(btn.closest('.field-editor-list-example-block'), '.field-editor-element-inp');
+    } else if (btn.classList.contains('field-editor-add-element')) {
+      const rows = btn.closest('.field-editor-list-example-block').querySelector('.field-editor-element-rows');
+      const elIdx = rows.querySelectorAll('.field-editor-element-row').length;
+      rows.insertAdjacentHTML('beforeend', renderFieldEditorElementRow(getCurrentType() === 'list_str', '', elIdx));
+      syncExampleRows();
+      rows.lastElementChild.querySelector('.field-editor-element-inp').focus();
     }
-    wireListExampleEvents(typeVal);
-  }
-
-  function wireListExampleEvents(typeVal) {
-    listRowsContainer.querySelectorAll('.field-editor-add-element').forEach((btn) => {
-      btn.replaceWith(btn.cloneNode(true));
-    });
-    listRowsContainer.querySelectorAll('.field-editor-del-example').forEach((btn) => {
-      btn.replaceWith(btn.cloneNode(true));
-    });
-    listRowsContainer.querySelectorAll('.field-editor-del-element').forEach((btn) => {
-      btn.replaceWith(btn.cloneNode(true));
-    });
-    listRowsContainer.querySelectorAll('.field-editor-add-element').forEach((btn) => {
-      const exIdx = btn.getAttribute('data-ex-index');
-      btn.addEventListener('click', () => {
-        const block = listRowsContainer.querySelector(`.field-editor-list-example-block[data-ex-index="${exIdx}"]`);
-        const container = block?.querySelector('.field-editor-element-rows');
-        if (!container) return;
-        const isListStr = typeVal === 'list_str';
-        const elIdx = container.querySelectorAll('.field-editor-element-row').length;
-        const inp = isListStr
-          ? `<textarea class="dataset-meta-input dataset-meta-textarea field-editor-element-inp" rows="1" data-el-index="${elIdx}"></textarea>`
-          : `<input type="number" step="any" class="dataset-meta-input field-editor-element-inp" data-el-index="${elIdx}" />`;
-        const row = `<div class="field-editor-element-row"><div class="field-editor-element-input-wrap">${inp}</div><button type="button" class="btn btn-secondary field-editor-del-element" aria-label="Delete element">Delete</button></div>`;
-        container.insertAdjacentHTML('beforeend', row);
-        wireListExampleEvents(typeVal);
-      });
-    });
-    listRowsContainer.querySelectorAll('.field-editor-del-example').forEach((btn) => {
-      const exIdx = btn.getAttribute('data-ex-index');
-      btn.addEventListener('click', () => {
-        const block = listRowsContainer.querySelector(`.field-editor-list-example-block[data-ex-index="${exIdx}"]`);
-        if (block && listRowsContainer.querySelectorAll('.field-editor-list-example-block').length > 1) {
-          block.remove();
-          reindexListRows();
-          wireListExampleEvents(getCurrentType());
-        }
-      });
-    });
-    listRowsContainer.querySelectorAll('.field-editor-del-element').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const row = btn.closest('.field-editor-element-row');
-        const block = row?.closest('.field-editor-list-example-block');
-        const rows = block?.querySelectorAll('.field-editor-element-row') || [];
-        if (rows.length > 1 && row) row.remove();
-      });
-    });
-  }
-
-  function reindexListRows() {
-    const blocks = listRowsContainer.querySelectorAll('.field-editor-list-example-block');
-    blocks.forEach((block, i) => {
-      block.setAttribute('data-ex-index', String(i));
-      block.querySelector('.field-editor-add-element')?.setAttribute('data-ex-index', String(i));
-      block.querySelector('.field-editor-del-example')?.setAttribute('data-ex-index', String(i));
-    });
-  }
+  });
 
   if (isListType) buildListExamplesUI(type, field.examples || []);
   else buildScalarExamplesUI(type, field.examples || []);
 
   addScalarRowBtn?.addEventListener('click', () => {
-    const typeVal = getCurrentType();
     const nextIdx = scalarRowsContainer.querySelectorAll('.field-editor-scalar-row').length;
-    scalarRowsContainer.insertAdjacentHTML('beforeend', renderFieldEditorScalarRow(typeVal, '', nextIdx));
-    reindexScalarRows();
-    wireScalarExampleEvents(typeVal);
+    scalarRowsContainer.insertAdjacentHTML('beforeend', renderFieldEditorScalarRow(getCurrentType(), '', nextIdx));
+    syncExampleRows();
+    scalarRowsContainer.lastElementChild.querySelector('.field-editor-scalar-inp').focus();
   });
 
   addListRowBtn?.addEventListener('click', () => {
-    const typeVal = getCurrentType();
     const nextIdx = listRowsContainer.querySelectorAll('.field-editor-list-example-block').length;
-    listRowsContainer.insertAdjacentHTML('beforeend', renderFieldEditorListRow(typeVal, [], nextIdx));
-    wireListExampleEvents(typeVal);
+    listRowsContainer.insertAdjacentHTML('beforeend', renderFieldEditorListRow(getCurrentType(), [], nextIdx));
+    syncExampleRows();
+    listRowsContainer.lastElementChild.querySelector('.field-editor-element-inp').focus();
   });
 
   typeSelect?.addEventListener('change', () => {
