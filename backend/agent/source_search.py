@@ -1,8 +1,10 @@
-"""Keyword search over the external sources AnnoBio imports from, for the Agent's search_source tool.
+"""Keyword search for the Agent's search_source tool.
 
-Imports themselves stay id-based (see the /api/<source>/import jobs in main.py); this only finds ids and
-shows a few matches, so the Agent can propose an import of exactly the records the user wants.
-bioRxiv/medRxiv has no keyword search API, so preprints can only be imported by DOI.
+Importable sources (PubMed, ClinicalTrials.gov, ChEMBL, bioRxiv/medRxiv) are imported by id (see the
+/api/<source>/import jobs in main.py); this only finds ids and shows a few matches, so the Agent can propose
+an import of exactly the records the user wants. bioRxiv/medRxiv has no keyword search API: preprints are
+found through Europe PMC. Europe PMC, OpenAlex, UniProt and Wikipedia are searched in reference_sources.py
+and imported by id through reference_import.py.
 """
 
 from __future__ import annotations
@@ -11,9 +13,11 @@ from typing import Any
 
 import httpx
 
+from agent.reference_sources import search_europepmc, search_openalex, search_uniprot, search_wikipedia
 from chembl_client import CHEMBL_FIELDS, _get_with_retry as _chembl_get
 from clinicaltrials_client import CT_FIELDS, STUDIES_URL, _get_with_retry as _ct_get, _parse_study
 from preprint_client import PREPRINT_FIELDS
+from reference_import import REFERENCE_IMPORTERS
 from pubmed_client import PUBMED_FIELDS, _get_with_retry as _pubmed_get, _ncbi_params, efetch_batch
 
 PUBMED_ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
@@ -26,7 +30,10 @@ SOURCES: dict[str, dict[str, Any]] = {
     "clinicaltrials": {"label": "ClinicalTrials.gov", "id": "NCT id", "fields": CT_FIELDS, "searchable": True},
     "chembl": {"label": "ChEMBL", "id": "ChEMBL id", "fields": CHEMBL_FIELDS, "searchable": True},
     "preprint": {"label": "bioRxiv/medRxiv", "id": "DOI", "fields": PREPRINT_FIELDS, "searchable": False},
+    **{key: {"label": s["label"], "id": s["id"], "fields": s["fields"], "searchable": True}
+       for key, s in REFERENCE_IMPORTERS.items()},
 }
+LOOKUP_SEARCHES = {"europepmc": search_europepmc, "openalex": search_openalex, "uniprot": search_uniprot, "wikipedia": search_wikipedia}
 
 
 class SourceSearchError(ValueError):
@@ -86,7 +93,7 @@ def search_source(source: str, query: str, limit: int = 100, ncbi_api_key: str =
     if key not in SOURCES:
         raise SourceSearchError(f"Unknown source. Use one of: {', '.join(SOURCES)}.")
     if not SOURCES[key]["searchable"]:
-        raise SourceSearchError(f"{SOURCES[key]['label']} has no keyword search. Import preprints by DOI instead.")
+        raise SourceSearchError(f"{SOURCES[key]['label']} has no keyword search. Search europepmc with SRC:PPR, then import preprints by DOI.")
     text = (query or "").strip()
     if not text:
         raise SourceSearchError("A search query is required.")
@@ -95,6 +102,8 @@ def search_source(source: str, query: str, limit: int = 100, ncbi_api_key: str =
         result = _search_pubmed(text, n, ncbi_api_key, ncbi_email)
     elif key == "clinicaltrials":
         result = _search_clinicaltrials(text, n)
-    else:
+    elif key == "chembl":
         result = _search_chembl(text, n)
+    else:
+        result = LOOKUP_SEARCHES[key](text, n, SAMPLE_COUNT)
     return {"source": key, "query": text, "returned": len(result["ids"]), **result}

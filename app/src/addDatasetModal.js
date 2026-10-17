@@ -11,6 +11,7 @@ import { showConfirm } from './alertModal.js';
 import { imageCell, pdfCell } from './datasetContent.js';
 import { getCurrentProjectId } from './currentProject.js';
 import * as webImageApi from './webImageApi.js';
+import { mountReferenceImports, referenceImportPanelsHtml, referenceImportTabsHtml } from './referenceImportPanels.js';
 
 const API_BASE = BACKEND_API_BASE;
 const PUBMED_POLL_INTERVAL_MS = 1200;
@@ -190,6 +191,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="clinicaltrials">Import from ClinicalTrials.gov</button>
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="preprint">Import from bioRxiv / medRxiv</button>
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="chembl">Import from ChEMBL</button>
+                ${referenceImportTabsHtml()}
               </div>
             </div>
             <div class="dataset-add-step2-scroll">
@@ -335,6 +337,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
                     </div>
                   </div>
                 </div>
+                ${referenceImportPanelsHtml()}
               </div>
             </div>
             <div class="prompt-form-error prompt-modal-error dataset-add-error" role="alert" aria-live="polite" hidden></div>
@@ -625,6 +628,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
     setClinicaltrialsFetchStatus('');
     setPreprintFetchStatus('');
     setChemblFetchStatus('');
+    referenceImports.resetStatus();
   }
 
   function stageEmptyDataset() {
@@ -673,6 +677,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
       chemblJobId = null;
       setChemblRunningUi(false);
     }
+    referenceImports.cancel(dataSource);
     dataSource = target;
     sourceSwitchBtns.forEach((b) => {
       const on = b.dataset.source === target;
@@ -1017,6 +1022,19 @@ export function openAddDatasetModal(workflowCanvasApi) {
       showError(`Could not reach backend: ${(e && e.message) || e}`);
       setChemblFetchStatus('');
     }
+  });
+
+  // Europe PMC, OpenAlex and UniProt share one panel and fetch loop (referenceImportPanels.js).
+  const referenceImports = mountReferenceImports(overlay, {
+    apiBase: API_BASE,
+    onRows(headers, rows) {
+      fileImported = true;
+      parsedDatasetContent = { headers, rows };
+      renderPreviewTable(headers, rows.slice(0, MAX_PREVIEW_ROWS), rows.length);
+    },
+    showError,
+    hideError,
+    setRunning(running) { addBtn.disabled = running; },
   });
 
   function setPdfRunningUi(running) {

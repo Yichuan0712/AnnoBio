@@ -25,6 +25,7 @@ Agent 的写入继续通过提案卡片确认，执行代码和模型任务通�
 | History | `select_history`/`delete_history` 的预览和应用方法完整传入聊天运行环境；保留原有独立提案要求 |
 | 内容锁与删除 | `inspect_node.contentLock` 显示锁定来源；内容更新受相同锁约束；不能删除仍被下游使用的节点，可按用户要求整组删除 |
 | 运行到这里 | `run_nodes` 的 `run_to` 与界面共用规划和执行代码：`mode: resume`（默认）复用有效结果、续跑兼容的部分结果并补跑到当前节点，全有效时不执行；`mode: restart` 从头重跑全部必需上游及当前节点；`mode: only` 只从头跑当前节点；`mode: resume-node` 只续跑当前节点。`only_this: true` 兼容为 `only`。记录在 Run 标签，重跑保留旧 History。 |
+| 外部资料查询与导入 | `search_source` 支持 `europepmc`、`openalex`、`uniprot`、`wikipedia`（免费公开接口、无需 key），返回总数、ID 和 5 条带摘要/功能描述的样例，供 Agent 查资料；按关键词搜索与 PubMed 等来源一样只有 Agent 可用。四个来源都能按 ID 导入，共用 `/api/<source>/import`：Agent 用 `import_dataset` 导入全部四个；用户在 Create Dataset 的 Import from Europe PMC / OpenAlex / UniProt 标签导入前三个。Wikipedia 不是学术来源，按用户决定（2026-10-16）不在界面提供，只有 Agent 能导入。Europe PMC 与 OpenAlex 另给 `pmids`，Europe PMC 给 bioRxiv/medRxiv `preprint_dois`。没有通用网页搜索。 |
 | 整条 Pipeline | `pipeline_action` 支持 Python 项目导出与 `rename` 重命名（`name` 必填）；运行使用 `run_to`。工作区摘要显示自定义名称，导出默认使用该名称。 |
 
 以下仍由用户在界面操作：选择并上传本地新文件、配置凭据与 Python、选择 Pipeline 路线、
