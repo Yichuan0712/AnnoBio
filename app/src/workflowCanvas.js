@@ -2146,6 +2146,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     signal?.addEventListener('abort', abort, { once: true });
     if (signal?.aborted) abort();
     const release = registerNodeStop(nodeId, abort);
+    let rulesProgressTotal = 0;
     node.dataset.scoreMatchAgentRunning = '1';
     setScoreNodeProgress(node, 0);
     document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
@@ -2176,7 +2177,13 @@ export function buildWorkflowCanvas(root, options = {}) {
           table = await getScoreExportData({ node: score,
             getRunResults: () => ({ results: inputs.runResults, outputFields: inputs.outputFields }),
             getRunWorkingSetContent: () => inputs.input, getGroundTruthContent: () => inputs.groundTruth.content,
-            getGroundTruthHeaders: () => inputs.groundTruth.content.headers, captureEvaluationState: true });
+            getGroundTruthHeaders: () => inputs.groundTruth.content.headers, captureEvaluationState: true,
+            signal: controller.signal, onProgress: (completed, total, stage) => {
+              rulesProgressTotal = total;
+              setScoreNodeProgress(node, total ? Math.min(99, completed / total * 100) : 0);
+              node.querySelector('.workflow-node__score-progress')?.setAttribute('aria-valuetext', `${stage}: ${completed}/${total}`);
+              onProgress?.(completed, total);
+            } });
           if (!table) throw new Error('Add at least one evaluation rule before running Evaluate.');
           evaluationState = table.evaluationState;
         }
@@ -2191,17 +2198,23 @@ export function buildWorkflowCanvas(root, options = {}) {
         delete node.dataset.historyStaleRecordId;
         if (record.results.scoreMatchResult) node.dataset.scoreMatchResult = JSON.stringify(record.results.scoreMatchResult);
         delete node.dataset.scoreMatchError;
+        delete node.dataset.scoreMatchInterrupted;
       }
       await reconcileHistory();
+      if (record.status === 'completed' && rulesProgressTotal) onProgress?.(rulesProgressTotal, rulesProgressTotal);
       return record.results.scoreMatchResult || record.results;
     } catch (error) {
-      node.dataset.scoreMatchError = error.message || String(error);
+      if (controller.signal.aborted || error.name === 'AbortError') {
+        node.dataset.scoreMatchInterrupted = '1';
+        delete node.dataset.scoreMatchError;
+      } else node.dataset.scoreMatchError = error.message || String(error);
       throw error;
     } finally {
       release(); signal?.removeEventListener('abort', abort);
       delete node.dataset.scoreMatchAgentRunning;
       if (scoreControllers.get(nodeId) === controller) { scoreControllers.delete(nodeId); pendingScoreMatches.delete(nodeId); }
       syncScoreNodeProgressFromUpstreamRun(node);
+      node.querySelector('.workflow-node__score-progress')?.removeAttribute('aria-valuetext');
       document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
       document.dispatchEvent(new CustomEvent('workflow:score-results-updated', { detail: { nodeId } }));
     }

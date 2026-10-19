@@ -16,6 +16,7 @@ import {
 import { stepOutputTable } from '../../stepOutputs.js';
 import { readSavedFrom } from '../../savedDatasets.js';
 import { parseScoreMappingBundle } from '../../scoreMappingBundle.js';
+import { DEFAULT_MATCH_FLAGS } from '../../scoreMatchPrimitives.js';
 import { suggestionTargetScoreRowIndices } from '../../reviewWorkingText.js';
 import { hasNodeExecution } from '../../nodeExecutionControl.js';
 
@@ -381,18 +382,6 @@ function inspectRun(node, ctx, options) {
     diagnostics,
   };
 }
-
-const DEFAULT_MATCH_FLAGS = {
-  semanticAlign: false,
-  embeddingSimilarity: false,
-  rxnormMatch: false,
-  meshMatch: false,
-  contains: false,
-  ignoreCase: false,
-  ignoreSymbols: false,
-  ignoreWhitespace: false,
-  numericMode: 'exact',
-};
 
 function flattenRules(group) {
   if (!group || typeof group !== 'object') return [];

@@ -6,6 +6,16 @@ update notice. Each Optimize node stays bound to its original evaluation; use a 
 from another evaluation. Optimize status notices appear below Findings. See
 [Evaluate History design](design/EVALUATION_HISTORY.md).
 
+Evaluate's String match options include **HGNC (human gene)**, **PubChem (compound)**, and
+**Ontology** with a GO / ChEBI / MONDO selector. Select an output field and a ground-truth column,
+choose one match option, and click Run. Names, synonyms and supported IDs match only when both
+uniquely resolve to the same standard ID. HGNC is human-only; PubChem preserves distinct compound
+CIDs. Ambiguous or unresolved names do not match; a failed lookup stops the evaluation with an
+error rather than producing a false mismatch. Lookups are deduplicated and cached.
+Rules progress reflects completed entity lookups, semantic comparisons and row comparisons. The
+results table and metrics update together after the full attempt finishes; previous results stay
+visible while it runs. Code matching retains its existing row progress.
+
 The Pipeline panel shows the Generate and Process steps that pass data to each other, starting
 from Datasets. It selects the route to export as a standalone Python project; use Resume pipeline to here on a
 step to run it and the upstream steps it needs.

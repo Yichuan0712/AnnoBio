@@ -34,6 +34,7 @@ export function validateAgentScoreTree(tree, { inputColumns, outputKeys, gtColum
       if (typeof DEFAULT_MATCH_FLAGS[name] === 'boolean' && typeof value !== 'boolean') throw new Error(`${name} must be boolean.`);
     }
     if (flags.numericMode && !['exact', 'abs', 'rel', 'decimals'].includes(flags.numericMode)) throw new Error('Unknown numericMode.');
+    if (flags.ontologySource !== undefined && !['go', 'chebi', 'mondo'].includes(flags.ontologySource)) throw new Error('ontologySource must be go, chebi or mondo.');
     for (const name of ['numericAbsEpsilon', 'numericRelEpsilon']) {
       if (flags[name] !== undefined && (!Number.isFinite(flags[name]) || flags[name] < 0)) throw new Error(`${name} must be a non-negative number.`);
     }

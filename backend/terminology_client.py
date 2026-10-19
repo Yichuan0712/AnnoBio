@@ -1,5 +1,5 @@
 """
-Thin clients for two NLM-family medical terminology services, used by the Score node's
+Thin clients for biomedical terminology services, used by the Score node's
 "Medical concept match" flags to normalize free-text terms (drug names, diagnoses) to a
 canonical concept id before comparing two values for equivalence:
 
@@ -8,6 +8,7 @@ canonical concept id before comparing two values for equivalence:
 - MeSH (conditions/diagnoses -> canonical MeSH heading): public, free, no API key; reached
   via the same NCBI E-utilities `pubmed_client.py` calls, using PubMed's own automatic
   term-to-MeSH-heading translation.
+- HGNC, PubChem, GO, ChEBI and MONDO: exact entity resolution via grounding_sources.py.
 
 (A UMLS Metathesaurus source was tried too, but it needs a free personal NLM UTS API key,
 which is more setup friction than the other two -- dropped for now, not because of any
@@ -47,7 +48,7 @@ _MESH_TRANSLATION_RE = re.compile(r'"([^"]+)"\[MeSH Terms\]')
 TOOL_NAME = "prompt-studio"
 DEFAULT_EMAIL = "prompt-studio@example.com"
 
-MEDICAL_CONCEPT_MATCH_SOURCES = ("auto", "rxnorm", "mesh")
+MEDICAL_CONCEPT_MATCH_SOURCES = ("auto", "rxnorm", "mesh", "hgnc", "pubchem", "go", "chebi", "mondo")
 
 _TIMEOUT = 15.0
 
@@ -55,6 +56,7 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 TERMINOLOGY_CACHE_FILE = DATA_DIR / "terminology_cache.json"
 
 _cache_lock = threading.Lock()
+_persist_lock = threading.Lock()
 _cache: dict[str, dict | None] = {}
 
 
@@ -89,7 +91,7 @@ def _get_with_retry(client: httpx.Client, url: str, params: dict[str, Any], max_
 
 
 def _cache_key(source: str, term: str) -> str:
-    return f"{source}:{term.strip().lower()}"
+    return f"v2:{source}:{term.strip().lower()}"
 
 
 def _load_cache() -> None:
@@ -106,13 +108,16 @@ def _load_cache() -> None:
 
 
 def _persist_cache() -> None:
-    with _cache_lock:
-        snapshot = dict(_cache)
-    try:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        TERMINOLOGY_CACHE_FILE.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
-    except (OSError, TypeError) as e:
-        _safe_print(f"[Terminology] persist cache failed: {e}", file=sys.stderr)
+    with _persist_lock:
+        with _cache_lock:
+            snapshot = dict(_cache)
+        try:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            temporary = TERMINOLOGY_CACHE_FILE.with_suffix('.tmp')
+            temporary.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+            temporary.replace(TERMINOLOGY_CACHE_FILE)
+        except (OSError, TypeError) as e:
+            _safe_print(f"[Terminology] persist cache failed: {e}", file=sys.stderr)
 
 
 _load_cache()
@@ -196,11 +201,14 @@ def resolve_concept(
     source: str = "auto",
     ncbi_api_key: str = "",
     ncbi_email: str = "",
-) -> dict[str, str] | None:
+) -> dict[str, Any] | None:
     """Resolve one free-text term to a canonical concept id, or None if unresolved on the requested source(s)."""
     term = (term or "").strip()
     if not term:
         return None
+    if source in ("hgnc", "pubchem", "go", "chebi", "mondo"):
+        from grounding_sources import resolve_entity
+        return resolve_entity(term, source)
     if source == "rxnorm":
         return _rxnorm_lookup(term)
     if source == "mesh":
@@ -234,6 +242,8 @@ def resolve_concepts_bulk(
     source: str = "auto",
     ncbi_api_key: str | None = None,
     ncbi_email: str | None = None,
+    on_progress=None,
+    cancelled=None,
 ) -> dict[str, dict | None]:
     """
     Resolve every (deduplicated) term to a concept id, using the on-disk cache first and
@@ -250,8 +260,9 @@ def resolve_concepts_bulk(
     unique_terms: list[str] = []
     seen: set[str] = set()
     for t in terms:
-        t = (t or "").strip()
-        if t and t not in seen:
+        # Keep request keys intact (including whitespace); only lookup/cache normalization trims.
+        t = t or ""
+        if t.strip() and t not in seen:
             seen.add(t)
             unique_terms.append(t)
 
@@ -265,25 +276,33 @@ def resolve_concepts_bulk(
             else:
                 to_fetch.append(t)
 
-    if not to_fetch:
+    if on_progress:
+        for term, result in results.items():
+            on_progress(term, result)
+    if not to_fetch or (cancelled and cancelled()):
         return results
 
     max_workers = 3 if source in ("auto", "mesh") else 6
 
     def _work(term: str) -> tuple[str, dict | None]:
-        try:
-            return term, resolve_concept(term, source, ncbi_api_key, ncbi_email)
-        except Exception as e:
-            _safe_print(f"[Terminology] lookup failed for {term!r}: {e}", file=sys.stderr)
+        if cancelled and cancelled():
             return term, None
+        # A transport/service failure must fail evaluation, never become a cached no-match.
+        return term, resolve_concept(term, source, ncbi_api_key, ncbi_email)
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(_work, t) for t in to_fetch]
         for future in as_completed(futures):
+            if cancelled and cancelled():
+                for pending in futures:
+                    pending.cancel()
+                break
             term, result = future.result()
             results[term] = result
             with _cache_lock:
                 _cache[_cache_key(source, term)] = result
-            _persist_cache()
+            if on_progress:
+                on_progress(term, result)
+    _persist_cache()
 
     return results

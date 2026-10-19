@@ -18,6 +18,7 @@ Agent 的写入继续通过提案卡片确认，执行代码和模型任务通�
 | 节点输入与分支 | `connect`/`disconnect` 使用共享端口校验；Generate/Process 直接读上游结果或 Process 分支 |
 | 单节点执行 | `run_nodes` 支持 Generate、Process、Evaluate（规则或代码）、Optimize、verify；Evaluate 显式 Run 保存独立 History |
 | Evaluate 自定义代码 | `score` job 复用 Evaluate 窗口的数据字典和匹配 API，存储同样的结果，支持进度及取消后的部分结果 |
+| Evaluate 实体匹配 | Match 新增 HGNC（人类基因）、PubChem（化合物）、Ontology（GO / ChEBI / MONDO）；flat `match` 用 `hgnc: true`、`pubchem: true` 或 `ontology: "go" / "chebi" / "mondo"`；嵌套 `rule_tree.matchFlags` 用 `hgncMatch` / `pubchemMatch` / `ontologyMatch` 与 `ontologySource`。与 RxNorm、MeSH、Semantic 互斥；只接受唯一标准 ID，服务异常报错。Rules 显示真实查询及匹配进度，完成后统一更新结果与 History；Optimize / Verify 共用匹配能力。 |
 | Evaluate 分组规则及评分行 | `rule_tree` 完整保留嵌套 AND/OR；读取返回原始规则树；`exclude_row_keys` / `include_row_keys` 修改评分行，使用 `read_rows.rowKey`，保留已有 Optimize 的证据 |
 | 已有 Process 试跑 | `try_process.process_node_id` 保留实际连接及固定别名，避免源改名后错读；新 Process 才使用 `primary_input` 推断输入 |
 | Optimize 状态与恢复 | 中断不返回成功；`resume_review` 恢复已有节点，和界面 Resume 共用入口；每个 Optimize 固定绑定创建时的 Evaluate History，Verify / Resume / 建议优化读取该快照 |

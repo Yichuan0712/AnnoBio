@@ -28,6 +28,10 @@ export const DEFAULT_MATCH_FLAGS = {
   embeddingSimilarity: false,
   rxnormMatch: false,
   meshMatch: false,
+  hgncMatch: false,
+  pubchemMatch: false,
+  ontologyMatch: false,
+  ontologySource: 'go',
   contains: false,
   ignoreCase: false,
   ignoreSymbols: false,
@@ -48,20 +52,15 @@ export function canonicalizeMatchFlags(f) {
   let dec = Math.floor(Number(merged.numericDecimalPlaces));
   if (!Number.isFinite(dec)) dec = 2;
   dec = Math.max(0, Math.min(20, dec));
-  let embeddingSimilarity = !!merged.embeddingSimilarity;
-  let semanticAlign = !!merged.semanticAlign;
-  let rxnormMatch = !!merged.rxnormMatch;
-  let meshMatch = !!merged.meshMatch;
-  // Only one "smart match" mode at a time: embedding > semantic > rxnorm > mesh.
-  if (embeddingSimilarity && semanticAlign) semanticAlign = false;
-  if ((embeddingSimilarity || semanticAlign) && rxnormMatch) rxnormMatch = false;
-  if ((embeddingSimilarity || semanticAlign || rxnormMatch) && meshMatch) meshMatch = false;
-  const softString = embeddingSimilarity || semanticAlign || rxnormMatch || meshMatch;
+  const smart = {};
+  let softString = false;
+  for (const name of ['embeddingSimilarity', 'semanticAlign', 'rxnormMatch', 'meshMatch', 'hgncMatch', 'pubchemMatch', 'ontologyMatch']) {
+    smart[name] = !softString && !!merged[name];
+    softString ||= smart[name];
+  }
   return {
-    semanticAlign,
-    embeddingSimilarity,
-    rxnormMatch,
-    meshMatch,
+    ...smart,
+    ontologySource: ['go', 'chebi', 'mondo'].includes(merged.ontologySource) ? merged.ontologySource : 'go',
     contains: softString ? false : !!merged.contains,
     ignoreCase: softString ? false : !!merged.ignoreCase,
     ignoreSymbols: softString ? false : !!merged.ignoreSymbols,
@@ -77,6 +76,9 @@ export function canonicalizeMatchFlags(f) {
 export function medicalConceptSource(flags) {
   if (flags.rxnormMatch) return 'rxnorm';
   if (flags.meshMatch) return 'mesh';
+  if (flags.hgncMatch) return 'hgnc';
+  if (flags.pubchemMatch) return 'pubchem';
+  if (flags.ontologyMatch) return flags.ontologySource || 'go';
   return null;
 }
 
@@ -213,7 +215,7 @@ export function embeddingPairMatches(runValRaw, gtValRaw, embeddingCosineMap) {
  * Collect unique (result, GT) string pairs for rules that use embedding similarity, then call the backend once per chunk.
  * @param {string} apiBase e.g. BACKEND_API_BASE
  */
-export async function prefetchEmbeddingCosineMap(apiBase, { root, roots, results, outputFields, runWs, gtContent, getRunValue, getGtValue }) {
+export function collectEmbeddingPairs({ root, roots, results, outputFields, runWs, gtContent, getRunValue, getGtValue }) {
   const rootsToWalk = Array.isArray(roots) && roots.length > 0 ? roots.filter(Boolean) : (root != null ? [root] : []);
   const leafRules = [];
   for (const rt of rootsToWalk) {
@@ -227,7 +229,7 @@ export async function prefetchEmbeddingCosineMap(apiBase, { root, roots, results
     const f = getMatchFlags(rule);
     return migrateLegacyMatchType(rule.matchType) === 'exact' && f.embeddingSimilarity;
   });
-  if (embeddingRules.length === 0) return new Map();
+  if (embeddingRules.length === 0) return [];
 
   const resultsByIndex = new Map();
   (results || []).forEach((r) => { resultsByIndex.set(r.row_index, r); });
@@ -252,17 +254,23 @@ export async function prefetchEmbeddingCosineMap(apiBase, { root, roots, results
       }
     }
   }
-  if (pairs.length === 0) return new Map();
+  return pairs;
+}
 
+export async function prefetchEmbeddingCosineMap(apiBase, options) {
+  const { signal, onProgress } = options;
+  const pairs = options.pairs || collectEmbeddingPairs(options);
   const map = new Map();
   const base = String(apiBase || BACKEND_API_BASE).replace(/\/$/, '');
   const CHUNK = 320;
+  onProgress?.(0, pairs.length);
   for (let off = 0; off < pairs.length; off += CHUNK) {
     const chunk = pairs.slice(off, off + CHUNK);
     const res = await fetch(`${base}/api/embeddings/pair-similarities`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pairs: chunk }),
+      signal,
     });
     if (!res.ok) {
       const t = await res.text().catch(() => '');
@@ -276,6 +284,7 @@ export async function prefetchEmbeddingCosineMap(apiBase, { root, roots, results
     chunk.forEach((p, idx) => {
       map.set(JSON.stringify(p), cosines[idx]);
     });
+    onProgress?.(Math.min(off + chunk.length, pairs.length), pairs.length);
   }
   return map;
 }
@@ -284,24 +293,28 @@ export async function prefetchEmbeddingCosineMap(apiBase, { root, roots, results
  * Unlike embeddingPairMatches, this looks each side up *individually* (not by a pair key)
  * since concept normalization is a per-value operation, not a pairwise one.
  */
-export function conceptPairMatches(runValRaw, gtValRaw, conceptIdMap) {
+export function conceptPairMatches(runValRaw, gtValRaw, conceptIdMap, source = null) {
   const a = runValRaw == null ? '' : String(runValRaw);
   const b = gtValRaw == null ? '' : String(gtValRaw);
   if (a.length === 0 && b.length === 0) return true;
   if (a.length === 0 || b.length === 0) return false;
-  const ra = conceptIdMap.get(a);
-  const rb = conceptIdMap.get(b);
+  const lookup = (term) => source && conceptIdMap.has(JSON.stringify([source, term]))
+    ? conceptIdMap.get(JSON.stringify([source, term])) : conceptIdMap.get(term);
+  const ra = lookup(a);
+  const rb = lookup(b);
   if (!ra || !rb) return false;
+  if (ra.status === 'ambiguous' || rb.status === 'ambiguous') return false;
+  if (ra.source && rb.source && ra.source !== rb.source) return false;
   return !!ra.concept_id && ra.concept_id === rb.concept_id;
 }
 
 /**
  * Collect unique result/GT string values for rules that use medical concept matching, grouped by their
- * chosen source (rxnorm/mesh), then call the backend once per source (batched, capped at 500
+ * chosen vocabulary, then call the backend once per source (batched, capped at 500
  * terms/request to match the backend's cap).
  * @param {string} apiBase e.g. BACKEND_API_BASE
  */
-export async function prefetchConceptIdMap(apiBase, { root, roots, results, outputFields, runWs, gtContent, getRunValue, getGtValue }) {
+export function collectConceptTerms({ root, roots, results, outputFields, runWs, gtContent, getRunValue, getGtValue }) {
   const rootsToWalk = Array.isArray(roots) && roots.length > 0 ? roots.filter(Boolean) : (root != null ? [root] : []);
   const leafRules = [];
   for (const rt of rootsToWalk) {
@@ -322,22 +335,30 @@ export async function prefetchConceptIdMap(apiBase, { root, roots, results, outp
   const runRowIndices = [...new Set((results || []).map((r) => r.row_index))];
   const gtCount = (gtContent.rows || []).length;
   const termsBySource = new Map();
-  for (const i of runRowIndices) {
-    const runResult = resultsByIndex.get(i) || null;
+  for (const rule of conceptRules) {
+    const source = medicalConceptSource(getMatchFlags(rule));
+    if (!termsBySource.has(source)) termsBySource.set(source, new Set());
+    const seen = termsBySource.get(source);
+    for (const i of runRowIndices) {
+      const value = getRunValue(resultsByIndex.get(i) || null, rule.outputKey, i, runWs, outputFields);
+      if (value != null && String(value).trim()) seen.add(String(value));
+    }
     for (let j = 0; j < gtCount; j++) {
-      for (const rule of conceptRules) {
-        const source = medicalConceptSource(getMatchFlags(rule));
-        if (!termsBySource.has(source)) termsBySource.set(source, new Set());
-        const seen = termsBySource.get(source);
-        const runValRaw = getRunValue(runResult, rule.outputKey, i, runWs, outputFields);
-        seen.add(runValRaw == null ? '' : String(runValRaw));
-        for (const gt of (rule.gtColumns || []).map((col) => getGtValue(gtContent, j, col))) {
-          seen.add(gt == null ? '' : String(gt));
-        }
+      for (const col of rule.gtColumns || []) {
+        const value = getGtValue(gtContent, j, col);
+        if (value != null && String(value).trim()) seen.add(String(value));
       }
     }
   }
+  return termsBySource;
+}
 
+export async function prefetchConceptIdMap(apiBase, options) {
+  const { signal, onProgress } = options;
+  const termsBySource = options.termsBySource || collectConceptTerms(options);
+  const total = [...termsBySource.values()].reduce((sum, terms) => sum + terms.size, 0);
+  let completed = 0;
+  onProgress?.(0, total);
   const map = new Map();
   const base = String(apiBase || BACKEND_API_BASE).replace(/\/$/, '');
   const CHUNK = 500;
@@ -349,21 +370,64 @@ export async function prefetchConceptIdMap(apiBase, { root, roots, results, outp
       const res = await fetch(`${base}/api/terminology/normalize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ terms: chunk, source }),
+        body: JSON.stringify({ terms: chunk, source, ...(onProgress ? { stream: true } : {}) }),
+        signal,
       });
       if (!res.ok) {
         const t = await res.text().catch(() => '');
         throw new Error(t || `Terminology API HTTP ${res.status}`);
       }
-      const data = await res.json();
-      const results2 = data.results;
+      let results2;
+      if (onProgress && res.headers?.get('content-type')?.includes('application/x-ndjson')) {
+        results2 = await readConceptStream(res, chunk, (term, result) => {
+          map.set(JSON.stringify([source, term]), result);
+          onProgress(++completed, total);
+        });
+      } else {
+        const data = await res.json();
+        results2 = data.results;
+        completed += chunk.length;
+        onProgress?.(completed, total);
+      }
       if (!results2 || typeof results2 !== 'object') {
         throw new Error('Invalid terminology API response');
       }
       for (const term of chunk) {
-        map.set(term, results2[term] ?? null);
+        map.set(JSON.stringify([source, term]), results2[term] ?? null);
       }
     }
   }
   return map;
+}
+
+async function readConceptStream(response, terms, onTerm) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const expected = new Set(terms), seen = new Set(), results = {};
+  let buffer = '', done = false;
+  const consume = line => {
+    if (!line.trim()) return;
+    const event = JSON.parse(line);
+    if (event.type === 'error') throw new Error(event.error || 'Terminology lookup failed');
+    if (event.type === 'done') { done = true; return; }
+    if (event.type !== 'result' || !expected.has(event.term) || seen.has(event.term)) throw new Error('Invalid terminology progress response');
+    seen.add(event.term);
+    results[event.term] = event.result ?? null;
+    onTerm(event.term, results[event.term]);
+  };
+  try {
+    for (;;) {
+      const part = await reader.read();
+      buffer += decoder.decode(part.value, { stream: !part.done });
+      let split;
+      while ((split = buffer.indexOf('\n')) >= 0) { consume(buffer.slice(0, split)); buffer = buffer.slice(split + 1); }
+      if (part.done) break;
+    }
+    if (buffer.trim()) consume(buffer);
+    if (!done || seen.size !== expected.size) throw new Error('Terminology lookup ended before all terms completed');
+    return results;
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
 }
