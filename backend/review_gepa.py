@@ -161,7 +161,7 @@ def _make_rule_matches_row(
         if match_type == "exact" and flags.get("semanticAlign"):
             return any(strings_match_semantic_align(run_val_raw, g) for g in gt_vals_raw)
         if match_type == "exact" and medical_concept_source(flags):
-            return any(concept_pair_matches(run_val_raw, g, concept_id_map) for g in gt_vals_raw)
+            return any(concept_pair_matches(run_val_raw, g, concept_id_map, medical_concept_source(flags)) for g in gt_vals_raw)
         run_val = normalize_for_match(run_val_raw, flags, False)
         for g in gt_vals_raw:
             gt_val = normalize_for_match(g, flags, False)
@@ -329,8 +329,7 @@ class _AppGepaAdapter:
         concept_id_map: dict[str, dict | None] = {}
         concept_rules = [r for r in output_leaves if medical_concept_source(get_match_flags(r))]
         if concept_rules:
-            # Rules with different sources (RxNorm/MeSH) are grouped so each is queried once; if the
-            # same raw term appears under two different sources, whichever runs last wins the merge.
+            # Source-qualified keys keep the same raw term isolated across vocabularies.
             by_source: dict[str, list[str]] = {}
             for i, ex in enumerate(batch):
                 for rule in concept_rules:

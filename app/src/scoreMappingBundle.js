@@ -205,6 +205,15 @@ export function serializeScoreMappingBundle(inputRoot, outputRoot) {
     v: SCORE_MAPPING_BUNDLE_V,
     input: inR,
     output: outR,
+  }, (key, value) => {
+    if (key !== 'matchFlags' || !value) return value;
+    // New inactive options must not change signatures of previously completed evaluations.
+    const flags = { ...value };
+    for (const option of ['hgncMatch', 'pubchemMatch', 'ontologyMatch']) {
+      if (!flags[option]) delete flags[option];
+    }
+    if (!flags.ontologyMatch) delete flags.ontologySource;
+    return flags;
   });
 }
 

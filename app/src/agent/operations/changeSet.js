@@ -52,6 +52,8 @@ const MATCH_FLAG_KEYS = {
   embedding: 'embeddingSimilarity',
   rxnorm: 'rxnormMatch',
   mesh: 'meshMatch',
+  hgnc: 'hgncMatch',
+  pubchem: 'pubchemMatch',
 };
 
 function clean(value) {
@@ -437,6 +439,11 @@ export function planChangeSet(state, operations, ctx) {
     const flags = {};
     const m = match && typeof match === 'object' ? match : {};
     for (const [key, flag] of Object.entries(MATCH_FLAG_KEYS)) if (m[key] === true) flags[flag] = true;
+    if (m.ontology !== undefined) {
+      if (!['go', 'chebi', 'mondo'].includes(m.ontology)) fail('match.ontology must be go, chebi or mondo.');
+      flags.ontologyMatch = true;
+      flags.ontologySource = m.ontology;
+    }
     const numeric = clean(m.numeric);
     if (numeric && numeric !== 'exact') {
       if (!['abs', 'rel', 'decimals'].includes(numeric)) fail('match.numeric must be exact, abs, rel or decimals.');

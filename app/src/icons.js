@@ -151,6 +151,18 @@ export const iconSquarePlus = (size) => svgIcon({
   paths: ['M8 12h8', 'M12 8v8'],
 });
 
+/** Lucide "plus" */
+export const iconPlus = (size) => svgIcon({
+  size,
+  paths: ['M5 12h14', 'M12 5v14'],
+});
+
+/** Lucide "x" — remove one item from a list (the whole list uses iconTrash). */
+export const iconX = (size) => svgIcon({
+  size,
+  paths: ['M18 6 6 18', 'M6 6l12 12'],
+});
+
 /** Lucide "file-text" — used for a PDF chip that already has a file (mirrors the image thumbnail:
  * this represents a file that's there, not an action). */
 export const iconFileText = (size) => svgIcon({

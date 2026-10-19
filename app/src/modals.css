@@ -8074,7 +8074,7 @@ body.wd-row-resizing {
   color: var(--text);
 }
 
-/* string/number 模式下 Examples：多行，每行一个输入 + Delete */
+/* string/number 模式下 Examples：多行，每行一个输入 + 删除图标 */
 .field-editor-examples-scalar {
   width: 100%;
   min-width: 0;
@@ -8089,10 +8089,41 @@ body.wd-row-resizing {
   gap: 8px;
 }
 
-.field-editor-scalar-row {
+/* One example (or list element) = one box: the input loses its own border, × sits inside on the right */
+.field-editor-input-box {
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
+  align-items: stretch;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius, 3px);
+  overflow: hidden;
+}
+
+.field-editor-input-box:focus-within {
+  border-color: var(--text-muted);
+}
+
+.field-editor-input-box .dataset-meta-input {
+  display: block;
+  background: transparent;
+  border: none;
+}
+
+.field-editor-input-box .field-editor-icon-btn {
+  position: relative;
+  width: 36px;
+  height: auto;
+  margin: 0;
+  border-radius: 0;
+}
+
+.field-editor-input-box .field-editor-icon-btn::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  border-left: 1px solid var(--border);
 }
 
 .field-editor-scalar-input-wrap {
@@ -8113,24 +8144,75 @@ body.wd-row-resizing {
   resize: none;
 }
 
-.field-editor-scalar-del {
+/* Remove buttons: icon only (× for one item, trash for a whole list), muted until hovered */
+.field-editor-icon-btn {
   flex-shrink: 0;
-  padding: 4px 10px;
-  font-size: 12px;
-  line-height: 1.2;
+  width: 32px;
+  height: 32px;
+  margin-top: 3px; /* centred on a one-line input; stays at the top when the textarea grows */
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--text-muted);
   background: none;
-  border: 1px solid var(--border);
+  border: none;
+  border-radius: var(--control-radius);
   cursor: pointer;
 }
 
-.field-editor-scalar-del:hover {
-  color: var(--text);
+.field-editor-icon-btn:hover:not(:disabled) {
+  color: var(--status-danger);
   background: var(--hover);
 }
 
-.field-editor-examples-scalar .field-editor-add-scalar-row {
+.field-editor-icon-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.field-editor-icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Add buttons: plain text with a plus inside a list; a dashed slot for a new example */
+.field-editor-add-btn {
   align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-radius: var(--control-radius);
+  cursor: pointer;
+}
+
+.field-editor-add-btn:hover {
+  color: var(--accent);
+  background: var(--hover);
+}
+
+.field-editor-add-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.field-editor-add-btn--block {
+  align-self: stretch;
+  justify-content: center;
+  padding: 8px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+}
+
+.field-editor-add-btn--block:hover {
+  border-color: var(--accent);
+  background: none;
 }
 
 .field-editor-examples-list {
@@ -8139,31 +8221,42 @@ body.wd-row-resizing {
   gap: 10px;
 }
 
-.field-editor-examples-list .field-editor-add-list-row {
-  align-self: flex-start;
-}
-
 /* List examples: table-like form (one row per element) */
 .field-editor-list-example-block {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 12px;
+  padding: 8px 12px 8px;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 6px;
+}
+
+.field-editor-list-example-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.field-editor-list-example-title {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.field-editor-list-example-head .field-editor-icon-btn {
+  width: 36px; /* same column as the × inside each element box */
+  height: 28px;
+  margin: 0;
+}
+
+.field-editor-list-example-block .field-editor-add-btn {
+  margin-left: -8px; /* line the plus up with the inputs' left edge */
 }
 
 .field-editor-element-rows {
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-
-.field-editor-element-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
 }
 
 .field-editor-element-input-wrap {
@@ -8182,60 +8275,6 @@ body.wd-row-resizing {
   line-height: 1.5;
   overflow-y: hidden;
   resize: none;
-}
-
-.field-editor-del-element {
-  flex-shrink: 0;
-  padding: 4px 10px;
-  font-size: 12px;
-  line-height: 1.2;
-  color: var(--text-muted);
-  background: none;
-  border: 1px solid var(--border);
-  cursor: pointer;
-}
-
-.field-editor-del-element:hover {
-  color: var(--text);
-  background: var(--hover);
-}
-
-.field-editor-list-example-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding-top: 4px;
-  border-top: 1px solid var(--border);
-}
-
-/* 覆盖 .btn，与 Delete list 同风格小按钮 */
-.field-editor-list-example-actions .field-editor-add-element {
-  padding: 4px 10px;
-  font-size: 12px;
-  color: var(--text-muted);
-  background: none;
-  border: 1px solid var(--border);
-}
-
-.field-editor-list-example-actions .field-editor-add-element:hover {
-  color: var(--text);
-  background: var(--hover);
-}
-
-.field-editor-del-example {
-  padding: 4px 10px;
-  font-size: 12px;
-  line-height: 1.2;
-  color: var(--text-muted);
-  background: none;
-  border: 1px solid var(--border);
-  cursor: pointer;
-}
-
-.field-editor-del-example:hover {
-  color: var(--text);
-  background: var(--hover);
 }
 
 .modal-panel--section-editor .btn {

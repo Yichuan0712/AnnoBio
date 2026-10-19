@@ -203,7 +203,7 @@ function makeRuleMatchesRow({ embeddingCosineMap, conceptIdMap, originalInputRow
       return gtValsRaw.some((gtValue) => stringsMatchSemanticAlign(runValRaw, gtValue));
     }
     if (matchType === 'exact' && medicalConceptSource(flags)) {
-      return gtValsRaw.some((gtValue) => conceptPairMatches(runValRaw, gtValue, conceptIdMap));
+      return gtValsRaw.some((gtValue) => conceptPairMatches(runValRaw, gtValue, conceptIdMap, medicalConceptSource(flags)));
     }
 
     const runVal = normalizeForMatch(runValRaw, flags, false);
