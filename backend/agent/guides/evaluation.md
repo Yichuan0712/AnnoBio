@@ -1,5 +1,15 @@
 # Evaluation with Evaluate nodes
 
+String Match options include HGNC (human genes), PubChem (compounds), and Ontology with GO,
+ChEBI or MONDO, alongside RxNorm, MeSH and Semantic. HGNC/PubChem/Ontology compare uniquely
+resolved standard IDs, not search rankings. Ambiguous names do not match; a service failure
+fails the evaluation and must not be explained as an extraction error. HGNC is human-only;
+PubChem preserves distinct CIDs (including different salts/stereoisomers).
+For flat proposals use match: {hgnc: true}, {pubchem: true}, or {ontology: "go" | "chebi" | "mondo"}.
+For rule_tree use hgncMatch/pubchemMatch/ontologyMatch booleans and ontologySource in matchFlags.
+Rules execution reports actual lookup and comparison progress. Results and metrics appear together
+only after the complete attempt succeeds; the prior completed evaluation remains visible meanwhile.
+
 ## What an Evaluate node needs
 
 - An upstream Generate with results.

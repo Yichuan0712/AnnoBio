@@ -1,8 +1,10 @@
 from pathlib import Path
 import base64
+import asyncio
 import concurrent.futures
 import json
 import os
+import queue
 import re
 import subprocess
 import sys
@@ -855,7 +857,8 @@ def api_embeddings_pair_similarities(body: EmbeddingPairSimRequest):
 
 class TerminologyNormalizeRequest(BaseModel):
     terms: list[str] = Field(default_factory=list)
-    source: str = Field(default="auto")  # 'auto' | 'rxnorm' | 'mesh'
+    source: str = Field(default="auto")
+    stream: bool = False
 
 
 class TerminologyNormalizeResponse(BaseModel):
@@ -865,11 +868,9 @@ class TerminologyNormalizeResponse(BaseModel):
 @app.post("/api/terminology/normalize", response_model=TerminologyNormalizeResponse)
 def api_terminology_normalize(body: TerminologyNormalizeRequest):
     """
-    Batch-resolve free-text medical terms to a canonical concept id (RxNorm/MeSH), used by
-    the Score node's "Medical concept match" flags. Unlike embeddings, each of these is a
-    real external network call with no batch endpoint on either service, so this is backed
-    by an on-disk cache + a small thread pool (see terminology_client.py) rather than one
-    fast local model call -- capped lower than the embeddings endpoint accordingly.
+    Resolve names and supported IDs for Evaluate's terminology Match options. Queries use
+    an on-disk cache and bounded workers. Optional NDJSON streaming reports each completed
+    lookup; service errors are explicit and never converted into cached mismatches.
     """
     from terminology_client import MEDICAL_CONCEPT_MATCH_SOURCES, resolve_concepts_bulk
 
@@ -886,12 +887,42 @@ def api_terminology_normalize(body: TerminologyNormalizeRequest):
             raise HTTPException(status_code=400, detail="Each term must be at most 2000 characters")
 
     settings = _load_settings()
-    results = resolve_concepts_bulk(
-        terms,
-        source=source,
-        ncbi_api_key=(settings.get("ncbi_api_key") or "").strip(),
-        ncbi_email=(settings.get("ncbi_email") or "").strip(),
-    )
+    kwargs = dict(source=source, ncbi_api_key=(settings.get("ncbi_api_key") or "").strip(),
+                  ncbi_email=(settings.get("ncbi_email") or "").strip())
+    if body.stream:
+        events = queue.Queue()
+        cancelled = threading.Event()
+
+        def produce():
+            try:
+                resolve_concepts_bulk(terms, **kwargs, cancelled=cancelled.is_set,
+                    on_progress=lambda term, result: events.put({"type": "result", "term": term, "result": result}))
+                events.put({"type": "done"})
+            except Exception as error:
+                _safe_print(f"[Terminology] {source}: {error}")
+                events.put({"type": "error", "error": f"{source.upper()} lookup failed. Please retry."})
+
+        async def stream_results():
+            threading.Thread(target=produce, daemon=True).start()
+            try:
+                while True:
+                    try:
+                        event = await asyncio.to_thread(events.get, True, 0.5)
+                    except queue.Empty:
+                        continue
+                    yield json.dumps(event, ensure_ascii=False) + "\n"
+                    if event["type"] in ("done", "error"):
+                        break
+            finally:
+                cancelled.set()
+
+        return StreamingResponse(stream_results(), media_type="application/x-ndjson",
+                                 headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
+    try:
+        results = resolve_concepts_bulk(terms, **kwargs)
+    except Exception as error:
+        _safe_print(f"[Terminology] {source}: {error}")
+        raise HTTPException(status_code=503, detail=f"{source.upper()} lookup failed. Please retry.") from error
     return TerminologyNormalizeResponse(results=results)
 
 

@@ -106,7 +106,7 @@ export function evaluateScoreTree(node, runRowIndex, gtRowIndex, resultsByIndex,
  * @param {function(object, number, number, Map, object, unknown[], object): boolean} ctx.ruleMatchesRow
  * @param {function(object, string, number, object, unknown[]): string} [ctx.getRunValue] - run cell value; required for per-band output greedy (rowIndex = run row_index).
  */
-export function computeGreedyRunToGtPairing(ctx) {
+function* pairingSteps(ctx) {
   const { inputRoot, outputRoot, results, runWs, gtContent, outputFields, ruleMatchesRow, getRunValue } = ctx;
   const resultsByIndex = new Map();
   (results || []).forEach((r) => {
@@ -130,8 +130,13 @@ export function computeGreedyRunToGtPairing(ctx) {
   const gtUsed = new Array(gtCount).fill(false);
 
   const pairs = [];
+  const workTotal = runRowIndices.length + 1;
+  let completed = 0, comparisons = 0;
+  yield { completed, total: workTotal };
   for (const i of runRowIndices) {
     for (let j = 0; j < gtCount; j++) {
+      if (comparisons && comparisons % 256 === 0) yield { completed, total: workTotal };
+      comparisons++;
       if (inputLeaves.length > 0) {
         const inputOk = inputLeaves.every((rule) =>
           ruleMatchesRow(rule, i, j, resultsByIndex, runWs, outputFields, gtContent),
@@ -154,6 +159,8 @@ export function computeGreedyRunToGtPairing(ctx) {
       }
       if (score > 0) pairs.push({ i, j, score, vec });
     }
+    completed++;
+    yield { completed, total: workTotal };
   }
   if (typeof getRunValue === 'function') {
     const bandOfRun = new Map();
@@ -191,6 +198,7 @@ export function computeGreedyRunToGtPairing(ctx) {
     matched.push(idx < runCount && runToGt[idx] >= 0);
   }
   const matchedCount = runToGt.slice(0, runCount).filter((jj) => jj >= 0).length;
+  yield { completed: workTotal, total: workTotal };
   return {
     runToGt,
     matched,
@@ -198,4 +206,28 @@ export function computeGreedyRunToGtPairing(ctx) {
     total: scoringResults.length,
     runCount,
   };
+}
+
+export function computeGreedyRunToGtPairing(ctx) {
+  const steps = pairingSteps(ctx);
+  for (;;) {
+    const step = steps.next();
+    if (step.done) return step.value;
+  }
+}
+
+/** Same pairing decisions, with cooperative painting/cancellation during large rules runs. */
+export async function computeGreedyRunToGtPairingAsync(ctx, { signal, onProgress } = {}) {
+  const steps = pairingSteps(ctx);
+  let lastPaint = 0;
+  for (;;) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    const step = steps.next();
+    if (step.done) return step.value;
+    onProgress?.(step.value.completed, step.value.total);
+    if (Date.now() - lastPaint >= 16) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+      lastPaint = Date.now();
+    }
+  }
 }

@@ -15,7 +15,7 @@ import { attachModalPaneCycle } from './paneToggleButton.js';
 import { executionIdleLabel } from './executionResumeState.js';
 import { showExecutionError } from './executionErrorPanel.js';
 import { buildMatchGtRowDict, buildMatchRunRowInputDict, buildMatchRunRowOutputDict } from './scoreCodeRunClient.js';
-import { computeGreedyRunToGtPairing, flattenScoreRules, isScoreInputSideRuleKey } from './scoreRunGtPairing.js';
+import { computeGreedyRunToGtPairing, computeGreedyRunToGtPairingAsync, flattenScoreRules, isScoreInputSideRuleKey } from './scoreRunGtPairing.js';
 import {
   parseScoreMappingBundle,
   serializeScoreMappingBundle,
@@ -41,6 +41,8 @@ import {
   conceptPairMatches,
   prefetchConceptIdMap,
   medicalConceptSource,
+  collectEmbeddingPairs,
+  collectConceptTerms,
 } from './scoreMatchPrimitives.js';
 /* Re-exported so existing `import { ... } from './scoreDetailModal.js'` call sites (workflowCanvas.js,
  * scoreOutputGtMatcher.js) don't need to change after these moved to scoreMatchPrimitives.js. */
@@ -501,6 +503,11 @@ const NUMERIC_COMPARE_MODES = [
 const MEDICAL_CONCEPT_SOURCE_LABELS = {
   rxnorm: 'RxNorm (drug name)',
   mesh: 'MeSH (diagnosis / condition)',
+  hgnc: 'HGNC (human gene)',
+  pubchem: 'PubChem (compound)',
+  go: 'Ontology: GO',
+  chebi: 'Ontology: ChEBI',
+  mondo: 'Ontology: MONDO',
 };
 
 /** Session-only: (outputKey + '\t' + gtColumn) -> { matchType, matchFlags }. Not persisted. */
@@ -1295,7 +1302,7 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
       return gtValsRaw.some((g) => stringsMatchSemanticAlign(runValRaw, g));
     }
     if (matchType === 'exact' && medicalConceptSource(flags)) {
-      return gtValsRaw.some((g) => conceptPairMatches(runValRaw, g, scoreConceptIdMap));
+      return gtValsRaw.some((g) => conceptPairMatches(runValRaw, g, scoreConceptIdMap, medicalConceptSource(flags)));
     }
     const runVal = normalizeForMatch(runValRaw, flags, false);
     return gtValsRaw.some((g) => {
@@ -2029,6 +2036,12 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
                 <label class="rule-editor-flag-label"><input type="checkbox" id="rule-editor-embedding-similarity-cb" class="rule-editor-flag-cb rule-editor-embedding-similarity-cb" ${flags.embeddingSimilarity ? 'checked' : ''} aria-label="Semantic match using local fast embedding model (MiniLM via backend)" />Semantic</label>
                 <label class="rule-editor-flag-label"><input type="checkbox" id="rule-editor-rxnorm-cb" class="rule-editor-flag-cb rule-editor-rxnorm-cb" ${flags.rxnormMatch ? 'checked' : ''} aria-label="Drug name match: normalize brand/generic drug names via RxNorm before comparing" />RxNorm (drug name)</label>
                 <label class="rule-editor-flag-label"><input type="checkbox" id="rule-editor-mesh-cb" class="rule-editor-flag-cb rule-editor-mesh-cb" ${flags.meshMatch ? 'checked' : ''} aria-label="Diagnosis/condition match: normalize synonyms via MeSH before comparing" />MeSH (diagnosis / condition)</label>
+                <label class="rule-editor-flag-label"><input type="checkbox" id="rule-editor-hgnc-cb" class="rule-editor-flag-cb" ${flags.hgncMatch ? 'checked' : ''} />HGNC (human gene)</label>
+                <label class="rule-editor-flag-label"><input type="checkbox" id="rule-editor-pubchem-cb" class="rule-editor-flag-cb" ${flags.pubchemMatch ? 'checked' : ''} />PubChem (compound)</label>
+                <label class="rule-editor-flag-label"><input type="checkbox" id="rule-editor-ontology-cb" class="rule-editor-flag-cb" ${flags.ontologyMatch ? 'checked' : ''} />Ontology</label>
+                <select id="rule-editor-ontology-source" class="dataset-meta-input rule-editor-select" aria-label="Ontology vocabulary" ${flags.ontologyMatch ? '' : 'disabled'}>
+                  ${[['go', 'GO (function / process / component)'], ['chebi', 'ChEBI (chemical entity)'], ['mondo', 'MONDO (disease)']].map(([value, label]) => `<option value="${value}" ${flags.ontologySource === value ? 'selected' : ''}>${label}</option>`).join('')}
+                </select>
               </div>
             </div>
             <div class="dataset-meta-field rule-editor-numeric-wrap" id="rule-editor-numeric-wrap" style="display:none;">
@@ -2108,6 +2121,12 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
       if (embedCb) embedCb.disabled = !showStr;
       if (rxnormCb) rxnormCb.disabled = !showStr;
       if (meshCb) meshCb.disabled = !showStr;
+      for (const source of ['hgnc', 'pubchem', 'ontology']) {
+        const cb = editorEl.querySelector(`#rule-editor-${source}-cb`);
+        if (cb) cb.disabled = !showStr;
+      }
+      const ontologySelect = editorEl.querySelector('#rule-editor-ontology-source');
+      if (ontologySelect) ontologySelect.disabled = !showStr || !editorEl.querySelector('#rule-editor-ontology-cb')?.checked;
       editorEl.querySelectorAll('.rule-editor-flag-cb[data-flag]').forEach((cb) => {
         cb.disabled = !showStr;
       });
@@ -2141,13 +2160,19 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
     const rxnormCbEl = editorEl.querySelector('#rule-editor-rxnorm-cb');
     const meshCbEl = editorEl.querySelector('#rule-editor-mesh-cb');
     /** "Smart match" modes are mutually exclusive with each other and with the plain flag checkboxes. */
-    const smartModeCbEls = [fuzzyBigramCbEl, embeddingSimilarityCbEl, rxnormCbEl, meshCbEl].filter(Boolean);
+    const smartModeCbEls = [fuzzyBigramCbEl, embeddingSimilarityCbEl, rxnormCbEl, meshCbEl,
+      ...['hgnc', 'pubchem', 'ontology'].map(source => editorEl.querySelector(`#rule-editor-${source}-cb`))].filter(Boolean);
+    editorEl.querySelector('#rule-editor-ontology-source')?.addEventListener('change', () => {
+      clearError();
+      if (isEdit) persistEdit();
+    });
     smartModeCbEls.forEach((cbEl) => {
       cbEl.addEventListener('change', () => {
         if (cbEl.checked) {
           smartModeCbEls.forEach((other) => { if (other !== cbEl) other.checked = false; });
           editorEl.querySelectorAll('.rule-editor-flag-cb[data-flag]').forEach((fc) => { fc.checked = false; });
         }
+        syncStringModeFlagInputsDisabled();
         clearError();
         if (isEdit) persistEdit();
       });
@@ -2157,6 +2182,7 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
         if (cb.checked) {
           smartModeCbEls.forEach((other) => { other.checked = false; });
         }
+        syncStringModeFlagInputsDisabled();
         clearError();
         if (isEdit) persistEdit();
       });
@@ -2186,6 +2212,10 @@ export function openScoreDetailModal({ node, revealNode = () => {}, getWorkingSe
       matchFlags.embeddingSimilarity = matchType === 'exact' && !!(embedCb && embedCb.checked);
       matchFlags.rxnormMatch = matchType === 'exact' && !!(rxnormCb && rxnormCb.checked);
       matchFlags.meshMatch = matchType === 'exact' && !!(meshCb && meshCb.checked);
+      for (const source of ['hgnc', 'pubchem', 'ontology']) {
+        matchFlags[`${source}Match`] = matchType === 'exact' && !!editorEl.querySelector(`#rule-editor-${source}-cb`)?.checked;
+      }
+      matchFlags.ontologySource = editorEl.querySelector('#rule-editor-ontology-source')?.value || 'go';
       flagCbs.forEach((cb) => {
         const key = cb.getAttribute('data-flag');
         if (key && (key === 'contains' || key === 'ignoreCase' || key === 'ignoreSymbols' || key === 'ignoreWhitespace')) matchFlags[key] = !!cb.checked;
@@ -3663,7 +3693,7 @@ export function buildCodeMatchTableData(result) {
  * @param {{ node: HTMLElement, getRunResults: () => { results, outputFields }, getRunWorkingSetContent: () => { headers, rows }, getGroundTruthContent: (wsNodeId: string) => { headers, rows }, getGroundTruthHeaders: (wsNodeId: string) => string[], getRunResultColumns?: () => Array<{ key: string, label: string }> }} options
  * @returns {Promise<{ headers: string[], rows: string[][] } | null>}
  */
-export async function getScoreExportData({ node, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getGroundTruthHeaders, getRunResultColumns, captureEvaluationState = false }) {
+export async function getScoreExportData({ node, getRunResults, getRunWorkingSetContent, getGroundTruthContent, getGroundTruthHeaders, getRunResultColumns, captureEvaluationState = false, signal, onProgress }) {
   if (!node) return null;
   const selectedNodeId = (node.dataset.scoreGroundTruthId || '').trim();
   if (!selectedNodeId) return null;
@@ -3747,7 +3777,7 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
       return gtValsRaw.some((g) => stringsMatchSemanticAlign(runValRaw, g));
     }
     if (matchType === 'exact' && medicalConceptSource(flags)) {
-      return gtValsRaw.some((g) => conceptPairMatches(runValRaw, g, exportConceptIdMap));
+      return gtValsRaw.some((g) => conceptPairMatches(runValRaw, g, exportConceptIdMap, medicalConceptSource(flags)));
     }
     const runVal = normalizeForMatch(runValRaw, flags, false);
     return gtValsRaw.some((g) => {
@@ -3808,39 +3838,37 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
   const resultsByIndex = new Map();
   (results || []).forEach((r) => { resultsByIndex.set(r.row_index, r); });
   const runRowIndices = [...new Set((results || []).map((r) => r.row_index))];
+  const lookupOptions = { root: scoreBundleRootsForEmbeddingWalk(inputRoot, outputRoot), results,
+    outputFields, runWs, gtContent, getRunValue, getGtValue };
+  const embeddingPairs = collectEmbeddingPairs(lookupOptions);
+  const conceptTerms = collectConceptTerms(lookupOptions);
+  const conceptCount = [...conceptTerms.values()].reduce((sum, terms) => sum + terms.size, 0);
+  const pairingWork = runRowIndices.length + 1;
+  // Count real lookup/comparison work plus result preparation and final history persistence.
+  const workTotal = embeddingPairs.length + conceptCount + pairingWork + 2;
+  const progress = (completed, stage) => onProgress?.(completed, workTotal, stage);
+  const checkCancelled = () => { if (signal?.aborted) throw new DOMException('Aborted', 'AbortError'); };
+  checkCancelled();
+  progress(0, 'Preparing matches');
   exportEmbeddingCosineMap = new Map();
-  if (rulesFlat.some((r) => getMatchFlags(r).embeddingSimilarity)) {
-    try {
-      exportEmbeddingCosineMap = await prefetchEmbeddingCosineMap(API_BASE, {
-        root: scoreBundleRootsForEmbeddingWalk(inputRoot, outputRoot),
-        results,
-        outputFields,
-        runWs,
-        gtContent,
-        getRunValue,
-        getGtValue,
-      });
-    } catch (_) {
-      exportEmbeddingCosineMap = new Map();
-    }
+  if (embeddingPairs.length) {
+    exportEmbeddingCosineMap = await prefetchEmbeddingCosineMap(API_BASE, {
+      ...lookupOptions, pairs: embeddingPairs, signal,
+      onProgress: onProgress ? completed => progress(completed, 'Comparing semantic similarity') : undefined,
+    });
   }
   exportConceptIdMap = new Map();
-  if (rulesFlat.some((r) => medicalConceptSource(getMatchFlags(r)))) {
-    try {
-      exportConceptIdMap = await prefetchConceptIdMap(API_BASE, {
-        root: scoreBundleRootsForEmbeddingWalk(inputRoot, outputRoot),
-        results,
-        outputFields,
-        runWs,
-        gtContent,
-        getRunValue,
-        getGtValue,
-      });
-    } catch (_) {
-      exportConceptIdMap = new Map();
-    }
+  if (conceptCount) {
+    exportConceptIdMap = await prefetchConceptIdMap(API_BASE, {
+      ...lookupOptions, termsBySource: conceptTerms, signal,
+      onProgress: onProgress ? completed => progress(embeddingPairs.length + completed, 'Resolving entity names') : undefined,
+    });
   }
-  const { runToGt } = computeMatchPerRow(inputRoot, outputRoot, results, outputFields, runWs, gtContent);
+  checkCancelled();
+  const pairingOffset = embeddingPairs.length + conceptCount;
+  const { runToGt } = await computeGreedyRunToGtPairingAsync({ inputRoot, outputRoot, results, outputFields,
+    runWs, gtContent, ruleMatchesRow, getRunValue }, { signal,
+    onProgress: completed => progress(pairingOffset + completed, 'Matching rows') });
   const gtToRun = new Array(gtRows.length).fill(-1);
   for (let i = 0; i < (runToGt || []).length; i++) {
     if (runToGt[i] >= 0) gtToRun[runToGt[i]] = i;
@@ -3943,6 +3971,8 @@ export async function getScoreExportData({ node, getRunResults, getRunWorkingSet
     }
     return parts.map((v) => (v === null || v === undefined ? '' : String(v)));
   });
+  checkCancelled();
+  progress(workTotal - 1, 'Preparing evaluation results');
   if (!captureEvaluationState) return { headers, rows };
   // Retain the individual comparisons used by any displayed row, including short-circuited leaves.
   for (const d of descriptors) {

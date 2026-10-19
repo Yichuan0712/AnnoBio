@@ -58,9 +58,8 @@ async def proxy_request(request: Request, user: dict) -> Response:
         await upstream.aclose()
         await client.aclose()
 
-    # Server-sent events (the Agent's streamed turns) are relayed chunk by chunk; buffering them
-    # would hold every token back until the model finished.
-    if upstream.headers.get("content-type", "").startswith("text/event-stream"):
+    # Relay Agent tokens and entity-matching progress without buffering until completion.
+    if upstream.headers.get("content-type", "").startswith(("text/event-stream", "application/x-ndjson")):
         return StreamingResponse(
             upstream.aiter_bytes(),
             status_code=upstream.status_code,

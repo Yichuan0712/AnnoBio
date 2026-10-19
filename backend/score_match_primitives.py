@@ -28,6 +28,10 @@ DEFAULT_MATCH_FLAGS: dict[str, Any] = {
     "embeddingSimilarity": False,
     "rxnormMatch": False,
     "meshMatch": False,
+    "hgncMatch": False,
+    "pubchemMatch": False,
+    "ontologyMatch": False,
+    "ontologySource": "go",
     "contains": False,
     "ignoreCase": False,
     "ignoreSymbols": False,
@@ -77,25 +81,15 @@ def canonicalize_match_flags(f: dict[str, Any] | None) -> dict[str, Any]:
     dec = math.floor(dec) if dec is not None else 2
     dec = max(0, min(20, dec))
 
-    embedding_similarity = bool(merged.get("embeddingSimilarity"))
-    semantic_align = bool(merged.get("semanticAlign"))
-    rxnorm_match = bool(merged.get("rxnormMatch"))
-    mesh_match = bool(merged.get("meshMatch"))
-    # Only one "smart match" mode at a time -- same cascading precedence the UI's mutual-exclusion enforces:
-    # embedding > semantic > rxnorm > mesh.
-    if embedding_similarity and semantic_align:
-        semantic_align = False
-    if (embedding_similarity or semantic_align) and rxnorm_match:
-        rxnorm_match = False
-    if (embedding_similarity or semantic_align or rxnorm_match) and mesh_match:
-        mesh_match = False
-    soft_string = embedding_similarity or semantic_align or rxnorm_match or mesh_match
+    smart = {}
+    soft_string = False
+    for name in ("embeddingSimilarity", "semanticAlign", "rxnormMatch", "meshMatch", "hgncMatch", "pubchemMatch", "ontologyMatch"):
+        smart[name] = not soft_string and bool(merged.get(name))
+        soft_string = soft_string or smart[name]
 
     return {
-        "semanticAlign": semantic_align,
-        "embeddingSimilarity": embedding_similarity,
-        "rxnormMatch": rxnorm_match,
-        "meshMatch": mesh_match,
+        **smart,
+        "ontologySource": merged.get("ontologySource") if merged.get("ontologySource") in ("go", "chebi", "mondo") else "go",
         "contains": False if soft_string else bool(merged.get("contains")),
         "ignoreCase": False if soft_string else bool(merged.get("ignoreCase")),
         "ignoreSymbols": False if soft_string else bool(merged.get("ignoreSymbols")),
@@ -113,6 +107,12 @@ def medical_concept_source(flags: dict[str, Any]) -> str | None:
         return "rxnorm"
     if flags.get("meshMatch"):
         return "mesh"
+    if flags.get("hgncMatch"):
+        return "hgnc"
+    if flags.get("pubchemMatch"):
+        return "pubchem"
+    if flags.get("ontologyMatch"):
+        return flags.get("ontologySource") or "go"
     return None
 
 
@@ -316,7 +316,7 @@ def build_embedding_cosine_map_via_local_model(pairs: list[tuple[str, str]]) -> 
     return {_cosine_map_key(a, b): c for (a, b), c in zip(unique_pairs, cosines)}
 
 
-def concept_pair_matches(run_val_raw: Any, gt_val_raw: Any, concept_id_map: dict[str, dict | None]) -> bool:
+def concept_pair_matches(run_val_raw: Any, gt_val_raw: Any, concept_id_map: dict[str, dict | None], source: str | None = None) -> bool:
     """
     Unlike embedding_pair_matches, this looks each side up *individually* (not by a pair key)
     since concept normalization is a per-value operation, not a pairwise one.
@@ -327,9 +327,16 @@ def concept_pair_matches(run_val_raw: Any, gt_val_raw: Any, concept_id_map: dict
         return True
     if len(a) == 0 or len(b) == 0:
         return False
-    ra = concept_id_map.get(a)
-    rb = concept_id_map.get(b)
+    def lookup(term):
+        key = json.dumps([source, term], ensure_ascii=False, separators=(",", ":"))
+        return concept_id_map[key] if source and key in concept_id_map else concept_id_map.get(term)
+    ra = lookup(a)
+    rb = lookup(b)
     if not ra or not rb:
+        return False
+    if ra.get("status") == "ambiguous" or rb.get("status") == "ambiguous":
+        return False
+    if ra.get("source") and rb.get("source") and ra["source"] != rb["source"]:
         return False
     concept_a = ra.get("concept_id")
     concept_b = rb.get("concept_id")
@@ -354,4 +361,5 @@ def build_concept_id_map(terms: list[str], source: str = "auto") -> dict[str, di
             unique_terms.append(t)
     if not unique_terms:
         return {}
-    return resolve_concepts_bulk(unique_terms, source=source)
+    results = resolve_concepts_bulk(unique_terms, source=source)
+    return {json.dumps([source, term], ensure_ascii=False, separators=(",", ":")): result for term, result in results.items()}
