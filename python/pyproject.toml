@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "annobio-optimize"
+version = "0.1.0"
+description = "Error-guided local prompt optimization with user-defined prediction and evaluation"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+original = ["rapidfuzz>=3.0.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+annobio_optimize = ["py.typed"]
