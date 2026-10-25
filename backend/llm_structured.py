@@ -35,7 +35,16 @@ class TruncatedReply(ValueError):
 
 
 class StructuredOutputError(ValueError):
-    """The reply still did not parse or validate after the correction turn."""
+    """The reply still did not parse or validate after the correction turn. `ignored` is True when
+    neither reply held any JSON: the endpoint accepted the mode's parameters but ignored them."""
+
+    def __init__(self, message: str, *, ignored: bool = False):
+        super().__init__(message)
+        self.ignored = ignored
+
+
+class NoJsonReply(ValueError):
+    """The reply held no JSON value at all."""
 
 
 # ---------- reading replies ----------
@@ -117,7 +126,7 @@ def parse_reply(value: Any, array_key: str | None = None) -> Any:
             text = m.group(1).strip()
         openers = [i for i in (text.find("{"), text.find("[") if array_key else -1) if i != -1]
         if not openers:
-            raise ValueError("The reply contained no JSON." + (f" It said: {text[:200]}" if text else ""))
+            raise NoJsonReply("The reply contained no JSON." + (f" It said: {text[:200]}" if text else ""))
         found = first_json_value(text, text[min(openers)])
         data = json.loads(found)
     if array_key:
@@ -264,15 +273,19 @@ def build_request(mode: str, messages: list[dict], schema: dict) -> dict:
 # ---------- errors ----------
 
 # Errors about the input itself are never a reason to try another mode: switching would not help,
-# and the prompt-only modes must not be reached by dropping an image the model refused.
+# and the prompt-only modes must not be reached by dropping an image the model refused. Phrases, not
+# single words, so a model named "...-vision" is not mistaken for an image error.
 _INPUT_ERROR_MARKERS = (
-    "image", "vision", "pdf", "file_data", "file input", "context length", "context window",
-    "maximum context", "too long", "too many tokens", "max_tokens",
+    "image input", "image content", "image_url", "images are not", "vision is not", "pdf input",
+    "file input", "file_data", "context length", "context window", "maximum context", "too long",
+    "too many tokens",
 )
-_CAPABILITY_MARKERS = (
+# A rejection counts only when it names one of the features the modes differ in; "not supported" alone
+# is also what "User location is not supported" or "The model `x` is not supported" say.
+_FEATURE_MARKERS = (
     "response_format", "response format", "json_schema", "json schema", "json_object", "json mode",
     "structured output", "tool_choice", "tools", "tool use", "tool call", "function call", "function_call",
-    "functions", "not supported", "unsupported", "does not support", "no endpoints found",
+    "functions",
 )
 
 
@@ -282,15 +295,16 @@ def classify_error(exc: BaseException) -> str:
     name = type(exc).__name__
     status = _get(exc, "status_code")
     text = str(_get(exc, "message") or exc).lower()
+    if name == "UnsupportedParamsError":
+        return "capability"  # LiteLLM itself refused a parameter of this mode before sending
     if any(marker in text for marker in _INPUT_ERROR_MARKERS):
         return "fatal"
-    if name == "UnsupportedParamsError":
+    # OpenRouter answers 404 "No endpoints found that support ..." when no route takes a parameter of
+    # this mode (but "No endpoints found matching your data policy" is about the account).
+    if status == 404 and "no endpoints found that support" in text:
         return "capability"
-    # OpenRouter answers 404 "No endpoints found that support ..." when no route takes the parameter.
-    rejected = status in (400, 422) or (status is None and name == "BadRequestError") or (
-        status == 404 and "no endpoints found" in text
-    )
-    if rejected and any(marker in text for marker in _CAPABILITY_MARKERS):
+    rejected = status in (400, 422) or (status is None and name == "BadRequestError")
+    if rejected and any(marker in text for marker in _FEATURE_MARKERS):
         return "capability"
     return "fatal"
 
@@ -320,16 +334,18 @@ class ModeMemory:
                 self._modes.pop(key, None)
 
     def learn(self, key: Any, mode: str, detail: str = "") -> None:
+        # on_change runs under the lock, so two runs lowering the same model report in the order
+        # they changed it; changes are rare (a model's first use, or a mode rejected).
         with self._lock:
             current = self._modes.get(key)
             if current is not None and MODES.index(mode) <= MODES.index(current):
                 return
             self._modes[key] = mode
-        if self.on_change is not None:
-            try:
-                self.on_change(key, mode, detail)
-            except Exception:
-                pass  # remembering is best effort; the call itself succeeded
+            if self.on_change is not None:
+                try:
+                    self.on_change(key, mode, detail)
+                except Exception:
+                    pass  # remembering is best effort; the call itself succeeded
 
 
 # ---------- running ----------
@@ -389,7 +405,9 @@ def run(
                 send, mode, request, response, validate, array_key, max_tokens,
             )
         except StructuredOutputError as e:
-            if probe and mode != MODES[-1]:
+            # A model checked on purpose must follow the mode; a run moves on only from a mode
+            # whose replies held no JSON at all, never from one row the model answered wrongly.
+            if (probe or e.ignored) and mode != MODES[-1]:
                 tried.append({"mode": mode, "error": str(e)[:500]})
                 continue
             raise
@@ -402,6 +420,7 @@ def run(
 
 def _validated(send, mode, request, response, validate, array_key, max_tokens):
     """(output, raw text, repaired, response): validate the reply, with one correction turn."""
+    _refuse_on_refusal(response)
     value, raw_text, finish = read_reply(mode, response)
     if finish == "length":
         raise _truncated(max_tokens)
@@ -409,11 +428,24 @@ def _validated(send, mode, request, response, validate, array_key, max_tokens):
         return validate(parse_reply(value, array_key)), raw_text, False, response
     except Exception as first_error:
         correction = _correction_request(mode, request, raw_text, first_error)
+        first_had_json = not isinstance(first_error, NoJsonReply)
     response = send(correction)
+    _refuse_on_refusal(response)
     value, raw_text, finish = read_reply(mode, response)
     if finish == "length":
         raise _truncated(max_tokens)
     try:
         return validate(parse_reply(value, array_key)), raw_text, True, response
     except Exception as e:
-        raise StructuredOutputError(f"The model's reply did not match the expected output: {e}") from e
+        raise StructuredOutputError(
+            f"The model's reply did not match the expected output: {e}",
+            ignored=not first_had_json and isinstance(e, NoJsonReply),
+        ) from e
+
+
+def _refuse_on_refusal(response: Any) -> None:
+    """A refusal (OpenAI's message.refusal) is the model's answer, not a sign the mode is unsupported."""
+    choices = _get(response, "choices") or []
+    refusal = _get(_get(choices[0], "message") or {}, "refusal") if choices else None
+    if refusal:
+        raise StructuredOutputError(f"The model refused: {refusal}")

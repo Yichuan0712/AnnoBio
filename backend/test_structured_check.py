@@ -138,6 +138,15 @@ class StoredCheckTest(unittest.TestCase):
         main._seed_structured_modes()
         self.assertEqual(self.memory.get(llm.structured_mode_key("openai", "gpt-5", "")), "json_object")
 
+    def test_a_mode_a_credential_already_has_does_not_rewrite_the_file(self):
+        items = json.loads(self.file.read_text(encoding="utf-8"))
+        items[2]["structured_check"] = {"ok": True, "mode": "json_schema", "model": "gpt-5", "detail": ""}
+        self.file.write_text(json.dumps(items), encoding="utf-8")
+        with mock.patch.object(main, "_update_credentials") as update:
+            main._store_mode_found_in_run(llm.structured_mode_key("openai", "gpt-5", ""), "json_schema", "")
+            main._store_mode_found_in_run(llm.structured_mode_key("openai", "other-model", ""), "tool", "")
+        update.assert_not_called()
+
     def test_a_mode_lowered_during_a_run_is_stored_on_every_credential_of_that_model(self):
         rejected = litellm.BadRequestError(message="response_format json_schema is unavailable", model="m", llm_provider="deepseek")
         fake = completion_answering(rejected, reply(tool_arguments='{"name": "H"}'))

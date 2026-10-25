@@ -168,6 +168,9 @@ class ClassifyErrorTest(unittest.TestCase):
             ApiError("tool_choice is not supported", 422),
             ApiError("No endpoints found that support the requested parameters", 404),
             UnsupportedParamsError("deepseek does not support parameters: ['tools']"),
+            UnsupportedParamsError("ollama does not support parameters: ['tools'], for model=llama3.2-vision"),
+            ApiError("registry.ollama.ai/library/llama3.2-vision:latest does not support tools", 400),
+            ApiError("Invalid schema for response_format 'x': 'default' is not permitted", 400),
         ):
             self.assertEqual(core.classify_error(exc), "capability", str(exc))
 
@@ -180,6 +183,10 @@ class ClassifyErrorTest(unittest.TestCase):
             ApiError("This model's maximum context length is 8192 tokens", 400),
             ApiError("Invalid request: messages[0].content must not be empty", 400),
             ApiError("Model not found", 404),
+            ApiError("User location is not supported for the API use.", 400),
+            ApiError("The model `gpt-foo` is not supported", 400),
+            ApiError("No endpoints found matching your data policy", 404),
+            ApiError("This model doesn't support the image content block that you provided.", 400),
         ):
             self.assertEqual(core.classify_error(exc), "fatal", str(exc))
 
@@ -218,10 +225,33 @@ class RunTest(unittest.TestCase):
         self.assertEqual(send.requests[1]["response_format"], {"type": "json_object"})
 
     def test_a_reply_still_wrong_after_correction_is_an_error_at_run_time(self):
-        send = FakeSend(reply(content="no json"), reply(content="still none"))
-        with self.assertRaisesRegex(core.StructuredOutputError, "no JSON"):
+        send = FakeSend(reply(content='{"rows": [{"name": 1}]}'), reply(content='{"rows": [{"name": 2}]}'))
+        with self.assertRaisesRegex(core.StructuredOutputError, "must be a string") as caught:
             run(send)
+        self.assertFalse(caught.exception.ignored)
         self.assertEqual(len(send.requests), 2)
+
+    def test_a_run_moves_on_from_a_mode_whose_replies_hold_no_json(self):
+        # The endpoint took response_format and ignored it; one wrong row must not do the same.
+        send = FakeSend(reply(content="Hydrogen and helium."), reply(content="H, He"),
+                        reply(tool_arguments='{"rows": [{"name": "H"}]}'))
+        result = run(send)
+        self.assertEqual(result["mode"], "tool")
+        self.assertEqual(result["tried"][0]["mode"], "json_schema")
+
+    def test_one_reply_with_json_keeps_the_mode(self):
+        send = FakeSend(reply(content='{"rows": [{"name": 1}]}'), reply(content="Sorry."))
+        with self.assertRaises(core.StructuredOutputError) as caught:
+            run(send)
+        self.assertFalse(caught.exception.ignored)
+
+    def test_a_refusal_is_the_answer_and_never_moves_on(self):
+        refused = {"choices": [{"message": {"content": None, "refusal": "I can't help with that."}, "finish_reason": "stop"}]}
+        send = FakeSend(refused)
+        with self.assertRaisesRegex(core.StructuredOutputError, "refused: I can't help") as caught:
+            run(send)
+        self.assertFalse(caught.exception.ignored)
+        self.assertEqual(len(send.requests), 1)
 
     def test_when_probing_a_reply_still_wrong_moves_on_to_the_next_mode(self):
         send = FakeSend(

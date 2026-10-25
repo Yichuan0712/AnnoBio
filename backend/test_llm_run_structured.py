@@ -74,6 +74,13 @@ class RunStructuredTest(unittest.TestCase):
         self.assertEqual(out, {"name": "H", "score": 1.0})
         self.assertEqual((debug["path"], debug["repaired"], debug["tried"]), ("json_schema", False, []))
 
+    def test_a_missing_string_field_gets_the_correction_turn_rather_than_a_blank(self):
+        answers = [reply('{"Name": "H", "score": 1}'), reply('{"name": "H", "score": 1}')]
+        (out, _, debug), calls = self.call(answers, response_model=ROW_MODEL, return_shape="single", return_debug=True)
+        self.assertEqual(out["name"], "H")
+        self.assertTrue(debug["repaired"])
+        self.assertIn("name", calls[1]["messages"][-1]["content"])
+
     def test_bedrock_keeps_its_key_and_region(self):
         _, calls = self.call([reply('{"rows": []}')], provider="bedrock", model="anthropic.claude-x",
                              api_key="AWS_BEARER_TOKEN_BEDROCK=tok")

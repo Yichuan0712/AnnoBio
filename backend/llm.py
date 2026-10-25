@@ -486,13 +486,14 @@ def remember_structured_mode(provider: str, model: str, base_url: str, mode: str
 
 def _coerce_prompt_json_strings(data: Any, properties: dict) -> None:
     """A reply in a mode that does not enforce the schema may put null, true/false or a number in a
-    string field; store those as text."""
+    string field; store those as text. A missing field stays missing, so validation catches it and
+    the model is asked to correct it."""
     if not isinstance(data, dict):
         return
     for key, prop in properties.items():
-        if prop.get("type") != "string":
+        if prop.get("type") != "string" or key not in data:
             continue
-        value = data.get(key)
+        value = data[key]
         if value is None:
             data[key] = ""
         elif isinstance(value, bool):

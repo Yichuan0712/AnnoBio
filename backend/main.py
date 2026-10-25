@@ -996,14 +996,20 @@ def _store_mode_found_in_run(key: tuple[str, str, str], mode: str, detail: str) 
     rejected), so Settings shows the mode runs really use."""
     found = STRUCTURED_MODE_DESCRIPTIONS.get(mode, "") + " Found during a run" + (f"; rejected: {detail[:300]}" if detail else ".")
 
+    def stale(item: dict) -> bool:
+        return _credential_mode_key(item) == key and _current_structured_check(item).get("mode") != mode
+
+    # Runs call this from worker threads; rewrite the credentials file only when a credential changes.
+    if not any(stale(item) for item in _load_credentials()):
+        return
+
     def change(items: list[dict]) -> None:
         for item in items:
-            if _credential_mode_key(item) != key or _current_structured_check(item).get("mode") == mode:
-                continue
-            item["structured_check"] = {
-                "ok": True, "mode": mode, "detail": found, "tried": [],
-                "model": _credential_model(item), "checked_at": time.time(),
-            }
+            if stale(item):
+                item["structured_check"] = {
+                    "ok": True, "mode": mode, "detail": found, "tried": [],
+                    "model": _credential_model(item), "checked_at": time.time(),
+                }
 
     _update_credentials(change)
 
