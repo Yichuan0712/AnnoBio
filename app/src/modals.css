@@ -9128,16 +9128,17 @@ body.wd-image-dragging .wd-image-thumb { cursor: grabbing; }
 
 .settings-run-params[hidden] { display: none; }
 
+/* Looks like the field labels above it (.dataset-meta-label). */
 .settings-run-params__summary {
   cursor: pointer;
   font-size: 13px;
   font-weight: 600;
+  color: var(--text-muted);
   user-select: none;
 }
 
 .settings-run-params__count {
   font-weight: 400;
-  color: var(--text-muted);
 }
 
 .settings-run-params__hint {
