@@ -731,7 +731,7 @@ export function openSettingsModal() {
                     </div>
                     <div class="review-detail-tab-panel" id="settings-panel-run" role="tabpanel" aria-labelledby="settings-tab-run" data-panel="run">
                       <div class="defaults-page-scroll">
-                          <p class="settings-tab-intro">A Generate sends its prompt to a model once per input row. Choose a model to see and change its Max tokens and Concurrency; the model chosen when you save is preselected when you create a Generate. With None chosen, they are the values for models that have none of their own. Max retries applies to every model. Running more rows at once finishes sooner but can hit the provider's rate limits. Below them are the generation parameters the chosen model takes, such as temperature.</p>
+                          <p class="settings-tab-intro">A Generate sends its prompt to a model once per input row. Choose a model to see and change its Max tokens and Concurrency; the model chosen when you save is preselected when you create a Generate. With None chosen, they are the values for models that have none of their own. Max retries applies to every model. Running more rows at once finishes sooner but can hit the provider's rate limits. Advanced parameters, such as temperature, belong to the chosen model and list only what it takes.</p>
                           <div class="defaults-row">
                             <div class="defaults-field defaults-field--full">
                               <label class="dataset-meta-label" for="settings-default-run-credential">Model</label>
@@ -752,7 +752,7 @@ export function openSettingsModal() {
                               <input type="number" id="settings-run-concurrency" class="dataset-meta-input" min="1" max="10" value="4" aria-label="Generate concurrency" />
                             </div>
                           </div>
-                          <div class="defaults-row settings-run-params" id="settings-run-params" hidden></div>
+                          <div class="settings-run-params" id="settings-run-params" hidden></div>
                       </div>
                     </div>
                     <div class="review-detail-tab-panel" id="settings-panel-review" role="tabpanel" aria-labelledby="settings-tab-review" data-panel="review">
@@ -913,6 +913,17 @@ export function openSettingsModal() {
   const runParamSpecs = new Map();
   let runParamsShown = { id: '', specs: [] };
   let runParamsRequest = 0;
+  let runParamsOpen = false; // collapsed until opened; stays as the user left it while Settings is open
+
+  /** "· 2 set" beside the collapsed heading: how many fields hold a value. */
+  function renderRunParamsCount() {
+    const count = runParamsShown.specs.filter((spec) => {
+      const field = runParamsRow.querySelector(`[data-param="${spec.name}"]`);
+      return field && paramValue(spec, field.value) != null;
+    }).length;
+    const label = runParamsRow.querySelector('.settings-run-params__count');
+    if (label) label.textContent = count ? `· ${count} set` : '';
+  }
 
   function loadRunParamSpecs(credentialId) {
     if (!runParamSpecs.has(credentialId)) {
@@ -962,11 +973,17 @@ export function openSettingsModal() {
           ${control}
         </div>`;
     }).join('');
-    runParamsRow.innerHTML = `<div class="defaults-field defaults-field--full">
-        <div class="dataset-meta-label">Generation parameters</div>
-        <p class="settings-run-params__hint">Only the parameters this model takes are listed. Leave one blank to use the model's default.</p>
-      </div>${fields}`;
+    runParamsRow.innerHTML = `<details class="settings-run-params__details"${runParamsOpen ? ' open' : ''}>
+        <summary class="settings-run-params__summary">Advanced parameters <span class="settings-run-params__count"></span></summary>
+        <p class="settings-run-params__hint">Blank uses the model's default.</p>
+        <div class="defaults-row">${fields}</div>
+      </details>`;
+    const details = runParamsRow.querySelector('details');
+    details.addEventListener('toggle', () => { runParamsOpen = details.open; });
+    details.addEventListener('input', renderRunParamsCount);
+    details.addEventListener('change', renderRunParamsCount);
     runParamsShown = { id, specs };
+    renderRunParamsCount();
     runParamsRow.hidden = false;
   }
 
@@ -1398,6 +1415,7 @@ export function openSettingsModal() {
     });
     // Factory values for the parameters are the model's own defaults.
     runParamsRow.querySelectorAll('[data-param]').forEach((field) => { field.value = ''; });
+    renderRunParamsCount();
   });
   overlay.querySelector('#settings-save')?.addEventListener('click', async () => {
     await doSave();

@@ -9119,15 +9119,29 @@ body.wd-image-dragging .wd-image-thumb { cursor: grabbing; }
   color: var(--text-muted);
 }
 
-/* Settings → Generate: the chosen model's generation parameters (runParams.js). */
-.modal-panel--defaults .defaults-row.settings-run-params {
+/* Settings → Generate: the chosen model's generation parameters (runParams.js), collapsed by default. */
+.settings-run-params {
   margin-top: 1rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
 }
 
-.modal-panel--defaults .defaults-row.settings-run-params[hidden] { display: none; }
+.settings-run-params[hidden] { display: none; }
+
+.settings-run-params__summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  user-select: none;
+}
+
+.settings-run-params__count {
+  font-weight: 400;
+  color: var(--text-muted);
+}
 
 .settings-run-params__hint {
-  margin: 2px 0 0;
+  margin: 6px 0 10px;
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-muted);
