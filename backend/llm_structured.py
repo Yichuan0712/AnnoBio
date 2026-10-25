@@ -378,14 +378,12 @@ def run(
     start_mode: str | None = None,
     array_key: str | None = None,
     max_tokens: int | None = None,
-    probe: bool = False,
 ) -> dict:
     """
     Ask for structured output, starting at `start_mode` (default: the first mode) and moving down
-    while the provider rejects the mode. `validate(data)` returns the result or raises; its error
-    text is shown to the model in the correction turn. With probe=True (checking a model on
-    purpose), a reply that still fails validation also moves on to the next mode, which finds
-    endpoints that accept a mode's parameters but ignore them.
+    while the provider rejects the mode, or while it accepts the mode but ignores it (no JSON in
+    either reply). `validate(data)` returns the result or raises; its error text is shown to the
+    model in the correction turn.
 
     Returns {"output", "mode", "repaired", "response", "raw_text", "tried": [{"mode", "error"}]}.
     """
@@ -405,9 +403,9 @@ def run(
                 send, mode, request, response, validate, array_key, max_tokens,
             )
         except StructuredOutputError as e:
-            # A model checked on purpose must follow the mode; a run moves on only from a mode
-            # whose replies held no JSON at all, never from one row the model answered wrongly.
-            if (probe or e.ignored) and mode != MODES[-1]:
+            # Move on only from a mode whose replies held no JSON at all, never from one row the
+            # model answered wrongly.
+            if e.ignored and mode != MODES[-1]:
                 tried.append({"mode": mode, "error": str(e)[:500]})
                 continue
             raise

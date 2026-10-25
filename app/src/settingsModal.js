@@ -10,7 +10,6 @@ import { fetchAgentContext } from './agent/api/agentTurnClient.js';
 import { mountPillSelect } from './pillSelect.js';
 import { attachModelIdAutocomplete } from './modelIdAutocomplete.js';
 import { PER_MODEL_FIELDS, bindModelFields, keepKnownModels } from './perModelSettings.js';
-import { structuredModePill, structuredModeStatus } from './structuredModeStatus.js';
 
 const API_BASE = BACKEND_API_BASE;
 
@@ -731,17 +730,13 @@ export function openSettingsModal() {
                     </div>
                     <div class="review-detail-tab-panel" id="settings-panel-run" role="tabpanel" aria-labelledby="settings-tab-run" data-panel="run">
                       <div class="defaults-page-scroll">
-                          <p class="settings-tab-intro">A Generate sends its prompt to a model once per input row. Choose a model to see and change its Max tokens and Concurrency; the model chosen when you save is preselected when you create a Generate. With None chosen, they are the values for models that have none of their own. Max retries applies to every model. Running more rows at once finishes sooner but can hit the provider's rate limits. The line under the model says how it returns structured output; choosing a model not checked yet runs a quick check.</p>
+                          <p class="settings-tab-intro">A Generate sends its prompt to a model once per input row. Choose a model to see and change its Max tokens and Concurrency; the model chosen when you save is preselected when you create a Generate. With None chosen, they are the values for models that have none of their own. Max retries applies to every model. Running more rows at once finishes sooner but can hit the provider's rate limits.</p>
                           <div class="defaults-row">
                             <div class="defaults-field defaults-field--full">
                               <label class="dataset-meta-label" for="settings-default-run-credential">Model</label>
                               <select id="settings-default-run-credential" class="credentials-select dataset-meta-input" aria-label="Default model for Generate">
                                 <option value="">${selectPlaceholderLabel('None (select each time)')}</option>
                               </select>
-                              <div class="settings-agent-model-status" id="settings-run-model-status" aria-live="polite" hidden>
-                                <span class="settings-agent-model-status__text"></span>
-                                <button type="button" class="btn btn-secondary settings-agent-model-status__check" hidden>Check</button>
-                              </div>
                             </div>
                             <div class="defaults-field">
                               <label class="dataset-meta-label" for="settings-run-max-tokens">Max tokens (256–131072)</label>
@@ -760,17 +755,13 @@ export function openSettingsModal() {
                     </div>
                     <div class="review-detail-tab-panel" id="settings-panel-review" role="tabpanel" aria-labelledby="settings-tab-review" data-panel="review">
                       <div class="defaults-page-scroll">
-                          <p class="settings-tab-intro">An Optimize node studies the rows an Evaluate node marked wrong and suggests edits to the prompt. Choose a model to see and change its Max tokens; the model chosen when you save is preselected when you start an Optimize. With None chosen, it is the value for models that have none of their own. The other settings, including the method, apply to every Optimize. Larger limits can find better edits but make more model calls. The line under the model says how it returns structured output, as on the Generate tab.</p>
+                          <p class="settings-tab-intro">An Optimize node studies the rows an Evaluate node marked wrong and suggests edits to the prompt. Choose a model to see and change its Max tokens; the model chosen when you save is preselected when you start an Optimize. With None chosen, it is the value for models that have none of their own. The other settings, including the method, apply to every Optimize. Larger limits can find better edits but make more model calls.</p>
                           <div class="defaults-row">
                             <div class="defaults-field defaults-field--full">
                               <label class="dataset-meta-label" for="settings-default-review-credential">Model</label>
                               <select id="settings-default-review-credential" class="credentials-select dataset-meta-input" aria-label="Default model for Optimize">
                                 <option value="">${selectPlaceholderLabel('None (select each time)')}</option>
                               </select>
-                              <div class="settings-agent-model-status" id="settings-review-model-status" aria-live="polite" hidden>
-                                <span class="settings-agent-model-status__text"></span>
-                                <button type="button" class="btn btn-secondary settings-agent-model-status__check" hidden>Check</button>
-                              </div>
                             </div>
                             <div class="defaults-field defaults-field--full">
                               <label class="dataset-meta-label" for="settings-default-review-method">Default review method</label>
@@ -883,18 +874,6 @@ export function openSettingsModal() {
   let agentCredentials = [];
   let agentHints = {};
   const agentChecksInFlight = new Set();
-  /*
-   * Generate and Optimize need structured output from their model. The status line under each picker
-   * says how the chosen model returns it (structuredModeStatus.js); choosing a model not checked yet
-   * finds out (POST /api/credentials/{id}/structured-check, one small model call). The Agent tab's
-   * status-line styles are shared.
-   */
-  const structuredViews = [
-    { select: runCredSelect, el: overlay.querySelector('#settings-run-model-status') },
-    { select: reviewCredSelect, el: overlay.querySelector('#settings-review-model-status') },
-  ].map((view) => ({ ...view, picker: view.select ? mountPillSelect(view.select) : null }));
-  const structuredChecksInFlight = new Set();
-  const structuredCheckErrors = new Map();
   const reviewMethodDefaultSelect = overlay.querySelector('#settings-default-review-method');
   const methodSpecificSettingsBlocks = overlay.querySelectorAll('.settings-review-method-specific[data-method-settings]');
   const gepaMaxIterationsInp = overlay.querySelector('#settings-gepa-max-iterations');
@@ -1013,8 +992,13 @@ export function openSettingsModal() {
   reviewMethodDefaultSelect?.addEventListener('change', updateMethodSpecificSettingsVisibility);
 
   function populateCredentialSelects(credentials) {
+    const optHtml = credentials.map((c) =>
+      `<option value="${escapeHtml(c.id)}">${escapeHtml(c.model || c.llm || c.id)}</option>`
+    ).join('');
+    const optNone = `<option value="">${selectPlaceholderLabel('None (select each time)')}</option>`;
+    runCredSelect.innerHTML = optNone + optHtml;
+    reviewCredSelect.innerHTML = optNone + optHtml;
     agentCredentials = credentials;
-    renderStructuredCredentialOptions();
     renderAgentCredentialOptions();
     credentialIds = credentials.map((c) => c.id);
   }
@@ -1030,79 +1014,6 @@ export function openSettingsModal() {
     if (c.agent_check_ok === false) return ['Cannot call tools', 'error'];
     if (agentHints[c.id] === false) return ['Tool calling unlikely', 'warning'];
     return null;
-  }
-
-  function renderStructuredCredentialOptions() {
-    const optNone = `<option value="">${selectPlaceholderLabel('None (select each time)')}</option>`;
-    const optHtml = agentCredentials.map((c) => {
-      const pill = structuredModePill(c);
-      const pillAttrs = pill ? ` data-pill="${escapeHtml(pill[0])}" data-pill-kind="${pill[1]}"` : '';
-      return `<option value="${escapeHtml(c.id)}"${pillAttrs}>${escapeHtml(c.model || c.llm || c.id)}</option>`;
-    }).join('');
-    for (const { select } of structuredViews) {
-      const selected = select.value;
-      select.innerHTML = optNone + optHtml;
-      select.value = selected;
-      if (select.selectedIndex < 0) select.value = '';
-    }
-    renderStructuredStatus();
-  }
-
-  function renderStructuredStatus() {
-    for (const { select, el, picker } of structuredViews) {
-      picker?.refresh();
-      if (!el) continue;
-      const c = agentCredentials.find((item) => item.id === select.value);
-      const status = structuredModeStatus(c, {
-        checking: !!c && structuredChecksInFlight.has(c.id),
-        checkError: (c && structuredCheckErrors.get(c.id)) || '',
-      });
-      el.hidden = status.hidden;
-      el.dataset.state = status.state;
-      el.title = status.title;
-      el.querySelector('.settings-agent-model-status__text').textContent = status.text;
-      const button = el.querySelector('.settings-agent-model-status__check');
-      button.hidden = !status.button;
-      button.textContent = status.button || '';
-    }
-  }
-
-  async function runStructuredCheck(credentialId) {
-    if (!credentialId || structuredChecksInFlight.has(credentialId)) return;
-    structuredChecksInFlight.add(credentialId);
-    structuredCheckErrors.delete(credentialId);
-    renderStructuredStatus();
-    try {
-      const res = await fetch(`${API_BASE}/api/credentials/${encodeURIComponent(credentialId)}/structured-check`, { method: 'POST' });
-      const result = await res.json().catch(() => ({}));
-      if (!res.ok) structuredCheckErrors.set(credentialId, result?.detail || res.statusText);
-      else if (result.ok == null) structuredCheckErrors.set(credentialId, result.detail || 'unknown error');
-      else {
-        const c = agentCredentials.find((item) => item.id === credentialId);
-        if (c) {
-          c.structured_check_ok = result.ok;
-          c.structured_mode = result.mode;
-          c.structured_check_detail = result.detail;
-        }
-      }
-    } catch (e) {
-      structuredCheckErrors.set(credentialId, e instanceof Error ? e.message : String(e));
-    } finally {
-      structuredChecksInFlight.delete(credentialId);
-    }
-    renderStructuredCredentialOptions();
-  }
-
-  for (const { select, el } of structuredViews) {
-    select?.addEventListener('change', () => {
-      renderStructuredStatus();
-      // Choosing a model checks it once; a known result is not re-checked.
-      const c = agentCredentials.find((item) => item.id === select.value);
-      if (c && c.structured_check_ok == null) void runStructuredCheck(c.id);
-    });
-    el?.querySelector('.settings-agent-model-status__check')?.addEventListener('click', () => {
-      void runStructuredCheck(select.value);
-    });
   }
 
   function renderAgentCredentialOptions() {
@@ -1214,7 +1125,6 @@ export function openSettingsModal() {
     if (!settings) return;
     runCredSelect.value = settings.default_run_credential_id || '';
     reviewCredSelect.value = settings.default_review_credential_id || '';
-    renderStructuredStatus();
     if (agentCredSelect) {
       agentCredSelect.value = settings.default_agent_credential_id || '';
       renderAgentModelStatus();
@@ -1289,7 +1199,6 @@ export function openSettingsModal() {
         choose(runCredSelect, ids.run);
         choose(reviewCredSelect, ids.review);
         choose(agentCredSelect, ids.agent);
-        renderStructuredStatus();
         renderAgentModelStatus();
         modelFieldBindings.forEach((binding) => binding.load());
         void loadAgentHints();

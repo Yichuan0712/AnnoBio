@@ -253,15 +253,6 @@ class RunTest(unittest.TestCase):
         self.assertFalse(caught.exception.ignored)
         self.assertEqual(len(send.requests), 1)
 
-    def test_when_probing_a_reply_still_wrong_moves_on_to_the_next_mode(self):
-        send = FakeSend(
-            reply(content="Sure! Here are rows: H, He"), reply(content="H, He"),  # accepted json_schema, ignored it
-            reply(tool_arguments='{"rows": [{"name": "H"}]}'),
-        )
-        result = run(send, probe=True)
-        self.assertEqual(result["mode"], "tool")
-        self.assertEqual(result["tried"][0]["mode"], "json_schema")
-
     def test_a_reply_cut_off_at_max_tokens_says_so_in_any_mode(self):
         for mode in core.MODES:
             send = FakeSend(reply(content='{"rows": [{"name": "Hyper', finish_reason="length"))
