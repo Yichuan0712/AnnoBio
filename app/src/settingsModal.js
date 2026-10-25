@@ -975,7 +975,7 @@ export function openSettingsModal() {
     }).join('');
     runParamsRow.innerHTML = `<details class="settings-run-params__details"${runParamsOpen ? ' open' : ''}>
         <summary class="settings-run-params__summary">Advanced parameters <span class="settings-run-params__count"></span></summary>
-        <p class="settings-run-params__hint">Blank uses the model's default.</p>
+        <p class="settings-run-params__hint">Leave a field empty to use the model's default.</p>
         <div class="defaults-row">${fields}</div>
       </details>`;
     const details = runParamsRow.querySelector('details');
