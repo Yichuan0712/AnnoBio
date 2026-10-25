@@ -64,11 +64,16 @@ from agent.system_prompt import (
     read_guide as read_agent_guide,
 )
 from llm import (
+    STRUCTURED_MODE_DESCRIPTIONS,
     chat as llm_chat,
     is_tools_unsupported_error,
+    probe_structured_output as llm_probe_structured_output,
     probe_tool_calling as llm_probe_tool_calling,
+    remember_structured_mode as llm_remember_structured_mode,
     run_structured as llm_run_structured,
     stream_chat_with_tools as llm_stream_chat_with_tools,
+    structured_mode_key as llm_structured_mode_key,
+    structured_modes as llm_structured_modes,
 )
 from model_settings import clean_model_settings, settings_for_model, validate_model_settings
 from pipeline_export import PipelineExportError, build_pipeline_archive
@@ -106,6 +111,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def _seed_structured_modes_on_startup() -> None:
+    _seed_structured_modes()
 
 
 @app.on_event("startup")
@@ -343,6 +353,11 @@ class CredentialResponse(BaseModel):
     # True / False, or None when never checked or the check could not run.
     agent_check_ok: bool | None = None
     agent_check_detail: str | None = None
+    # How this model returns structured output (llm_structured.MODES), from POST
+    # /api/credentials/{id}/structured-check or found during a run; ok None when never checked.
+    structured_check_ok: bool | None = None
+    structured_mode: str | None = None
+    structured_check_detail: str | None = None
     api_key_masked: str
 
 
@@ -941,6 +956,9 @@ def list_credentials():
             last_check_error=item.get("last_check_error"),
             agent_check_ok=_current_agent_check(item).get("ok"),
             agent_check_detail=_current_agent_check(item).get("detail"),
+            structured_check_ok=_current_structured_check(item).get("ok"),
+            structured_mode=_current_structured_check(item).get("mode"),
+            structured_check_detail=_current_structured_check(item).get("detail"),
             api_key_masked=_mask_key(item["api_key"]),
         )
         for item in items
@@ -951,6 +969,46 @@ def _current_agent_check(item: dict) -> dict:
     """The stored agent check, if it was made for the credential's current model."""
     check = item.get("agent_check") or {}
     return check if check.get("model") == _credential_model(item) else {}
+
+
+def _current_structured_check(item: dict) -> dict:
+    """The stored structured-output check, if it was made for the credential's current model."""
+    check = item.get("structured_check") or {}
+    return check if check.get("model") == _credential_model(item) else {}
+
+
+def _credential_mode_key(item: dict) -> tuple[str, str, str]:
+    return llm_structured_mode_key(_credential_provider(item), _credential_model(item), _credential_base_url(item))
+
+
+def _seed_structured_modes() -> None:
+    """Start every checked model at its stored mode, so runs do not fail through the modes again."""
+    for item in _load_credentials():
+        check = _current_structured_check(item)
+        if check.get("ok"):
+            llm_remember_structured_mode(
+                _credential_provider(item), _credential_model(item), _credential_base_url(item), check.get("mode"),
+            )
+
+
+def _store_mode_found_in_run(key: tuple[str, str, str], mode: str, detail: str) -> None:
+    """llm.structured_modes.on_change: a run found the mode a model needs (first use, or a stored mode
+    rejected), so Settings shows the mode runs really use."""
+    found = STRUCTURED_MODE_DESCRIPTIONS.get(mode, "") + " Found during a run" + (f"; rejected: {detail[:300]}" if detail else ".")
+
+    def change(items: list[dict]) -> None:
+        for item in items:
+            if _credential_mode_key(item) != key or _current_structured_check(item).get("mode") == mode:
+                continue
+            item["structured_check"] = {
+                "ok": True, "mode": mode, "detail": found, "tried": [],
+                "model": _credential_model(item), "checked_at": time.time(),
+            }
+
+    _update_credentials(change)
+
+
+llm_structured_modes.on_change = _store_mode_found_in_run
 
 
 def _catalog_tools_hint(item: dict, catalog: dict[str, dict]) -> bool | None:
@@ -1040,6 +1098,33 @@ def agent_check_credential(credential_id: str):
         _update_credential(
             credential_id,
             {"agent_check": {**result, "model": _credential_model(cred), "checked_at": time.time()}},
+        )
+    return result
+
+
+@app.post("/api/credentials/{credential_id}/structured-check")
+def structured_check_credential(credential_id: str):
+    """Find for real which structured-output mode the credential's model accepts (see
+    llm.probe_structured_output), remember it, and start its runs there."""
+    items = _load_credentials()
+    cred = next((item for item in items if item.get("id") == credential_id), None)
+    if not cred:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    if not cred.get("api_key"):
+        raise HTTPException(status_code=400, detail="Missing API key")
+    result = llm_probe_structured_output(
+        provider=_credential_provider(cred),
+        model=_credential_model(cred),
+        api_key=cred["api_key"],
+        base_url=_credential_base_url(cred),
+    )
+    if result["ok"] is not None:
+        _update_credential(
+            credential_id,
+            {"structured_check": {**result, "model": _credential_model(cred), "checked_at": time.time()}},
+        )
+        llm_remember_structured_mode(
+            _credential_provider(cred), _credential_model(cred), _credential_base_url(cred), result["mode"],
         )
     return result
 

@@ -608,3 +608,57 @@ def run_structured(
         "raw_text": result["raw_text"],
     }
     return (out, used_fallback, debug)
+
+
+STRUCTURED_MODE_DESCRIPTIONS = {
+    "json_schema": "The model takes a JSON schema natively.",
+    "tool": "The model returns structured output through a tool call.",
+    "json_object": "The model returns JSON but does not enforce the schema; the fields are checked after each reply.",
+    "prompt": "The model is asked for JSON in the prompt; the fields are checked after each reply.",
+}
+
+
+def probe_structured_output(*, provider: str, model: str, api_key: str, base_url: str) -> dict[str, Any]:
+    """
+    Find for real which structured-output mode this model accepts, with a table of the same shape a
+    Generate asks for. A mode whose reply still does not match after the correction turn counts as not
+    working, which finds endpoints that accept a parameter but ignore it. Returns
+    {"ok": True | False | None, "mode": str | None, "detail": str, "tried": [...]}; ok None means the
+    check itself failed (auth, network, quota) and says nothing about the model.
+    """
+    from run_output_schema import build_output_model, build_table_output_model
+
+    row = build_output_model([
+        {"key": "element", "type": "str", "description": "Element name"},
+        {"key": "atomic_number", "type": "float", "description": "Atomic number"},
+        {"key": "note", "type": "str", "description": "A short note, or null", "allow_none": True},
+        {"key": "isotopes", "type": "list_str", "description": "Names of two isotopes"},
+    ])
+    try:
+        result = _structured_call(
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            prompt="List the first two chemical elements, one row each.",
+            response_model=build_table_output_model(row),
+            max_tokens=4096,
+            return_shape="table",
+            structured_mode=None,
+            probe=True,
+            max_retries=1,
+        )
+    except structured.TruncatedReply as e:
+        return {"ok": None, "mode": None, "detail": f"The check was inconclusive: {e}", "tried": []}
+    except Exception as e:
+        if isinstance(e, structured.StructuredOutputError) or structured.classify_error(e) == "capability":
+            return {
+                "ok": False, "mode": None, "tried": [],
+                "detail": f"The model could not return structured results in any of the four ways tried: {e}",
+            }
+        return {"ok": None, "mode": None, "detail": f"The check could not reach the model: {e}", "tried": []}
+    mode = result["mode"]
+    detail = STRUCTURED_MODE_DESCRIPTIONS[mode]
+    if result["tried"]:
+        detail += " Rejected: " + "; ".join(f"{t['mode']} ({t['error'][:160]})" for t in result["tried"])
+    return {"ok": True, "mode": mode, "detail": detail, "tried": result["tried"]}
