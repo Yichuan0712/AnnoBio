@@ -4,17 +4,18 @@ with user-defined output schema (structured output).
 
 Default path is OpenAI-compatible (optionally with a custom base_url). A few
 providers still need explicit routing hints so LiteLLM can call their native
-APIs directly.
+APIs directly. Structured output goes through llm_structured.py, which picks
+the first of its four modes the model accepts and remembers it per model.
 """
 
-import json
-import re
 import time
 from typing import Any
 
 import litellm
 from litellm import completion
+from litellm.utils import type_to_response_format_param
 
+import llm_structured as structured
 from safe_stdio import safe_print
 
 # ANSI: bold yellow for step names (match main.py)
@@ -41,14 +42,21 @@ LITELLM_PROVIDER_PREFIX = {
 }
 
 
+_RETRYABLE_ERRORS = (
+    litellm.RateLimitError,
+    litellm.Timeout,
+    litellm.APIConnectionError,
+    litellm.ServiceUnavailableError,
+    litellm.InternalServerError,
+)
+
+
 def _is_retryable_error(e: Exception) -> bool:
-    """True if error is transient (429, timeout, connection, 5xx)."""
-    msg = (getattr(e, "message", None) or str(e)).lower()
-    if any(x in msg for x in ("429", "rate limit", "rate", "timeout", "timed out", "connection", "network", "500", "502", "503", "service unavailable")):
+    """True if error is transient (429, timeout, connection, 5xx), by LiteLLM's exception type or the
+    status code, never by words in the message (a model's own text can contain "rate" or "timeout")."""
+    if isinstance(e, _RETRYABLE_ERRORS):
         return True
-    if getattr(e, "status_code", None) in (429, 500, 502, 503):
-        return True
-    return False
+    return getattr(e, "status_code", None) in (429, 500, 502, 503, 504)
 
 
 def _retry_invoke(fn, max_retries: int = 3):
@@ -66,6 +74,25 @@ def _retry_invoke(fn, max_retries: int = 3):
             else:
                 raise
     raise last_e
+
+
+# LiteLLM's adapters for these providers turn a content list into its text (DeepSeek's API reads text
+# only), so image and PDF blocks would vanish and the model answer without them. Refuse instead.
+_TEXT_ONLY_LITELLM_PROVIDERS = {"deepseek": "DeepSeek"}
+
+
+def _refuse_dropped_attachments(kwargs: dict) -> None:
+    prefix = str(kwargs.get("model") or "").split("/", 1)[0].lower()
+    label = _TEXT_ONLY_LITELLM_PROVIDERS.get(prefix)
+    if not label:
+        return
+    for message in kwargs.get("messages") or []:
+        content = message.get("content")
+        if isinstance(content, list) and any(isinstance(b, dict) and b.get("type") not in (None, "text") for b in content):
+            raise ValueError(
+                f"{label}'s API reads text only, so the images or PDFs in this prompt would be dropped. "
+                "Choose a model that reads them."
+            )
 
 
 def _normalize_messages(messages: list[dict]) -> list[dict]:
@@ -140,27 +167,7 @@ def _make_completion_kwargs(
     return kwargs
 
 
-def _message_content_to_text(content: Any) -> str:
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict):
-                if isinstance(item.get("text"), str):
-                    parts.append(item["text"])
-                elif item.get("type") == "text" and isinstance(item.get("content"), str):
-                    parts.append(item["content"])
-        return "\n".join(p for p in parts if p).strip()
-    if isinstance(content, dict):
-        if isinstance(content.get("text"), str):
-            return content["text"]
-        return json.dumps(content, ensure_ascii=False)
-    return str(content)
+_message_content_to_text = structured.content_text
 
 
 def _extract_completion_text(response: Any) -> str:
@@ -235,6 +242,7 @@ def _call_completion(
         response_format=response_format,
     )
     kwargs["messages"] = _normalize_messages(messages)
+    _refuse_dropped_attachments(kwargs)
     return _retry_invoke(lambda: completion(**kwargs), max_retries=max_retries)
 
 
@@ -453,288 +461,32 @@ def probe_tool_calling(*, provider: str, model: str, api_key: str, base_url: str
     }
 
 
-def _first_json_value(text: str, opener: str) -> str | None:
-    """The JSON value starting at the first `opener`, ended by the JSON parser itself, so a bracket
-    inside a string does not end it early. When it never completes, the rest of the text, so that
-    parsing it reports why."""
-    start = text.find(opener)
-    if start == -1:
-        return None
-    try:
-        _, end = json.JSONDecoder().raw_decode(text, start)
-    except ValueError:
-        return text[start:]
-    return text[start:end]
+# JSON helpers live in llm_structured.py; these names stay for the modules that import them from here.
+_first_json_value = structured.first_json_value
+_extract_json_from_text = structured.extract_json_object
+_extract_json_array_from_text = structured.extract_json_array
 
 
-def _extract_json_from_text(text: str) -> str:
-    """Extract a JSON object from text that may be wrapped in <reasoning>, markdown, etc."""
-    text = text.strip()
-    # Prefer markdown code block
-    m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
-    if m:
-        return m.group(1).strip()
-    found = _first_json_value(text, "{")
-    return text if found is None else found
-
-
-def _extract_json_array_from_text(text: str) -> str:
-    """Extract a JSON array from text (markdown code block or first [...])."""
-    text = text.strip()
-    m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
-    if m:
-        return m.group(1).strip()
-    found = _first_json_value(text, "[")
-    return "[]" if found is None else found
-
-
-def _resolve_ref(schema: dict, ref: str) -> dict:
-    """Resolve JSON Schema $ref like '#/$defs/StructuredOutput' against schema."""
-    if not ref.startswith("#/"):
-        return {}
-    parts = ref[2:].split("/")
-    cur = schema
-    for p in parts:
-        cur = cur.get(p) if isinstance(cur, dict) else {}
-    return cur if isinstance(cur, dict) else {}
-
-
-def build_langchain_chat_model(
-    *,
-    provider: str,
-    model: str,
-    api_key: str,
-    base_url: str,
-    max_tokens: int,
-):
-    """Build a LangChain chat model for providers with native structured output support."""
+def structured_mode_key(provider: str, model: str, base_url: str) -> tuple[str, str, str]:
+    """Which model a remembered structured-output mode belongs to: the same provider, routed model
+    name and endpoint, however the credential spelled them."""
     provider_id = (provider or "").strip().lower()
-    resolved_base_url = _resolve_base_url(provider_id, base_url)
-    model_name = (model or "").strip()
-
-    if provider_id in ("", "openai", "deepseek"):
-        from langchain_openai import ChatOpenAI
-
-        kwargs: dict[str, Any] = {
-            "model": model_name,
-            "api_key": api_key,
-            "max_tokens": max_tokens,
-        }
-        if resolved_base_url:
-            kwargs["base_url"] = resolved_base_url
-        return ChatOpenAI(**kwargs)
-
-    if provider_id == "anthropic":
-        from langchain_anthropic import ChatAnthropic
-
-        kwargs = {
-            "model": model_name,
-            "api_key": api_key,
-            "max_tokens": max_tokens,
-        }
-        if resolved_base_url:
-            kwargs["base_url"] = resolved_base_url
-        return ChatAnthropic(**kwargs)
-
-    if provider_id in ("google", "gemini"):
-        from langchain_google_genai import ChatGoogleGenerativeAI
-
-        kwargs = {
-            "model": model_name,
-            "api_key": api_key,
-            "max_tokens": max_tokens,
-        }
-        if resolved_base_url:
-            kwargs["base_url"] = resolved_base_url
-        return ChatGoogleGenerativeAI(**kwargs)
-
-    raise NotImplementedError(f"LangChain structured output is not enabled for provider '{provider_id or provider}'.")
+    return (provider_id, _resolve_model_name(provider_id, model), _resolve_base_url(provider_id, base_url))
 
 
-def _build_langchain_structured_runnable(
-    *,
-    provider: str,
-    chat_model: Any,
-    response_model: type,
-    base_url: str,
-    include_raw: bool = False,
-):
-    provider_id = (provider or "").strip().lower()
-    resolved_base_url = _resolve_base_url(provider_id, base_url)
-
-    # OpenAI-compatible endpoints behind custom base_url often have better tool-calling
-    # compatibility than json_schema compatibility.
-    if provider_id == "deepseek" or (provider_id in ("", "openai") and resolved_base_url):
-        return chat_model.with_structured_output(
-            response_model,
-            method="function_calling",
-            include_raw=include_raw,
-        )
-    if provider_id in ("google", "gemini"):
-        return chat_model.with_structured_output(
-            response_model,
-            method="json_schema",
-            include_raw=include_raw,
-        )
-    if provider_id in ("", "openai"):
-        return chat_model.with_structured_output(
-            response_model,
-            strict=True,
-            include_raw=include_raw,
-        )
-    return chat_model.with_structured_output(response_model, include_raw=include_raw)
+# The mode that works for each model (llm_structured.ModeMemory), seeded from the checks stored on
+# credentials and lowered by runs that find a mode rejected. main.py sets on_change to store that.
+structured_modes = structured.ModeMemory()
 
 
-def _run_structured_via_litellm(
-    *,
-    provider: str,
-    model: str,
-    api_key: str,
-    base_url: str,
-    prompt: Any,
-    response_model: type,
-    max_tokens: int,
-    return_shape: str,
-    return_debug: bool = False,
-):
-    response = _call_completion(
-        provider=provider,
-        model=model,
-        api_key=api_key,
-        base_url=base_url,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=max_tokens,
-        response_format=response_model,
-    )
-    msg = None
-    choices = getattr(response, "choices", None) or []
-    if choices:
-        msg = getattr(choices[0], "message", None)
-    parsed = getattr(msg, "parsed", None) if msg is not None else None
-    if parsed is None:
-        parsed = getattr(response, "parsed", None)
-    raw_text = None
-    if parsed is None:
-        raw_text = _extract_completion_text(response)
-        if return_shape == "table":
-            data = json.loads(_extract_json_array_from_text(raw_text))
-            if not isinstance(data, list):
-                data = [data] if isinstance(data, dict) else []
-            parsed = response_model.model_validate({"rows": data})
-        else:
-            data = json.loads(_extract_json_from_text(raw_text))
-            parsed = response_model.model_validate(data)
-    obj = parsed
-    out = obj.model_dump() if hasattr(obj, "model_dump") else obj.dict()
-    debug = {
-        "path": "litellm_native",
-        "raw_response": _debug_jsonable(response),
-        "raw_text": raw_text,
-    }
-    return (out, debug) if return_debug else out
-
-
-def _run_structured_via_langchain(
-    *,
-    provider: str,
-    model: str,
-    api_key: str,
-    base_url: str,
-    prompt: Any,
-    response_model: type,
-    max_tokens: int,
-    return_debug: bool = False,
-):
-    chat_model = build_langchain_chat_model(
-        provider=provider,
-        model=model,
-        api_key=api_key,
-        base_url=base_url,
-        max_tokens=max_tokens,
-    )
-    structured_model = _build_langchain_structured_runnable(
-        provider=provider,
-        chat_model=chat_model,
-        response_model=response_model,
-        base_url=base_url,
-        include_raw=return_debug,
-    )
-    obj = _retry_invoke(lambda: structured_model.invoke([{"role": "user", "content": prompt}] if isinstance(prompt, list) else prompt))
-    debug = {"path": "langchain_structured", "raw_response": None, "raw_text": None}
-    if return_debug:
-        parsing_error = obj.get("parsing_error") if isinstance(obj, dict) else None
-        if parsing_error:
-            raise parsing_error
-        raw_obj = obj.get("raw") if isinstance(obj, dict) else None
-        parsed_obj = obj.get("parsed") if isinstance(obj, dict) else None
-        debug["raw_response"] = _debug_jsonable(raw_obj)
-        debug["raw_text"] = _message_content_to_text(getattr(raw_obj, "content", None))
-        obj = parsed_obj
-    if obj is None:
-        raise ValueError("LangChain structured output returned no data")
-    if hasattr(obj, "model_dump"):
-        out = obj.model_dump()
-        return (out, debug) if return_debug else out
-    if hasattr(obj, "dict"):
-        out = obj.dict()
-        return (out, debug) if return_debug else out
-    if isinstance(obj, dict):
-        return (obj, debug) if return_debug else obj
-    raise TypeError(f"Unexpected structured output type: {type(obj).__name__}")
-
-
-def _should_use_langchain_structured(provider: str) -> bool:
-    provider_id = (provider or "").strip().lower()
-    return provider_id in ("", "openai", "anthropic", "google", "gemini", "deepseek")
-
-
-def _should_fallback_to_prompt_json(error: Exception) -> bool:
-    err_msg = (getattr(error, "message", None) or str(error)).lower()
-    return any(
-        token in err_msg
-        for token in (
-            "structured output",
-            "with_structured_output",
-            "response_format",
-            "json_schema",
-            "json mode",
-            "function_calling",
-            "tool calling",
-            "tool_choice",
-            "unavailable",
-            "not supported",
-            "invalid_request_error",
-            "does not support",
-            "unsupported",
-            "no module named 'langchain_",
-            "cannot import name",
-        )
-    )
-
-
-def _prompt_json_reply(*, provider: str, model: str, api_key: str, base_url: str, prompt: Any, max_tokens: int) -> str:
-    """The reply to a prompt that asks for JSON. A reply cut off at max tokens is an error: its JSON is
-    incomplete, and reasoning models spend part of that budget thinking."""
-    response = _call_completion(
-        provider=provider,
-        model=model,
-        api_key=api_key,
-        base_url=base_url,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=max_tokens,
-    )
-    choices = getattr(response, "choices", None) or []
-    if choices and str(getattr(choices[0], "finish_reason", "") or "") == "length":
-        raise ValueError(
-            f"The model's reply reached the max tokens limit ({max_tokens}) before its JSON was complete. "
-            "Raise Max tokens in Settings."
-        )
-    return _extract_completion_text(response)
+def remember_structured_mode(provider: str, model: str, base_url: str, mode: str | None) -> None:
+    """Set a model's mode from a check made on purpose (may raise it, unlike a run)."""
+    structured_modes.set(structured_mode_key(provider, model, base_url), mode)
 
 
 def _coerce_prompt_json_strings(data: Any, properties: dict) -> None:
-    """A reply to a prompt that asks for JSON is not held to the schema, so a string field may come
-    back null, true/false or a number; store those as text."""
+    """A reply in a mode that does not enforce the schema may put null, true/false or a number in a
+    string field; store those as text."""
     if not isinstance(data, dict):
         return
     for key, prop in properties.items():
@@ -749,7 +501,27 @@ def _coerce_prompt_json_strings(data: Any, properties: dict) -> None:
             data[key] = str(value)
 
 
-def _run_structured_fallback(
+def _response_validator(response_model: type, schema: dict, array_key: str | None):
+    """validate(data) for llm_structured.run: scalar-to-text coercion of string fields, then the
+    Pydantic model; returns the plain dict."""
+    flat = structured.inline_refs(schema)
+    if array_key:
+        row_properties = ((flat.get("properties") or {}).get(array_key) or {}).get("items", {}).get("properties", {})
+    else:
+        row_properties = flat.get("properties") or {}
+
+    def validate(data: Any) -> dict:
+        rows = (data.get(array_key) if isinstance(data, dict) else None) if array_key else [data]
+        for row in rows or []:
+            _coerce_prompt_json_strings(row, row_properties)
+        obj = response_model.model_validate(data)
+        return obj.model_dump() if hasattr(obj, "model_dump") else obj.dict()
+
+    return validate
+
+
+def _structured_call(
+    *,
     provider: str,
     model: str,
     api_key: str,
@@ -757,74 +529,32 @@ def _run_structured_fallback(
     prompt: Any,
     response_model: type,
     max_tokens: int,
-    return_shape: str = "single",
-    return_debug: bool = False,
-):
-    """Fallback when native structured output is not supported: ask for JSON in prompt and parse.
-    return_shape: 'single' -> one JSON object; 'table' -> JSON array of objects (each item same schema).
-    """
-    schema = response_model.model_json_schema()
-    if return_shape == "table":
-        item_schema = schema.get("properties", {}).get("rows", {}).get("items", schema)
-        if item_schema.get("$ref"):
-            item_schema = _resolve_ref(schema, item_schema["$ref"]) or item_schema
-        instruction = (
-            "\n\nRespond with a single valid JSON array of objects. Each object must conform to the following schema. "
-            "Return only the JSON array, no other text or markdown.\nSchema for each item:\n"
-            + json.dumps(item_schema, ensure_ascii=False, indent=2)
-        )
-        full_prompt = prompt + [{"type": "text", "text": instruction}] if isinstance(prompt, list) else prompt + instruction
-        safe_print("\n" + _HL + _SEP + _R)
-        safe_print(_HL + "[Run] Fallback: prompt + JSON array schema (structured output not supported)" + _R)
-        safe_print(_HL + _SEP + _R)
-        safe_print(instruction)
-        safe_print(_HL + _SEP + _R + "\n", flush=True)
-        text = _prompt_json_reply(
-            provider=provider,
-            model=model,
-            api_key=api_key,
-            base_url=base_url,
-            prompt=full_prompt,
-            max_tokens=max_tokens,
-        )
-        json_str = _extract_json_array_from_text(text)
-        data = json.loads(json_str)
-        if not isinstance(data, list):
-            data = [data] if isinstance(data, dict) else []
-        item_props = item_schema.get("properties", {})
-        for row in data:
-            _coerce_prompt_json_strings(row, item_props)
-        obj = response_model.model_validate({"rows": data})
-        out = obj.model_dump() if hasattr(obj, "model_dump") else obj.dict()
-        debug = {"path": "prompt_json_fallback", "raw_response": None, "raw_text": text}
-        return (out, debug) if return_debug else out
-    # single
-    instruction = (
-        "\n\nRespond with a single valid JSON object that conforms to the following schema. "
-        "Return only the JSON, no other text or markdown.\nSchema:\n"
-        + json.dumps(schema, ensure_ascii=False, indent=2)
+    return_shape: str,
+    structured_mode: str | None,
+    probe: bool = False,
+    max_retries: int = 3,
+) -> dict:
+    base_kwargs = _make_completion_kwargs(
+        provider=provider, model=model, api_key=api_key, base_url=base_url, max_tokens=max_tokens,
     )
-    full_prompt = prompt + [{"type": "text", "text": instruction}] if isinstance(prompt, list) else prompt + instruction
-    safe_print("\n" + _HL + _SEP + _R)
-    safe_print(_HL + "[Run] Fallback: prompt + JSON schema (structured output not supported)" + _R)
-    safe_print(_HL + _SEP + _R)
-    safe_print(instruction)
-    safe_print(_HL + _SEP + _R + "\n", flush=True)
-    text = _prompt_json_reply(
-        provider=provider,
-        model=model,
-        api_key=api_key,
-        base_url=base_url,
-        prompt=full_prompt,
+
+    def send(request: dict) -> Any:
+        kwargs = {**base_kwargs, **request, "messages": _normalize_messages(request["messages"])}
+        _refuse_dropped_attachments(kwargs)
+        return _retry_invoke(lambda: completion(**kwargs), max_retries=max_retries)
+
+    schema = type_to_response_format_param(response_model)["json_schema"]["schema"]
+    array_key = "rows" if return_shape == "table" else None
+    return structured.run(
+        send,
+        messages=[{"role": "user", "content": prompt}],
+        schema=schema,
+        validate=_response_validator(response_model, schema, array_key),
+        start_mode=structured_mode,
+        array_key=array_key,
         max_tokens=max_tokens,
+        probe=probe,
     )
-    json_str = _extract_json_from_text(text)
-    data = json.loads(json_str)
-    _coerce_prompt_json_strings(data, schema.get("properties", {}))
-    obj = response_model.model_validate(data)
-    out = obj.model_dump() if hasattr(obj, "model_dump") else obj.dict()
-    debug = {"path": "prompt_json_fallback", "raw_response": None, "raw_text": text}
-    return (out, debug) if return_debug else out
 
 
 def run_structured(
@@ -837,57 +567,44 @@ def run_structured(
     max_tokens: int = 8192,
     return_shape: str = "single",
     return_debug: bool = False,
+    structured_mode: str | None = None,
 ):
     """
     Call LLM with structured output (Pydantic model).
-    Returns (result_dict | result_list, used_fallback: bool), and when return_debug=True
-    also returns a third item with raw-response debug information.
-    return_shape: 'single' -> one object per prompt; 'table' -> one array of objects per prompt (response_model must have "rows" field).
-    If the provider does not support native structured output, falls back to prompt + JSON parse.
+    Returns (result_dict, used_fallback: bool), and when return_debug=True also returns a third item
+    with the mode used and raw-response debug information.
+    return_shape: 'single' -> one object per prompt; 'table' -> one array of objects per prompt
+    (response_model must have a "rows" field).
+    Starts at `structured_mode` when given, else at the mode remembered for this model, and moves down
+    through llm_structured.MODES while the provider rejects one. used_fallback is True for the modes
+    that only ask for the schema in the prompt (json_object, prompt).
     """
-    try:
-        if _should_use_langchain_structured(provider):
-            result = _run_structured_via_langchain(
-                provider=provider,
-                model=model,
-                api_key=api_key,
-                base_url=base_url,
-                prompt=prompt,
-                response_model=response_model,
-                max_tokens=max_tokens,
-                return_debug=return_debug,
-            )
-        else:
-            result = _run_structured_via_litellm(
-                provider=provider,
-                model=model,
-                api_key=api_key,
-                base_url=base_url,
-                prompt=prompt,
-                response_model=response_model,
-                max_tokens=max_tokens,
-                return_shape=return_shape,
-                return_debug=return_debug,
-            )
-        if return_debug:
-            out, debug = result
-            return (out, False, debug)
-        return (result, False)
-    except Exception as e:
-        if _should_fallback_to_prompt_json(e):
-            result = _run_structured_fallback(
-                provider=provider,
-                model=model,
-                api_key=api_key,
-                base_url=base_url,
-                prompt=prompt,
-                response_model=response_model,
-                max_tokens=max_tokens,
-                return_shape=return_shape,
-                return_debug=return_debug,
-            )
-            if return_debug:
-                out, debug = result
-                return (out, True, debug)
-            return (result, True)
-        raise
+    key = structured_mode_key(provider, model, base_url)
+    result = _structured_call(
+        provider=provider,
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        prompt=prompt,
+        response_model=response_model,
+        max_tokens=max_tokens,
+        return_shape=return_shape,
+        structured_mode=structured_mode or structured_modes.get(key),
+    )
+    mode = result["mode"]
+    if result["tried"]:
+        rejected = "; ".join(f"{t['mode']}: {t['error'][:200]}" for t in result["tried"])
+        safe_print(_HL + f"[LLM] Structured output via {mode} for {key[1]} (rejected {rejected})" + _R, flush=True)
+    structured_modes.learn(key, mode, result["tried"][-1]["error"] if result["tried"] else "")
+    out = result["output"]
+    used_fallback = mode in ("json_object", "prompt")
+    if not return_debug:
+        return (out, used_fallback)
+    debug = {
+        "path": mode,
+        "repaired": result["repaired"],
+        "tried": result["tried"],
+        "raw_response": _debug_jsonable(result["response"]),
+        "raw_text": result["raw_text"],
+    }
+    return (out, used_fallback, debug)
