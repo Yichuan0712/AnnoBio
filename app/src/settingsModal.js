@@ -760,7 +760,7 @@ export function openSettingsModal() {
                     </div>
                     <div class="review-detail-tab-panel" id="settings-panel-review" role="tabpanel" aria-labelledby="settings-tab-review" data-panel="review">
                       <div class="defaults-page-scroll">
-                          <p class="settings-tab-intro">An Optimize node studies the rows an Evaluate node marked wrong and suggests edits to the prompt. Choose a model to see and change its Max tokens; the model chosen when you save is preselected when you start an Optimize. With None chosen, it is the value for models that have none of their own. The other settings, including the method, apply to every Optimize. Larger limits can find better edits but make more model calls. Debug mode adds Reset and Debug buttons to suggestion cards. The line under the model says how it returns structured output, as on the Generate tab.</p>
+                          <p class="settings-tab-intro">An Optimize node studies the rows an Evaluate node marked wrong and suggests edits to the prompt. Choose a model to see and change its Max tokens; the model chosen when you save is preselected when you start an Optimize. With None chosen, it is the value for models that have none of their own. The other settings, including the method, apply to every Optimize. Larger limits can find better edits but make more model calls. The line under the model says how it returns structured output, as on the Generate tab.</p>
                           <div class="defaults-row">
                             <div class="defaults-field defaults-field--full">
                               <label class="dataset-meta-label" for="settings-default-review-credential">Model</label>
@@ -816,7 +816,8 @@ export function openSettingsModal() {
                               <label class="dataset-meta-label" for="settings-optimization-max-trials">Max trials per optimization run (4–200)</label>
                               <input type="number" id="settings-optimization-max-trials" class="dataset-meta-input" min="4" max="200" value="40" aria-label="Optimization max Thompson-sampling trials" title="Only used by the built-in method's suggestion-card 'Optimize' pill (Thompson-sampling segment search) — no other review method reads this." />
                             </div>
-                            <div class="defaults-field defaults-field--full" style="margin-top:0.5rem;">
+                            <!-- Hidden: a developer switch. Its saved value still applies (Restore defaults turns it off). -->
+                            <div class="defaults-field defaults-field--full" style="margin-top:0.5rem;" hidden>
                               <label class="dataset-meta-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
                                 <input type="checkbox" id="settings-debug-mode" aria-label="Debug mode" />
                                 Debug mode
