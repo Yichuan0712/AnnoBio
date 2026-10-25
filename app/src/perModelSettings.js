@@ -48,6 +48,8 @@ export function keepKnownModels(modelSettings, credentialIds) {
   for (const [id, own] of Object.entries(modelSettings || {})) {
     if (!known.has(id)) continue;
     for (const [key, value] of Object.entries(own || {})) out = withModelValue(out, id, key, value);
+    // A model's generation parameters (runParams.js) are not number fields; keep them as they are.
+    if (own?.run_params && Object.keys(own.run_params).length) out = { ...out, [id]: { ...(out[id] || {}), run_params: { ...own.run_params } } };
   }
   return out;
 }

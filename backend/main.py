@@ -71,8 +71,10 @@ from llm import (
     run_structured as llm_run_structured,
     stream_chat_with_tools as llm_stream_chat_with_tools,
     structured_mode_key as llm_structured_mode_key,
+    supported_run_params as llm_supported_run_params,
     structured_modes as llm_structured_modes,
 )
+from model_params import param_fields
 from model_settings import clean_model_settings, settings_for_model, validate_model_settings
 from pipeline_export import PipelineExportError, build_pipeline_archive
 from pipeline_runner import (
@@ -1095,6 +1097,34 @@ def agent_check_credential(credential_id: str):
     return result
 
 
+@app.get("/api/credentials/{credential_id}/run-params")
+def credential_run_params(credential_id: str):
+    """The generation parameters a Generate can set for this credential's model (Settings → Generate),
+    found without a model call (llm.supported_run_params); none for a custom endpoint."""
+    cred = next((item for item in _load_credentials() if item.get("id") == credential_id), None)
+    if not cred:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    provider = _credential_provider(cred)
+    model = _credential_model(cred)
+    openrouter_parameters = None
+    if provider == "openrouter":
+        from oauth_openrouter import get_catalog
+
+        ids = {model, model.removeprefix("openrouter/")}  # as in _credential_context_tokens
+        try:
+            entry = next((m for m in get_catalog() if m["id"] in ids), None)
+        except Exception:
+            entry = None
+        openrouter_parameters = entry.get("parameters") if entry else None
+    names = llm_supported_run_params(
+        provider, model, _credential_base_url(cred),
+        openrouter_parameters=openrouter_parameters,
+        custom_endpoint=provider != "openrouter" and bool(_credential_base_url(cred))
+        and provider not in DEFAULT_BASE_URLS_BY_PROVIDER,
+    )
+    return {"params": param_fields(names)}
+
+
 @app.post("/api/credentials/detect")
 async def detect_credential_provider(request: Request):
     """
@@ -1643,6 +1673,7 @@ def _do_run_work(
         total = len(prompts)
         run_settings = {**settings_for_model(_load_settings(), credential_id), **(settings_overrides or {})}
         run_max_tokens = run_settings.get("run_max_tokens") or DEFAULT_SETTINGS["run_max_tokens"]
+        run_params = dict(run_settings.get("run_params") or {})  # Settings → Generate, this model's own
         with _run_jobs_lock:
             _run_jobs[run_id]["total"] = total
             _run_jobs[run_id]["completed"] = 0
@@ -1687,6 +1718,7 @@ def _do_run_work(
                         max_tokens=run_max_tokens,
                         return_shape=return_shape,
                         return_debug=True,
+                        params=run_params,
                     )
                     with _run_print_lock:
                         _safe_print(_HL + _SEP + _R)

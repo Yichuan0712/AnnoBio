@@ -99,7 +99,8 @@ class PipelineRunConflict(RuntimeError):
 
 def _apply_model_settings(job: dict, settings: dict, credential_id: str, node_overrides: Any) -> None:
     """The Generate's model's own Max tokens / Concurrency (Settings, "Per model") replace the shared
-    values the compiler used; settings a Generate node saved for itself still win."""
+    values the compiler used; settings a Generate node saved for itself still win. The model's
+    generation parameters (run_params) come only from Settings."""
     if isinstance(node_overrides, str):
         try:
             node_overrides = json.loads(node_overrides or "{}")
@@ -109,6 +110,8 @@ def _apply_model_settings(job: dict, settings: dict, credential_id: str, node_ov
         node_overrides = {}
     own = settings_for_model(settings, credential_id)
     config = job["config"]
+    if own["run_params"]:
+        config.setdefault("settings", {})["run_params"] = own["run_params"]
     for key in ("run_max_tokens", "run_concurrency"):
         if key in node_overrides or own.get(key) is None:
             continue

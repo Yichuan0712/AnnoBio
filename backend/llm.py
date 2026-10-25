@@ -8,6 +8,7 @@ APIs directly. Structured output goes through llm_structured.py, which picks
 the first of its four modes the model accepts and remembers it per model.
 """
 
+import threading
 import time
 from typing import Any
 
@@ -24,6 +25,9 @@ _R = "\033[0m"
 _SEP = "=" * 60
 
 litellm.telemetry = False
+# LiteLLM prints "Give Feedback" / "Provider List" banners on every error, including the expected
+# rejections in supported_run_params' offline checks; the errors themselves are still raised.
+litellm.suppress_debug_info = True
 
 # OpenAI-compatible providers can be reached through one client, using an
 # optional custom base_url or a provider default.
@@ -521,6 +525,21 @@ def _response_validator(response_model: type, schema: dict, array_key: str | Non
     return validate
 
 
+# Generation parameters (model_params.py) a model's provider rejected, by structured_mode_key: they
+# are left out of its later calls instead of failing each one. Not stored; a restart tries them again.
+_rejected_params: dict[tuple[str, str, str], set[str]] = {}
+_rejected_params_lock = threading.Lock()
+
+
+def _rejected_param(error: Exception, sent: dict) -> str | None:
+    """The generation parameter this error says the provider does not take, if it names one."""
+    status = getattr(error, "status_code", None)
+    if type(error).__name__ != "UnsupportedParamsError" and status not in (400, 422):
+        return None
+    text = (getattr(error, "message", None) or str(error)).lower()
+    return next((name for name in sent if name in text), None)
+
+
 def _structured_call(
     *,
     provider: str,
@@ -532,16 +551,30 @@ def _structured_call(
     max_tokens: int,
     return_shape: str,
     structured_mode: str | None,
+    params: dict | None = None,
     max_retries: int = 3,
 ) -> dict:
     base_kwargs = _make_completion_kwargs(
         provider=provider, model=model, api_key=api_key, base_url=base_url, max_tokens=max_tokens,
     )
+    key = structured_mode_key(provider, model, base_url)
 
     def send(request: dict) -> Any:
-        kwargs = {**base_kwargs, **request, "messages": _normalize_messages(request["messages"])}
-        _refuse_dropped_attachments(kwargs)
-        return _retry_invoke(lambda: completion(**kwargs), max_retries=max_retries)
+        while True:
+            with _rejected_params_lock:
+                rejected = set(_rejected_params.get(key, ()))
+            sent = {name: value for name, value in (params or {}).items() if name not in rejected}
+            kwargs = {**base_kwargs, **sent, **request, "messages": _normalize_messages(request["messages"])}
+            _refuse_dropped_attachments(kwargs)
+            try:
+                return _retry_invoke(lambda: completion(**kwargs), max_retries=max_retries)
+            except Exception as e:
+                name = _rejected_param(e, sent)
+                if name is None:
+                    raise
+                with _rejected_params_lock:
+                    _rejected_params.setdefault(key, set()).add(name)
+                safe_print(_HL + f"[LLM] {key[1]} does not take {name}; left out from now on: " + _R + str(e)[:300], flush=True)
 
     schema = type_to_response_format_param(response_model)["json_schema"]["schema"]
     array_key = "rows" if return_shape == "table" else None
@@ -567,6 +600,7 @@ def run_structured(
     return_shape: str = "single",
     return_debug: bool = False,
     structured_mode: str | None = None,
+    params: dict | None = None,
 ):
     """
     Call LLM with structured output (Pydantic model).
@@ -577,6 +611,8 @@ def run_structured(
     Starts at `structured_mode` when given, else at the mode remembered for this model, and moves down
     through llm_structured.MODES while the provider rejects one. used_fallback is True for the modes
     that only ask for the schema in the prompt (json_object, prompt).
+    params: generation parameters (model_params.py) sent with every call; one the provider rejects is
+    left out of this model's calls from then on.
     """
     key = structured_mode_key(provider, model, base_url)
     result = _structured_call(
@@ -589,6 +625,7 @@ def run_structured(
         max_tokens=max_tokens,
         return_shape=return_shape,
         structured_mode=structured_mode or structured_modes.get(key),
+        params=params,
     )
     mode = result["mode"]
     if result["tried"]:
@@ -607,3 +644,55 @@ def run_structured(
         "raw_text": result["raw_text"],
     }
     return (out, used_fallback, debug)
+
+
+# Parameters a provider accepts but ignores, which LiteLLM cannot tell: DeepSeek's docs say
+# deepseek-reasoner takes the sampling parameters without effect, and LiteLLM turns every
+# reasoning_effort for DeepSeek into the same "thinking on".
+_IGNORED_PARAMS = {
+    ("deepseek", "deepseek-reasoner"): {"temperature", "top_p", "presence_penalty", "frequency_penalty", "reasoning_effort"},
+    ("deepseek", None): {"reasoning_effort"},
+}
+
+
+def supported_run_params(provider: str, model: str, base_url: str, *, openrouter_parameters: list[str] | None = None,
+                         custom_endpoint: bool = False) -> list[str]:
+    """
+    The generation parameters (model_params.PARAM_SPECS) this model takes, found without any network
+    call. Candidates come from OpenRouter's catalog for OpenRouter models (`openrouter_parameters`, its
+    supported_parameters) and from LiteLLM's list for the provider otherwise; each is then tried with
+    LiteLLM's mock_response, which rejects what LiteLLM knows the model refuses (gpt-5 takes no top_p and
+    only temperature=1, Claude takes no seed). A custom endpoint's parameters are unknown: none.
+    """
+    from model_params import PARAM_SPECS
+
+    if custom_endpoint:
+        return []
+    provider_id = (provider or "").strip().lower()
+    kwargs = _make_completion_kwargs(provider=provider, model=model, api_key="dry-run", base_url=base_url, max_tokens=16)
+    if provider_id == "openrouter":
+        if openrouter_parameters is None:
+            return []
+        listed = set(openrouter_parameters)
+        if "reasoning" in listed:
+            listed.add("reasoning_effort")  # LiteLLM sends reasoning_effort, which OpenRouter maps to reasoning
+        candidates = [name for name in PARAM_SPECS if name in listed]
+    else:
+        try:
+            listed = set(litellm.get_supported_openai_params(model=kwargs["model"]) or [])
+        except Exception:
+            return []
+        candidates = [name for name in PARAM_SPECS if name in listed]
+    model_name = (model or "").strip().lower().rsplit("/", 1)[-1]
+    ignored = _IGNORED_PARAMS.get((provider_id, model_name), set()) | _IGNORED_PARAMS.get((provider_id, None), set())
+    supported = []
+    for name in candidates:
+        if name in ignored:
+            continue
+        try:
+            completion(**kwargs, messages=[{"role": "user", "content": "x"}], mock_response="ok",
+                       **{name: PARAM_SPECS[name]["probe"]})
+        except Exception:
+            continue
+        supported.append(name)
+    return supported

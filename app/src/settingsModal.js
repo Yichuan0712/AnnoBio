@@ -10,6 +10,7 @@ import { fetchAgentContext } from './agent/api/agentTurnClient.js';
 import { mountPillSelect } from './pillSelect.js';
 import { attachModelIdAutocomplete } from './modelIdAutocomplete.js';
 import { PER_MODEL_FIELDS, bindModelFields, keepKnownModels } from './perModelSettings.js';
+import { paramLabel, paramValue, withRunParams } from './runParams.js';
 
 const API_BASE = BACKEND_API_BASE;
 
@@ -730,7 +731,7 @@ export function openSettingsModal() {
                     </div>
                     <div class="review-detail-tab-panel" id="settings-panel-run" role="tabpanel" aria-labelledby="settings-tab-run" data-panel="run">
                       <div class="defaults-page-scroll">
-                          <p class="settings-tab-intro">A Generate sends its prompt to a model once per input row. Choose a model to see and change its Max tokens and Concurrency; the model chosen when you save is preselected when you create a Generate. With None chosen, they are the values for models that have none of their own. Max retries applies to every model. Running more rows at once finishes sooner but can hit the provider's rate limits.</p>
+                          <p class="settings-tab-intro">A Generate sends its prompt to a model once per input row. Choose a model to see and change its Max tokens and Concurrency; the model chosen when you save is preselected when you create a Generate. With None chosen, they are the values for models that have none of their own. Max retries applies to every model. Running more rows at once finishes sooner but can hit the provider's rate limits. Below them are the generation parameters the chosen model takes, such as temperature.</p>
                           <div class="defaults-row">
                             <div class="defaults-field defaults-field--full">
                               <label class="dataset-meta-label" for="settings-default-run-credential">Model</label>
@@ -751,6 +752,7 @@ export function openSettingsModal() {
                               <input type="number" id="settings-run-concurrency" class="dataset-meta-input" min="1" max="10" value="4" aria-label="Generate concurrency" />
                             </div>
                           </div>
+                          <div class="defaults-row settings-run-params" id="settings-run-params" hidden></div>
                       </div>
                     </div>
                     <div class="review-detail-tab-panel" id="settings-panel-review" role="tabpanel" aria-labelledby="settings-tab-review" data-panel="review">
@@ -902,6 +904,77 @@ export function openSettingsModal() {
    */
   const modelState = { shared: {}, modelSettings: {} };
   let credentialIds = [];
+  /*
+   * The chosen Generate model's generation parameters (runParams.js): only those the model takes are
+   * listed (GET /api/credentials/{id}/run-params), each blank for the model's default. Saved in
+   * modelState as model_settings[id].run_params; Optimize and the Agent do not use them.
+   */
+  const runParamsRow = overlay.querySelector('#settings-run-params');
+  const runParamSpecs = new Map();
+  let runParamsShown = { id: '', specs: [] };
+  let runParamsRequest = 0;
+
+  function loadRunParamSpecs(credentialId) {
+    if (!runParamSpecs.has(credentialId)) {
+      runParamSpecs.set(credentialId, fetch(`${API_BASE}/api/credentials/${encodeURIComponent(credentialId)}/run-params`)
+        .then((res) => (res.ok ? res.json() : { params: [] }))
+        .then((data) => (Array.isArray(data?.params) ? data.params : []))
+        .catch(() => []));
+    }
+    return runParamSpecs.get(credentialId);
+  }
+
+  /** Keeps what the parameter fields say for the model they show. */
+  function stashRunParams() {
+    const { id, specs } = runParamsShown;
+    if (!id) return;
+    const values = {};
+    for (const spec of specs) {
+      const field = runParamsRow.querySelector(`[data-param="${spec.name}"]`);
+      values[spec.name] = field ? paramValue(spec, field.value) : null;
+    }
+    modelState.modelSettings = withRunParams(modelState.modelSettings, id, values);
+  }
+
+  async function showRunParams() {
+    const request = ++runParamsRequest;
+    const id = (runCredSelect.value || '').trim();
+    runParamsShown = { id: '', specs: [] };
+    runParamsRow.hidden = true;
+    runParamsRow.innerHTML = '';
+    if (!id) return;
+    const specs = await loadRunParamSpecs(id);
+    if (request !== runParamsRequest || !specs.length) return;
+    const own = modelState.modelSettings[id]?.run_params || {};
+    const fields = specs.map((spec) => {
+      const fieldId = `settings-run-param-${spec.name}`;
+      const value = own[spec.name] ?? '';
+      const control = spec.type === 'choice'
+        ? `<select id="${fieldId}" class="credentials-select dataset-meta-input" data-param="${escapeHtml(spec.name)}">
+            <option value="">Model default</option>
+            ${spec.choices.map((choice) => `<option value="${escapeHtml(choice)}"${choice === value ? ' selected' : ''}>${escapeHtml(choice)}</option>`).join('')}
+          </select>`
+        : `<input type="number" id="${fieldId}" class="dataset-meta-input" data-param="${escapeHtml(spec.name)}"
+            min="${spec.min}" max="${spec.max}" step="${spec.type === 'integer' ? 1 : 'any'}" placeholder="Model default"
+            value="${escapeHtml(String(value))}" />`;
+      return `<div class="defaults-field" title="${escapeHtml(spec.help || '')}">
+          <label class="dataset-meta-label" for="${fieldId}">${escapeHtml(paramLabel(spec))}</label>
+          ${control}
+        </div>`;
+    }).join('');
+    runParamsRow.innerHTML = `<div class="defaults-field defaults-field--full">
+        <div class="dataset-meta-label">Generation parameters</div>
+        <p class="settings-run-params__hint">Only the parameters this model takes are listed. Leave one blank to use the model's default.</p>
+      </div>${fields}`;
+    runParamsShown = { id, specs };
+    runParamsRow.hidden = false;
+  }
+
+  runCredSelect.addEventListener('change', () => {
+    stashRunParams();
+    void showRunParams();
+  });
+
   const modelFieldBindings = [
     bindModelFields({ select: runCredSelect, inputs: { run_max_tokens: runMaxTokensInp, run_concurrency: runConcurrencyInp }, state: modelState }),
     bindModelFields({ select: reviewCredSelect, inputs: { review_max_tokens: reviewMaxTokensInp }, state: modelState }),
@@ -1174,6 +1247,7 @@ export function openSettingsModal() {
       modelState.modelSettings = { ...settings.model_settings };
       modelState.shared = Object.fromEntries(Object.keys(PER_MODEL_FIELDS).map((key) => [key, settings[key] ?? MODEL_SETTINGS_DEFAULTS[key]]));
       modelFieldBindings.forEach((binding) => binding.load());
+      void showRunParams();
     }
   }
 
@@ -1188,6 +1262,8 @@ export function openSettingsModal() {
           agent: (agentCredSelect?.value || '').trim(),
         };
         modelFieldBindings.forEach((binding) => binding.stash());
+        stashRunParams();
+        runParamSpecs.clear(); // a model ID may have changed
         const credentials = await loadCredentials();
         populateCredentialSelects(credentials);
         // A deleted model can no longer be chosen: its tab falls back to None.
@@ -1201,6 +1277,7 @@ export function openSettingsModal() {
         choose(agentCredSelect, ids.agent);
         renderAgentModelStatus();
         modelFieldBindings.forEach((binding) => binding.load());
+        void showRunParams();
         void loadAgentHints();
       },
     });
@@ -1286,6 +1363,7 @@ export function openSettingsModal() {
 
   async function doSave() {
     modelFieldBindings.forEach((binding) => binding.stash());
+    stashRunParams();
     const patch = getPatchFromForm();
     try {
       const res = await fetch(`${API_BASE}/api/settings`, {
@@ -1318,6 +1396,8 @@ export function openSettingsModal() {
       default_review_credential_id: reviewCredSelect.value,
       default_agent_credential_id: agentCredSelect?.value || '',
     });
+    // Factory values for the parameters are the model's own defaults.
+    runParamsRow.querySelectorAll('[data-param]').forEach((field) => { field.value = ''; });
   });
   overlay.querySelector('#settings-save')?.addEventListener('click', async () => {
     await doSave();

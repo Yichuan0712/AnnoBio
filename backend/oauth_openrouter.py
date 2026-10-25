@@ -151,6 +151,8 @@ def get_catalog() -> list[dict[str, Any]]:
                 "pdf": "file" in (arch.get("input_modalities") or []),
                 # The Agent needs native tool calling; see the Agent model picker and list_models.
                 "tools": "tools" in (m.get("supported_parameters") or []),
+                # Which generation parameters the model takes (Settings → Generate, llm.supported_run_params).
+                "parameters": list(m.get("supported_parameters") or []),
                 "prompt_price": pricing.get("prompt"),
                 "completion_price": pricing.get("completion"),
             }

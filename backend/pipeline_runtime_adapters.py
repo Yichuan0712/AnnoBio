@@ -188,6 +188,8 @@ def execute_llm_job(job: dict, table: dict, credential: dict, project_session_id
     if not api_key:
         raise PipelineJobError("The selected credential has no API key.")
     max_tokens = int(settings.get("run_max_tokens") or 8192)
+    params = dict(settings.get("run_params") or {})
+    extra = {"params": params} if params else {}
 
     def one(item: tuple[int, dict[str, Any]]) -> tuple[int, list[dict], str | None]:
         index, row = item
@@ -204,7 +206,7 @@ def execute_llm_job(job: dict, table: dict, credential: dict, project_session_id
                     output, _, _ = invoke(
                         provider=provider, model=model, api_key=api_key, base_url=base_url,
                         prompt=prompt, response_model=response_model, max_tokens=max_tokens,
-                        return_shape=return_shape, return_debug=True,
+                        return_shape=return_shape, return_debug=True, **extra,
                     )
                     if return_shape == "table" and isinstance(output, dict) and "rows" in output:
                         output = output["rows"]

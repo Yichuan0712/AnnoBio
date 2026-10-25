@@ -4,7 +4,12 @@ the values of the model chosen at the top of the tab).
 settings["model_settings"] maps a credential id to some of the keys below. A key a model leaves out
 uses the shared setting of the same name (what the fields show with None chosen). A request's
 settings_overrides (per-node settings that older projects saved) still win over both.
+
+An entry may also hold "run_params", the Generate's generation parameters (model_params.py). Those
+belong to the model alone: which parameters exist differs between models, so there is no shared value.
 """
+
+from model_params import clean_run_params, validate_run_params
 
 MODEL_SETTING_RANGES = {
     "run_max_tokens": (256, 131072),
@@ -27,6 +32,11 @@ def validate_model_settings(value) -> dict:
         for key, number in entry.items():
             if number is None:
                 continue
+            if key == "run_params":
+                params = validate_run_params(number)
+                if params:
+                    kept[key] = params
+                continue
             if key not in MODEL_SETTING_RANGES:
                 raise ValueError(f"{key} cannot be set per model.")
             low, high = MODEL_SETTING_RANGES[key]
@@ -45,6 +55,9 @@ def clean_model_settings(value) -> dict:
         if not isinstance(entry, dict):
             continue
         kept = {}
+        params = clean_run_params(entry.get("run_params"))
+        if params:
+            kept["run_params"] = params
         for key, number in entry.items():
             low, high = MODEL_SETTING_RANGES.get(key, (None, None))
             if low is not None and type(number) is int and low <= number <= high:
@@ -55,6 +68,8 @@ def clean_model_settings(value) -> dict:
 
 
 def settings_for_model(settings: dict, credential_id) -> dict:
-    """The shared settings with the model's own values on top."""
+    """The shared settings with the model's own values on top, and its run_params ({} when none)."""
     own = (settings.get("model_settings") or {}).get(str(credential_id or "").strip()) or {}
-    return {**settings, **{key: own[key] for key in MODEL_SETTING_RANGES if key in own}}
+    merged = {**settings, **{key: own[key] for key in MODEL_SETTING_RANGES if key in own}}
+    merged["run_params"] = dict(own.get("run_params") or {})
+    return merged
