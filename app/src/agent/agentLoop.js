@@ -6,11 +6,11 @@
  * no project open). That ends the loop until the user responds.
  *
  * Conversation messages are stored in this shape and converted to OpenAI format per request:
- *   {role: 'user', content}
+ *   {role: 'user', content, attachments?: [{id, name, path, kind, size, preview}]}
  *   {role: 'assistant', content, toolCalls?: [{id, name, arguments, preview?}]}
  *   {role: 'tool', toolCallId, name, content, ok, label, answer?, outcome?}
  * preview is the validated proposal or run request the card shows; answer/outcome record how the
- * user responded.
+ * user responded. A user attachment's preview is what the model saw of the file (attachmentContent.js).
  */
 import { fetchAgentContext, streamAgentTurn } from './api/agentTurnClient.js';
 import {
@@ -24,6 +24,7 @@ import {
   describeToolCall,
   executeAgentTool,
 } from './tools/agentTools.js';
+import { attachmentsMessageText } from './attachments/attachmentContent.js';
 import { historyTokenBudget, planHistory } from './historyBudget.js';
 import { summarizeHistory } from './historySummary.js';
 
@@ -59,7 +60,9 @@ export function toApiMessages(messages) {
       }
       continue;
     }
-    out.push({ role: m.role, content: m.content || '' });
+    // A user message's attachments reach the model as their previews, after the text.
+    const attached = m.role === 'user' ? attachmentsMessageText(m.attachments) : '';
+    out.push({ role: m.role, content: [m.content || '', attached].filter(Boolean).join('\n\n') });
   }
   return out;
 }
@@ -199,7 +202,7 @@ export function resolveCreateProject(messages, request, result) {
  *   onSummary?: (summary: {text: string, covered: number}) => void}} options messages is mutated in
  *   place; onMessage fires after each append; contextSummary is the conversation's summary so far,
  *   and onSummary receives a new one to store on the conversation; runtime.projectOpen false
- *   (no project open) narrows the tools offered
+ *   (no project open) narrows the tools offered; runtime.readAttachment (the desktop app) adds read_attachment
  * @returns {Promise<'answered' | 'waiting'>} waiting: a question or proposal is open
  */
 export async function runAgentLoop({ messages, credentialId, runtime, workspaceSummary, contextSummary = null, signal, onProgress, onMessage, onSummary }) {
@@ -208,7 +211,7 @@ export async function runAgentLoop({ messages, credentialId, runtime, workspaceS
   let budgetSpent = false;
   const progress = (p) => { if (onProgress) onProgress(p); };
   const projectOpen = runtime.projectOpen !== false;
-  const tools = agentToolDefinitions({ projectOpen });
+  const tools = agentToolDefinitions({ projectOpen, attachments: typeof runtime.readAttachment === 'function' });
   const offered = new Set(tools.map((definition) => definition.function.name));
   // The workspace summary and tools are fixed for this loop, so the history's share is too.
   const historyBudget = historyTokenBudget(await fetchAgentContext(credentialId), {

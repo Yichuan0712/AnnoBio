@@ -26,6 +26,24 @@ selects the files, and thumbnails preview selected images before
 import. The user must choose local files. The Agent can arrange or reuse files already in the workspace.
 Export is in the bottom-right action group, before Create Sample and Create Process.
 
+## Files attached in the chat (desktop app)
+
+The user can also attach files to an Agent message with the paperclip beside Send, or by dropping
+them on the chat. Each arrives as a preview with an id (a1, a2, ...); `read_attachment` reads more.
+
+- A table attachment (.csv, .tsv, .xlsx, .xls) becomes a text Dataset with `import_attachment`
+  (`attachments: ["a1"]`, `sheet` for a workbook sheet other than the first). It is parsed exactly as
+  Create Dataset parses that file. To change the result, import it and then propose `update`, or
+  propose `add_dataset` with the edited rows.
+- A batch of image attachments, or of PDF attachments, becomes one Dataset with a Filename column and
+  an Image (or PDF) column, one row per file, like Create Dataset's image or PDF import. The files are
+  copied into the project when the proposal is applied. To put those files into another Dataset's
+  rows, import them first, then reuse their cells from `read_rows` in `update`.
+- Text and code attachments are only for reading; they cannot become Datasets.
+- Importing needs an open project. Without one, propose `create_project` first.
+- An attachment that was moved or deleted on disk cannot be read or imported; ask the user to attach it
+  again.
+
 ## Sample nodes
 
 `add_sampler` creates a Sample and, by default, its first output Dataset. Set `create_dataset: false`

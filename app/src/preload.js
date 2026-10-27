@@ -14,6 +14,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resolveImagePaths: (rows) => ipcRenderer.invoke('assets:resolve-paths', rows),
   exportImageDataset: (file, content) => ipcRenderer.invoke('assets:export-dataset', file, content),
   getPathForFile: (file) => webUtils.getPathForFile(file),
+  // Agent chat attachments (docs/design/AGENT_ATTACHMENTS_PLAN.md): dropped File objects become paths here.
+  pickAgentAttachments: () => ipcRenderer.invoke('agent:pick-attachments'),
+  attachDroppedFiles: (files) => ipcRenderer.invoke('agent:register-attachments',
+    Array.from(files || []).map((file) => webUtils.getPathForFile(file)).filter(Boolean)),
+  readAgentAttachment: (filePath) => ipcRenderer.invoke('agent:read-attachment', filePath),
   onSetTheme: (callback) => {
     ipcRenderer.on('set-theme', (_event, mode) => callback(mode));
   },

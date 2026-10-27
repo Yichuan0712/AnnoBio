@@ -46,6 +46,62 @@ const NODE_ID = { type: 'string', description: 'Exact node id from the workspace
 const START_ROW = { type: 'integer', minimum: 1, description: '1-based first row. Default 1.' };
 const MAX_ROWS = { type: 'integer', minimum: 1, maximum: 50, description: 'Rows to return, at most 50. Default 5.' };
 
+const PROPOSE_CHANGES_OPS = ['add_dataset', 'duplicate_dataset', 'move_image', 'import_dataset', 'add_sampler', 'sample_dataset', 'add_process', 'duplicate_process', 'add_prompt', 'add_prompt_version', 'add_run', 'add_score', 'save_run_results', 'save_process_output', 'save_score_results', 'apply_review', 'update', 'connect', 'disconnect', 'select_history', 'delete_history', 'remove'];
+
+// Only where the chat takes attachments (the desktop app, docs/design/AGENT_ATTACHMENTS_PLAN.md).
+const IMPORT_ATTACHMENT_OPERATION = '- import_attachment: ref, attachments (ids from the attachment previews, such as ["a1"]), name?, note?, sheet? (a workbook sheet; default the first). One table attachment becomes a text Dataset, parsed as Create Dataset parses it; a batch of image attachments, or of PDF attachments, becomes a Dataset with a Filename column and an Image (or PDF) column, one row per file, and the files are copied into the project when the proposal is applied. Text and code attachments cannot be imported; tables, images and PDFs cannot be mixed in one operation.\n';
+
+/** propose_changes, with import_attachment where the chat takes attachments. */
+function proposeChangesTool({ attachments = false } = {}) {
+  return tool(
+    PROPOSE_CHANGES_TOOL,
+    `Propose changes to the canvas. The user sees each change on a card and applies or rejects the whole proposal; nothing changes before that. The result tells you whether it was applied and the ids of added nodes. Put related changes in one proposal (a new prompt version with its run and score, for example). Only remove nodes the user asked to remove.
+
+Reference existing nodes by id. A node added earlier in the same proposal is referenced by the "ref" you gave it, which must start with "$".
+
+Operations ("op" plus the fields listed):
+- add_dataset: ref, name, note?, columns (names, or {name, type: text | image | pdf}), rows (lists of cells, or objects keyed by column). Image/PDF cells reuse existing uploaded asset cells from read_rows; null is an empty cell. It cannot upload new local files or invent asset IDs.
+- duplicate_dataset: ref, dataset, name?, note?, as_version? (default false). Copies the complete table including image/PDF cells. as_version links a new editable version and keeps row identities; an ordinary duplicate is standalone. Neither consumes another Sample pull.
+- move_image: dataset, from_row, from_column, to_row, to_column, image? (1-based image within the source cell, default 1). Moves that image to the end of the target image cell in the same Dataset, removing it from the source, like dragging an image in the table. Row numbers are 1-based; both columns must be image columns and the Dataset must be editable.
+- import_dataset: ref, source (pubmed | clinicaltrials | chembl | preprint | europepmc | openalex | uniprot | wikipedia), ids, fields (from search_source's importable_fields), name, note?. Records are fetched when applied. Ids: europepmc PMIDs, PMCIDs or PPR ids; openalex W ids or DOIs; uniprot accessions; wikipedia article titles.
+${attachments ? IMPORT_ATTACHMENT_OPERATION : ''}- add_sampler: ref (the Sample), dataset_ref? (the sampled Dataset), source (dataset), sampling? (random | random_with_replacement | rows), size + size_unit (rows | percent) for random, rows ("1 3 5-10") for rows, name?, dataset_name?, create_dataset? (default true). With create_dataset false, only adds a configurable Sample node; defaults are random without replacement, 100 percent. Once it has an output Dataset its settings lock.
+- sample_dataset: ref (new Dataset), sampler (an existing Sample), name?, note?. Draws again using its saved settings. Random without replacement consumes unused source rows across pulls and fails when a full pull no longer fits; specified rows and replacement sampling are repeatable. inspect_node reports settingsLocked, outputs and finite progress (completed, total, remaining).
+- add_process: ref, name?, primary_input? (a dataset, run or process: df in the code), primary_branch (only for a process with several branches), code? defining process(df, ...); every other input (a dataset or a step output) is a parameter after df named after its df_<alias> (inspect_node on a process lists them under availableInputs; see the process-code guide). Without primary_input, creates an unconnected Process whose code can be edited before connecting its Data input; default code returns df. Not run until the user runs it.
+- duplicate_process: ref, process, name?. Copies a Process's code and detected outputs into a standalone Process with no inputs or results, like Duplicate this process.
+- add_prompt: ref, name, note?, text (the prompt, with a {variable} for each input; {{ and }} write literal braces; an input has no type: mapped to an image or PDF column it sends those files), output {return_shape: single | table, fields [{key, type: str | float | list_str | list_float, description, examples?, allow_none? (boolean)}]}. Numeric examples are numbers; each list example is an array. allow_none corresponds to Allow None in the field editor. Field names must be unique (case-insensitive).
+- add_prompt_version: ref, prompt (source), name?, and what to change: text_edits [{old, new}] (each old is text that appears exactly once in the prompt; replaced in order) or text (the complete new prompt), output (only what changes: {return_shape} alone keeps the fields), note. Everything else is copied. Prefer this over editing a prompt that already has runs.
+- add_run: ref, prompt?, input? (a dataset, a run whose results it reads, or a process), input_branch (only for a process with several branches), input_mapping {prompt input: column of what it reads}, model?, name?. Omit prompt/input to create an unconnected Generate and connect its inputs later; input_mapping needs both inputs. Steps connect directly: read another step's output instead of saving it as a dataset first. A run or process without a result yet has no known columns: leave out input_mapping, run it, then set input_mapping with update. A process's branches are known once its code has been checked or it has run, so read a process added or rewritten in this proposal in a later one. model is the id of a tested model from the workspace summary's Models list, like the picker beside Create Generate; without it the Generate takes the default Generate model when it first runs. Ask the user which model to use unless they already said or only one model is tested. Its number settings are that model's, from Settings. Not started until the user starts it.
+- add_score: ref, run, ground_truth (dataset), comparison [{field (prompt output key), ground_truth_columns, match?}], pairing? [{run_input_column (or "#" for row number), ground_truth_columns, match?}] to decide which ground-truth row belongs to which run row, combine? (all | any); or rule_tree for complete nested rules; or match_code defining match(input_row, output_row, gt_row) instead of rules. match: {ignore_case, ignore_symbols, ignore_whitespace, contains, semantic, embedding, rxnorm, mesh, hgnc, pubchem: booleans; ontology: go | chebi | mondo; numeric: exact | abs | rel | decimals, tolerance, decimals}.
+- rule_tree: the complete {v: 2, input, output} from inspect_node.details.rules.ruleTree. Each root/group is {type: "group", children: [rules or groups], ops: ["AND" | "OR", ...]}, one operator per adjacent child. A rule is {type: "rule", outputKey, gtColumns, matchType: "exact", matchFlags}. Input keys are [column], # or [#]; output keys are Prompt output fields. Preserve grouping and matchFlags when editing. Supply rule_tree instead of pairing/comparison/combine/match_code; never flatten a grouped tree to edit it.
+- save_run_results: ref, run, name?. Saves a run's results (input columns plus output fields), the same table its readers get, as a plain dataset that records the run and its current History record it came from. Only to freeze or hand-edit results: a dataset does not follow the run, and a step reading it starts a new pipeline. Fails if the run has no History record.
+- save_process_output: ref, process, branch? (needed when it has several), name?. Saves one output branch as a plain dataset that records the process, branch and current History record it came from. Only to freeze or hand-edit an output. Fails if the process has no History record.
+- save_score_results: ref, score, name?, note?. Saves an Evaluate's comparison table (model output rows beside their matched ground-truth rows and status) as a plain dataset that records the Evaluate and its History record, like Save to workspace. It saves the Evaluate's last saved result, so run it (run_nodes score) first; fails without one.
+- apply_review: ref, review, suggestion_ids, name?. Creates a new prompt from the review's prompt with those suggestions applied. The displayed Evaluate History must match the Optimize node's bound evaluation.
+- update: node, set {field: value}. prompt: name, note, text_edits or text, output. dataset: name, note, columns, rows (including existing image/PDF cells), row_ids? (parallel to rows; existing IDs from read_rows, null for new rows). Omitted columns retain their types. process: name, code, primary_input, primary_branch. run: name, prompt, input, input_branch, input_mapping (with History enabled, changing these inputs selects a different result or a new run), model (only before its first run; a Generate keeps the model it started with). score: name, ground_truth, comparison (+ pairing, combine), rule_tree, match_code; or exclude_row_keys/include_row_keys (arrays of zero-based GT keys "0", "1", ... or Generate-result keys "run:0", "run:1", ...; change inclusion separately from rules/inputs, and use read_rows.rowKey). Exclusions require a new Evaluate Run before updated metrics or a new Optimize; existing Optimize evidence stays fixed. sampler: name, sampling, size, size_unit, rows (settings only before its first output). review: name. A Prompt or Dataset used in saved results is content-locked; a Sample output also locks its source Dataset. Only name and note can change; use add_prompt_version or duplicate_dataset instead. inspect_node includes contentLock. A Process's code stays editable; History keeps each run.
+- connect: node, input, source, branch?. Changes what one input of an existing node reads, as dragging a line onto that input on the canvas does. input is an input id from inspect_node's ports: a run's prompt (source: a prompt) or input; a process's df, one of its df_<name> parameters, or + (adds the source as a new input under its own alias and adds that parameter to process()); a score's ground_truth (source: a dataset). Otherwise source is a dataset, run or process, with branch for a process with several branches. It replaces what the input read; the same rules as on the canvas apply (no loops, not while the step runs, a process's df first, one input per source in a process). A score's run, a review's score and a sampler's source are fixed when the node is made.
+- disconnect: node, input. Leaves that input empty, as dragging its line off on the canvas does. A process's df can be disconnected only when nothing else is connected; disconnecting a df_<name> also removes that parameter, unless the code uses it.
+- select_history: record_id. Restore that Generate, Process or Evaluate record together with the matching upstream and downstream History lineage, including the inputs it read. Use it alone in a proposal; the user sees and approves the affected nodes.
+- delete_history: record_id. Delete a non-current Generate, Process or Evaluate record and every dependent history record. Use it alone in a proposal; the user sees the count before approving.
+- remove: node. Like canvas deletion, refuses while downstream nodes still reference it. Disconnect them first, or include their removal in the same proposal.`,
+    {
+      summary: { type: 'string', description: 'One sentence for the user: what this proposal does and why.' },
+      operations: {
+        type: 'array',
+        minItems: 1,
+        items: {
+          type: 'object',
+          properties: {
+            op: { type: 'string', enum: attachments ? [...PROPOSE_CHANGES_OPS, 'import_attachment'] : PROPOSE_CHANGES_OPS },
+          },
+          required: ['op'],
+          additionalProperties: true,
+        },
+      },
+    },
+    ['summary', 'operations'],
+  );
+}
+
 export const AGENT_TOOL_DEFINITIONS = [
   tool(
     'get_workspace',
@@ -123,53 +179,7 @@ Sources: pubmed, clinicaltrials, chembl; europepmc (literature with abstracts, i
     },
     ['source', 'query'],
   ),
-  tool(
-    PROPOSE_CHANGES_TOOL,
-    `Propose changes to the canvas. The user sees each change on a card and applies or rejects the whole proposal; nothing changes before that. The result tells you whether it was applied and the ids of added nodes. Put related changes in one proposal (a new prompt version with its run and score, for example). Only remove nodes the user asked to remove.
-
-Reference existing nodes by id. A node added earlier in the same proposal is referenced by the "ref" you gave it, which must start with "$".
-
-Operations ("op" plus the fields listed):
-- add_dataset: ref, name, note?, columns (names, or {name, type: text | image | pdf}), rows (lists of cells, or objects keyed by column). Image/PDF cells reuse existing uploaded asset cells from read_rows; null is an empty cell. It cannot upload new local files or invent asset IDs.
-- duplicate_dataset: ref, dataset, name?, note?, as_version? (default false). Copies the complete table including image/PDF cells. as_version links a new editable version and keeps row identities; an ordinary duplicate is standalone. Neither consumes another Sample pull.
-- move_image: dataset, from_row, from_column, to_row, to_column, image? (1-based image within the source cell, default 1). Moves that image to the end of the target image cell in the same Dataset, removing it from the source, like dragging an image in the table. Row numbers are 1-based; both columns must be image columns and the Dataset must be editable.
-- import_dataset: ref, source (pubmed | clinicaltrials | chembl | preprint | europepmc | openalex | uniprot | wikipedia), ids, fields (from search_source's importable_fields), name, note?. Records are fetched when applied. Ids: europepmc PMIDs, PMCIDs or PPR ids; openalex W ids or DOIs; uniprot accessions; wikipedia article titles.
-- add_sampler: ref (the Sample), dataset_ref? (the sampled Dataset), source (dataset), sampling? (random | random_with_replacement | rows), size + size_unit (rows | percent) for random, rows ("1 3 5-10") for rows, name?, dataset_name?, create_dataset? (default true). With create_dataset false, only adds a configurable Sample node; defaults are random without replacement, 100 percent. Once it has an output Dataset its settings lock.
-- sample_dataset: ref (new Dataset), sampler (an existing Sample), name?, note?. Draws again using its saved settings. Random without replacement consumes unused source rows across pulls and fails when a full pull no longer fits; specified rows and replacement sampling are repeatable. inspect_node reports settingsLocked, outputs and finite progress (completed, total, remaining).
-- add_process: ref, name?, primary_input? (a dataset, run or process: df in the code), primary_branch (only for a process with several branches), code? defining process(df, ...); every other input (a dataset or a step output) is a parameter after df named after its df_<alias> (inspect_node on a process lists them under availableInputs; see the process-code guide). Without primary_input, creates an unconnected Process whose code can be edited before connecting its Data input; default code returns df. Not run until the user runs it.
-- duplicate_process: ref, process, name?. Copies a Process's code and detected outputs into a standalone Process with no inputs or results, like Duplicate this process.
-- add_prompt: ref, name, note?, text (the prompt, with a {variable} for each input; {{ and }} write literal braces; an input has no type: mapped to an image or PDF column it sends those files), output {return_shape: single | table, fields [{key, type: str | float | list_str | list_float, description, examples?, allow_none? (boolean)}]}. Numeric examples are numbers; each list example is an array. allow_none corresponds to Allow None in the field editor. Field names must be unique (case-insensitive).
-- add_prompt_version: ref, prompt (source), name?, and what to change: text_edits [{old, new}] (each old is text that appears exactly once in the prompt; replaced in order) or text (the complete new prompt), output (only what changes: {return_shape} alone keeps the fields), note. Everything else is copied. Prefer this over editing a prompt that already has runs.
-- add_run: ref, prompt?, input? (a dataset, a run whose results it reads, or a process), input_branch (only for a process with several branches), input_mapping {prompt input: column of what it reads}, model?, name?. Omit prompt/input to create an unconnected Generate and connect its inputs later; input_mapping needs both inputs. Steps connect directly: read another step's output instead of saving it as a dataset first. A run or process without a result yet has no known columns: leave out input_mapping, run it, then set input_mapping with update. A process's branches are known once its code has been checked or it has run, so read a process added or rewritten in this proposal in a later one. model is the id of a tested model from the workspace summary's Models list, like the picker beside Create Generate; without it the Generate takes the default Generate model when it first runs. Ask the user which model to use unless they already said or only one model is tested. Its number settings are that model's, from Settings. Not started until the user starts it.
-- add_score: ref, run, ground_truth (dataset), comparison [{field (prompt output key), ground_truth_columns, match?}], pairing? [{run_input_column (or "#" for row number), ground_truth_columns, match?}] to decide which ground-truth row belongs to which run row, combine? (all | any); or rule_tree for complete nested rules; or match_code defining match(input_row, output_row, gt_row) instead of rules. match: {ignore_case, ignore_symbols, ignore_whitespace, contains, semantic, embedding, rxnorm, mesh, hgnc, pubchem: booleans; ontology: go | chebi | mondo; numeric: exact | abs | rel | decimals, tolerance, decimals}.
-- rule_tree: the complete {v: 2, input, output} from inspect_node.details.rules.ruleTree. Each root/group is {type: "group", children: [rules or groups], ops: ["AND" | "OR", ...]}, one operator per adjacent child. A rule is {type: "rule", outputKey, gtColumns, matchType: "exact", matchFlags}. Input keys are [column], # or [#]; output keys are Prompt output fields. Preserve grouping and matchFlags when editing. Supply rule_tree instead of pairing/comparison/combine/match_code; never flatten a grouped tree to edit it.
-- save_run_results: ref, run, name?. Saves a run's results (input columns plus output fields), the same table its readers get, as a plain dataset that records the run and its current History record it came from. Only to freeze or hand-edit results: a dataset does not follow the run, and a step reading it starts a new pipeline. Fails if the run has no History record.
-- save_process_output: ref, process, branch? (needed when it has several), name?. Saves one output branch as a plain dataset that records the process, branch and current History record it came from. Only to freeze or hand-edit an output. Fails if the process has no History record.
-- save_score_results: ref, score, name?, note?. Saves an Evaluate's comparison table (model output rows beside their matched ground-truth rows and status) as a plain dataset that records the Evaluate and its History record, like Save to workspace. It saves the Evaluate's last saved result, so run it (run_nodes score) first; fails without one.
-- apply_review: ref, review, suggestion_ids, name?. Creates a new prompt from the review's prompt with those suggestions applied. The displayed Evaluate History must match the Optimize node's bound evaluation.
-- update: node, set {field: value}. prompt: name, note, text_edits or text, output. dataset: name, note, columns, rows (including existing image/PDF cells), row_ids? (parallel to rows; existing IDs from read_rows, null for new rows). Omitted columns retain their types. process: name, code, primary_input, primary_branch. run: name, prompt, input, input_branch, input_mapping (with History enabled, changing these inputs selects a different result or a new run), model (only before its first run; a Generate keeps the model it started with). score: name, ground_truth, comparison (+ pairing, combine), rule_tree, match_code; or exclude_row_keys/include_row_keys (arrays of zero-based GT keys "0", "1", ... or Generate-result keys "run:0", "run:1", ...; change inclusion separately from rules/inputs, and use read_rows.rowKey). Exclusions require a new Evaluate Run before updated metrics or a new Optimize; existing Optimize evidence stays fixed. sampler: name, sampling, size, size_unit, rows (settings only before its first output). review: name. A Prompt or Dataset used in saved results is content-locked; a Sample output also locks its source Dataset. Only name and note can change; use add_prompt_version or duplicate_dataset instead. inspect_node includes contentLock. A Process's code stays editable; History keeps each run.
-- connect: node, input, source, branch?. Changes what one input of an existing node reads, as dragging a line onto that input on the canvas does. input is an input id from inspect_node's ports: a run's prompt (source: a prompt) or input; a process's df, one of its df_<name> parameters, or + (adds the source as a new input under its own alias and adds that parameter to process()); a score's ground_truth (source: a dataset). Otherwise source is a dataset, run or process, with branch for a process with several branches. It replaces what the input read; the same rules as on the canvas apply (no loops, not while the step runs, a process's df first, one input per source in a process). A score's run, a review's score and a sampler's source are fixed when the node is made.
-- disconnect: node, input. Leaves that input empty, as dragging its line off on the canvas does. A process's df can be disconnected only when nothing else is connected; disconnecting a df_<name> also removes that parameter, unless the code uses it.
-- select_history: record_id. Restore that Generate, Process or Evaluate record together with the matching upstream and downstream History lineage, including the inputs it read. Use it alone in a proposal; the user sees and approves the affected nodes.
-- delete_history: record_id. Delete a non-current Generate, Process or Evaluate record and every dependent history record. Use it alone in a proposal; the user sees the count before approving.
-- remove: node. Like canvas deletion, refuses while downstream nodes still reference it. Disconnect them first, or include their removal in the same proposal.`,
-    {
-      summary: { type: 'string', description: 'One sentence for the user: what this proposal does and why.' },
-      operations: {
-        type: 'array',
-        minItems: 1,
-        items: {
-          type: 'object',
-          properties: {
-            op: { type: 'string', enum: ['add_dataset', 'duplicate_dataset', 'move_image', 'import_dataset', 'add_sampler', 'sample_dataset', 'add_process', 'duplicate_process', 'add_prompt', 'add_prompt_version', 'add_run', 'add_score', 'save_run_results', 'save_process_output', 'save_score_results', 'apply_review', 'update', 'connect', 'disconnect', 'select_history', 'delete_history', 'remove'] },
-          },
-          required: ['op'],
-          additionalProperties: true,
-        },
-      },
-    },
-    ['summary', 'operations'],
-  ),
+  proposeChangesTool(),
   tool(
     'try_process',
     'Try Process code before proposing it. For an existing Process, always pass process_node_id: its actual connections and fixed aliases are preserved even after inputs are renamed. For a new Process, pass primary_input and optional primary_branch; aliases are inferred as for a new node. Only the first max_rows df rows are used; secondary inputs are complete. Returns branches, columns and sample rows or the Python error. No model calls; does not change the canvas.',
@@ -235,7 +245,7 @@ Jobs ("kind" plus):
 
 // With no project open (the desktop app, docs/design/AGENT_NO_PROJECT_PLAN.md) there is no canvas
 // to read, change or run, so only these are offered, plus create_project.
-const NO_PROJECT_TOOL_NAMES = new Set(['list_models', 'read_guide', 'search_source', ASK_USER_TOOL]);
+const NO_PROJECT_TOOL_NAMES = new Set(['list_models', 'read_guide', 'search_source', ASK_USER_TOOL, 'read_attachment']);
 
 // Not in AGENT_TOOL_DEFINITIONS: it is only for when no project is open, and leaving it out keeps the
 // tools sent with a project open unchanged.
@@ -249,11 +259,40 @@ const CREATE_PROJECT_DEFINITION = tool(
   ['name', 'summary'],
 );
 
-/** The tools offered for one turn: every one with a project open, otherwise NO_PROJECT_TOOL_NAMES and create_project. */
-export function agentToolDefinitions({ projectOpen = true } = {}) {
-  return projectOpen
-    ? AGENT_TOOL_DEFINITIONS
-    : [...AGENT_TOOL_DEFINITIONS.filter((definition) => NO_PROJECT_TOOL_NAMES.has(definition.function.name)), CREATE_PROJECT_DEFINITION];
+// Only where the chat takes attachments (the desktop app, docs/design/AGENT_ATTACHMENTS_PLAN.md).
+const READ_ATTACHMENT_DEFINITION = tool(
+  'read_attachment',
+  'Read more of a file the user attached in this conversation, by its id from the attachment previews (a1, a2, ...): a window of table rows, PDF pages or text. Only attached files can be read; the result has the same shape as the preview.',
+  {
+    attachment_id: { type: 'string', description: 'Attachment id from a preview, such as a1.' },
+    start_row: START_ROW,
+    max_rows: { type: 'integer', minimum: 1, maximum: 50, description: 'Table rows to return, at most 50. Default 20.' },
+    sheet: { type: 'string', description: 'Workbook sheet to read; default the first. The preview lists the sheets.' },
+    page: { type: 'integer', minimum: 1, description: 'PDF: first page to read.' },
+    max_pages: { type: 'integer', minimum: 1, maximum: 10, description: 'PDF: pages to read, at most 10. Default 3.' },
+    offset: { type: 'integer', minimum: 0, description: 'Text: first character to read. Default 0.' },
+    max_chars: { type: 'integer', minimum: 1, maximum: 12000, description: 'Text: characters to read, at most 12000. Default 3000.' },
+  },
+  ['attachment_id'],
+);
+
+const PROPOSE_CHANGES_WITH_ATTACHMENTS = proposeChangesTool({ attachments: true });
+
+/**
+ * The tools offered for one turn: every one with a project open, otherwise NO_PROJECT_TOOL_NAMES and
+ * create_project. Where the chat takes attachments, read_attachment is added and propose_changes
+ * also offers import_attachment.
+ */
+export function agentToolDefinitions({ projectOpen = true, attachments = false } = {}) {
+  if (!projectOpen) {
+    const offered = AGENT_TOOL_DEFINITIONS.filter((definition) => NO_PROJECT_TOOL_NAMES.has(definition.function.name));
+    return [...offered, ...(attachments ? [READ_ATTACHMENT_DEFINITION] : []), CREATE_PROJECT_DEFINITION];
+  }
+  if (!attachments) return AGENT_TOOL_DEFINITIONS;
+  return [
+    ...AGENT_TOOL_DEFINITIONS.map((definition) => (definition.function.name === PROPOSE_CHANGES_TOOL ? PROPOSE_CHANGES_WITH_ATTACHMENTS : definition)),
+    READ_ATTACHMENT_DEFINITION,
+  ];
 }
 
 function truncate(text) {
@@ -367,6 +406,7 @@ export function describeToolCall(name, args, runtime) {
     case 'read_guide': return `Read the ${args.topic} guide`;
     case 'search_source': return `Searched ${args.source} for "${args.query}"`;
     case 'try_process': return `Tried process code on ${titleOf(runtime, args.process_node_id || args.primary_input)}`;
+    case 'read_attachment': return `Read attachment ${runtime.attachmentName?.(args.attachment_id) || args.attachment_id}`;
     default: return name;
   }
 }
@@ -425,6 +465,8 @@ async function runTool(name, args, runtime) {
       return searchSource(args);
     case 'try_process':
       return tryProcess(args, runtime);
+    case 'read_attachment':
+      return runtime.readAttachment(args);
     default:
       return { error: `Unknown tool: ${name}` };
   }

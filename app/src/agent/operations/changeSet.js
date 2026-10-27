@@ -8,7 +8,7 @@
  * "$name" ref given when adding them.
  */
 import { generateDisplayName, nodeTypeLabel } from '../../nodeLabels.js';
-import { cloneCell, isAssetCell, moveImageAsset, normalizeDatasetContent } from '../../datasetContent.js';
+import { cloneCell, imageCell, isAssetCell, moveImageAsset, normalizeDatasetContent, pdfCell } from '../../datasetContent.js';
 import { sampleSourceIndices, sampledOutputs } from '../../samplerQuota.js';
 import { buildSamplerNodeSpec, formatSamplerModeSummary } from './sampler_node_shared.js';
 import { PORT_TYPES, applyPortOp, checkConnect, checkDisconnect, keepSharedMapping, nodePorts } from '../../nodePorts.js';
@@ -109,7 +109,9 @@ function outputText(output) {
  *   now?: () => string, models?: Map<string, object>, scoreTables?: Map<string, object>}} ctx imported holds rows fetched for import
  *   operations (by operation index); without it an import becomes an empty placeholder table. models holds the
  *   credentials the model pickers offer (Test passed), by id; scoreTables the table each Evaluate's Save to
- *   workspace saves ({headers, rows, recordId, stale}), by Evaluate id.
+ *   workspace saves ({headers, rows, recordId, stale}), by Evaluate id. attachments holds, for each
+ *   import_attachment (by operation index), the chat attachments it names ({id, name, kind, size}), the parsed
+ *   table for a table attachment, and once the files are stored (at apply) their project assets ({id, name}).
  * @returns {{state: object, items: object[], refs: Record<string, string>, warnings: string[], nodeIds: string[]}}
  */
 export function planChangeSet(state, operations, ctx) {
@@ -645,6 +647,52 @@ export function planChangeSet(state, operations, ctx) {
       const lines = [`${ids.length} ${source.id}${ids.length === 1 ? '' : 's'} from ${source.label}; columns: ${headers.join(', ')}`];
       if (fetched?.notFound?.length) lines.push(`${fetched.notFound.length} not found: ${fetched.notFound.slice(0, 10).join(', ')}`);
       if (!fetched) lines.push('Records are fetched when the proposal is applied.');
+      return { kind: 'add', type: 'dataset', title: `Import "${name}"`, nodeIds: [node.nodeId], lines };
+    },
+
+    // A chat attachment (desktop app) as a Dataset, as Create Dataset would make it from that file.
+    import_attachment(op, index) {
+      const entry = ctx.attachments?.get(index);
+      if (!entry) fail('Attachments can be imported only in the desktop app, from files the user attached in this conversation.');
+      const ids = (Array.isArray(op.attachments) ? op.attachments : [op.attachments]).map(clean).filter(Boolean);
+      if (!ids.length) fail('attachments must list attachment ids from the previews, such as ["a1"].');
+      const missing = ids.filter((id) => !entry.attachments.some((a) => a.id === id));
+      if (missing.length) fail(`No attachment ${missing.join(', ')} in this conversation. Use ids from the attachment previews.`);
+      const found = ids.map((id) => entry.attachments.find((a) => a.id === id));
+      const kinds = new Set(found.map((a) => a.kind));
+      if (kinds.has('text')) fail('Text and code attachments cannot be imported as a Dataset; read them with read_attachment.');
+      if (kinds.size > 1) fail('Import one table, a batch of images or a batch of PDFs in one operation, not a mix.');
+      const kind = found[0].kind;
+      let content;
+      let lines;
+      if (kind === 'table') {
+        if (found.length > 1) fail('Import one table attachment per operation.');
+        if (entry.table?.error) fail(`${found[0].name}: ${entry.table.error}`);
+        if (!entry.table) fail(`${found[0].name} could not be read.`);
+        content = normalizeDatasetContent({ headers: entry.table.headers, rows: entry.table.rows });
+        lines = [`${content.rows.length} rows from ${found[0].name}${entry.table.sheet ? ` (sheet "${entry.table.sheet}")` : ''}; columns: ${content.headers.join(', ')}`];
+      } else {
+        const fileColumn = kind === 'image' ? 'Image' : 'PDF';
+        const toCell = kind === 'image' ? imageCell : pdfCell;
+        const assets = entry.assets;
+        const rows = assets ? assets.map((asset) => [asset.name, toCell([asset.id], [asset.name])]) : found.map((a) => [a.name, toCell()]);
+        content = normalizeDatasetContent({ headers: ['Filename', fileColumn], columnTypes: ['text', kind], rows });
+        const megabytes = found.reduce((sum, a) => sum + (Number(a.size) || 0), 0) / (1024 * 1024);
+        lines = [`${found.length} ${kind === 'image' ? 'image' : 'PDF'}${found.length === 1 ? '' : 's'}, one row each; columns: Filename, ${fileColumn}`];
+        if (!assets) lines.push(`The files (${megabytes < 0.1 ? '<0.1' : megabytes.toFixed(1)} MB) are copied into the project when the proposal is applied.`);
+      }
+      const baseName = found.length === 1 ? found[0].name.replace(/\.[^.]+$/, '') : kind === 'image' ? 'Images' : kind === 'pdf' ? 'PDFs' : 'Dataset';
+      const name = uniqueName(clean(op.name) || baseName, takenNames('dataset'));
+      const node = addNode({
+        type: 'dataset',
+        nodeId: generateNodeId(),
+        ...placeNear(null),
+        name,
+        note: String(op.note ?? `Imported from ${found.map((a) => a.name).join(', ')}.`),
+        datasetContent: content,
+        nodeOrigin: 'agent',
+      });
+      registerRef(op, node.nodeId);
       return { kind: 'add', type: 'dataset', title: `Import "${name}"`, nodeIds: [node.nodeId], lines };
     },
 

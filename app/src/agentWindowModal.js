@@ -3,6 +3,9 @@ import { mountAgentChatSession } from './agentChatSession.js';
 import { clampAgentTitle } from './agentTitleLimits.js';
 import { BACKEND_API_BASE, waitForBackend } from './backendConfig.js';
 import { iconCollapse } from './modalMaximize.js';
+import { normalizeStoredAttachments } from './agent/attachments/attachmentTypes.js';
+import { attachmentsSupported } from './agent/attachments/desktopAttachments.js';
+import { iconPaperclip } from './icons.js';
 
 // Web fallback for the electronAPI methods this module relies on: same two method names,
 // backed by backend/project_store.py's REST endpoints instead of local-file IPC, keyed by
@@ -114,7 +117,8 @@ function sortChatsByRecent(chats) {
 // messages carry none of the tool history the current loop needs. See docs/design/AGENT_DESIGN.md.
 const CONVERSATIONS_FORMAT_VERSION = 2;
 
-/** Keeps the fields agent/agentLoop.js stores on each message (tool calls, tool results). */
+/** Keeps the fields agent/agentLoop.js stores on each message (tool calls, tool results, attachments).
+ * main.js's mapAgentMessageForStorage keeps the same fields for desktop projects. */
 function mapMessageForStorage(message) {
   if (!message || typeof message !== 'object') {
     return { role: 'assistant', content: '' };
@@ -139,6 +143,8 @@ function mapMessageForStorage(message) {
     if (message.answer != null) out.answer = String(message.answer);
     if (message.outcome != null) out.outcome = String(message.outcome);
   }
+  const attachments = out.role === 'user' ? normalizeStoredAttachments(message.attachments) : [];
+  if (attachments.length) out.attachments = attachments;
   return out;
 }
 
@@ -166,6 +172,7 @@ function normalizeStoredChats(data) {
           pending: chat.pending === true,
           pendingStatus: String(chat.pendingStatus || '').trim(),
           unsentDraft: String(chat.unsentDraft || ''),
+          unsentAttachments: normalizeStoredAttachments(chat.unsentAttachments),
           messages: Array.isArray(chat.messages)
             ? chat.messages
                 .filter((message) => message && typeof message === 'object')
@@ -265,6 +272,7 @@ export async function openAgentWindowModal(options = {}) {
             </div>
           </div>
           <div class="agent-window__composer">
+            <div class="agent-window__attachment-tray" hidden></div>
             <div class="agent-window__composer-field">
               <textarea
                 class="agent-window__composer-input"
@@ -287,6 +295,18 @@ export async function openAgentWindowModal(options = {}) {
   const messagesEl = overlay.querySelector('.agent-window__messages');
   const composerInputEl = overlay.querySelector('.agent-window__composer-input');
   const composerSendEl = overlay.querySelector('.agent-window__composer-send');
+  // Attaching files is desktop-only (docs/design/AGENT_ATTACHMENTS_PLAN.md).
+  let composerAttachEl = null;
+  if (attachmentsSupported()) {
+    composerAttachEl = document.createElement('button');
+    composerAttachEl.type = 'button';
+    composerAttachEl.className = 'agent-window__composer-attach';
+    composerAttachEl.title = 'Attach files';
+    composerAttachEl.setAttribute('aria-label', 'Attach files');
+    composerAttachEl.appendChild(iconPaperclip(15));
+    composerSendEl.before(composerAttachEl);
+    overlay.classList.add('agent-window-overlay--attachments');
+  }
   let chatSession = null;
   let saveChain = Promise.resolve();
 
@@ -448,6 +468,9 @@ export async function openAgentWindowModal(options = {}) {
     messagesEl,
     inputEl: composerInputEl,
     sendButtonEl: composerSendEl,
+    attachButtonEl: composerAttachEl,
+    attachmentTrayEl: overlay.querySelector('.agent-window__attachment-tray'),
+    dropZoneEl: overlay.querySelector('.agent-window__main'),
     autoResizeComposer,
     workspace,
     onConversationDraftChanged: () => {

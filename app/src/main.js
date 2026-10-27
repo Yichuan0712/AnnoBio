@@ -5,6 +5,9 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import { spawn, execSync } from 'node:child_process';
 import { clampAgentTitle } from './agentTitleLimits.js';
+import {
+  TEXT_SNIFF_BYTES, attachmentDialogFilters, attachmentKind, attachmentProblem, looksLikeText, normalizeStoredAttachments,
+} from './agent/attachments/attachmentTypes.js';
 import { BACKEND_PORT } from './backendConfig.js';
 import { ProjectAssets, YC_EXTENSION, isBundledProjectFile } from './projectAssets.js';
 import { createBackendLog } from './backendLog.js';
@@ -160,6 +163,80 @@ ipcMain.handle('assets:resolve-paths', async (_event, rows) => {
   return output;
 });
 
+// Files the user attached to an Agent chat by picking or dropping them
+// (docs/design/AGENT_ATTACHMENTS_PLAN.md). agent:read-attachment reads only these, never another
+// path; the list is kept on disk so attachments in saved chats stay readable after a restart.
+let agentAttachmentPaths = null;
+const agentAttachmentsFile = () => path.join(app.getPath('userData'), 'agent-attachments.json');
+
+async function loadAgentAttachmentPaths() {
+  if (agentAttachmentPaths) return agentAttachmentPaths;
+  try {
+    agentAttachmentPaths = new Set(JSON.parse(await fs.readFile(agentAttachmentsFile(), 'utf8')));
+  } catch (_) {
+    agentAttachmentPaths = new Set();
+  }
+  return agentAttachmentPaths;
+}
+
+/** Its kind by name, else 'text' when an unlisted file reads as text, else ''. */
+async function agentAttachmentKind(filePath) {
+  const byName = attachmentKind(path.basename(filePath));
+  if (byName) return byName;
+  let handle;
+  try {
+    handle = await fs.open(filePath, 'r');
+    const sample = Buffer.alloc(TEXT_SNIFF_BYTES);
+    const { bytesRead } = await handle.read(sample, 0, TEXT_SNIFF_BYTES, 0);
+    return looksLikeText(sample.subarray(0, bytesRead)) ? 'text' : '';
+  } catch (_) {
+    return '';
+  } finally {
+    await handle?.close();
+  }
+}
+
+/** [{path, name, size, kind}] for the files that can be attached, [{name, error}] for the rest. */
+async function registerAgentAttachments(paths) {
+  const allowed = await loadAgentAttachmentPaths();
+  const files = [];
+  for (const raw of paths) {
+    const filePath = path.resolve(String(raw || ''));
+    const name = path.basename(filePath);
+    let stat = null;
+    try { stat = await fs.stat(filePath); } catch (_) {}
+    const kind = stat?.isFile() ? await agentAttachmentKind(filePath) : '';
+    const problem = stat?.isFile() ? attachmentProblem(kind, stat.size) : 'The file could not be read.';
+    if (problem) {
+      files.push({ name, error: problem });
+      continue;
+    }
+    allowed.add(filePath);
+    files.push({ path: filePath, name, size: stat.size, kind });
+  }
+  await atomicWriteJson(agentAttachmentsFile(), [...allowed]);
+  return files;
+}
+
+ipcMain.handle('agent:pick-attachments', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Attach files',
+    properties: ['openFile', 'multiSelections'],
+    filters: attachmentDialogFilters(),
+  });
+  return result.canceled ? [] : registerAgentAttachments(result.filePaths);
+});
+ipcMain.handle('agent:register-attachments', (_event, paths) => registerAgentAttachments(Array.isArray(paths) ? paths : []));
+ipcMain.handle('agent:read-attachment', async (_event, filePath) => {
+  const resolved = path.resolve(String(filePath || ''));
+  if (!(await loadAgentAttachmentPaths()).has(resolved)) return { error: 'Only files attached to the chat can be read.' };
+  let stat = null;
+  try { stat = await fs.stat(resolved); } catch (_) {}
+  if (!stat?.isFile()) return { error: 'The file was moved or deleted. Attach it again.' };
+  const problem = attachmentProblem(await agentAttachmentKind(resolved), stat.size);
+  return problem ? { error: problem } : { data: await fs.readFile(resolved) };
+});
+
 /**
  * ===== Python backend =====
  * Dev: repo backend/.venv (Scripts/python.exe on Windows, bin/python on macOS/Linux).
@@ -250,6 +327,8 @@ function mapAgentMessageForStorage(msg) {
     if (msg.answer != null) out.answer = String(msg.answer);
     if (msg.outcome != null) out.outcome = String(msg.outcome);
   }
+  const attachments = out.role === 'user' ? normalizeStoredAttachments(msg.attachments) : [];
+  if (attachments.length) out.attachments = attachments;
   return out;
 }
 

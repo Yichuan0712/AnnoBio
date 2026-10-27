@@ -17,6 +17,31 @@ class LocalPdfDataFactory {
   }
 }
 
+/**
+ * The text of pages `firstPage` .. `firstPage + maxPages - 1` (1-based), for the Agent's view of an
+ * attached PDF. Stops early once `maxChars` characters are collected.
+ * @returns {Promise<{pageCount: number, pages: {page: number, text: string}[]}>}
+ */
+export async function extractPdfText(data, { firstPage = 1, maxPages = 3, maxChars = Infinity } = {}) {
+  const task = getDocument({ data, BinaryDataFactory: LocalPdfDataFactory, useWorkerFetch: false });
+  task.onPassword = () => { task.destroy().catch(() => {}); };
+  try {
+    const pdf = await task.promise;
+    const pages = [];
+    let chars = 0;
+    const last = Math.min(pdf.numPages, firstPage + maxPages - 1);
+    for (let number = Math.max(1, firstPage); number <= last && chars < maxChars; number += 1) {
+      const content = await (await pdf.getPage(number)).getTextContent();
+      const text = content.items.map((item) => `${item.str || ''}${item.hasEOL ? '\n' : ''}`).join('').replace(/[ \t]+\n/g, '\n').trim();
+      pages.push({ page: number, text });
+      chars += text.length;
+    }
+    return { pageCount: pdf.numPages, pages };
+  } finally {
+    await task.destroy();
+  }
+}
+
 /** Render only the first page; the caller owns the returned object URL. */
 export async function createPdfThumbnail(file, signal) {
   signal.throwIfAborted();

@@ -1,7 +1,8 @@
 /* Log tab of the bottom panel (backendLogPanel.js). */
 .backend-log { display: flex; flex-direction: column; min-height: 0; padding-top: 14px; box-sizing: border-box; }
-.backend-log__toolbar { padding: 0 18px 6px; }
-.backend-log__status { font-size: 12px; color: var(--text-muted); }
+/* Sized here, not only on the status: a 16px line box around 12px text set it lower than the other tabs' first line. */
+.backend-log__toolbar { padding: 0 18px 6px; font-size: 12px; }
+.backend-log__status { color: var(--text-muted); }
 .backend-log__output {
   flex: 1;
   min-height: 0;

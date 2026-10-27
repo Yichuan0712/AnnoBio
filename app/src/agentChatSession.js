@@ -9,6 +9,10 @@ import { createProposalRuntime } from './agent/operations/proposals.js';
 import { executePipelineAction, previewPipelineAction } from './agent/pipeline/pipelineActions.js';
 import { executeCreateProject, previewCreateProject } from './agent/project/createProject.js';
 import { ASK_USER_TOOL, CREATE_PROJECT_TOOL, PIPELINE_ACTION_TOOL, PROPOSE_CHANGES_TOOL, RUN_NODES_TOOL, USER_TOOLS } from './agent/tools/agentTools.js';
+import { parseTableAttachment, readAttachmentWindow } from './agent/attachments/attachmentContent.js';
+import { MAX_ATTACHMENTS_PER_MESSAGE } from './agent/attachments/attachmentTypes.js';
+import { attachmentsSupported, desktopAttachmentDeps } from './agent/attachments/desktopAttachments.js';
+import { iconFileText, iconX } from './icons.js';
 
 const API_BASE = BACKEND_API_BASE;
 const TITLE_SUMMARY_MAX_ROUNDS = 3;
@@ -95,12 +99,44 @@ function createMessageShell(role) {
   return { wrapper, bubbleEl };
 }
 
-function createUserMessageNode(content, { actionDisabled = false, onEdit = null } = {}) {
+const ATTACHMENT_KIND_LABELS = { table: 'Table', image: 'Image', pdf: 'PDF', text: 'Text' };
+
+/** Attachment chips: on a sent message, or with × buttons in the composer's tray (`onRemove`). */
+function createAttachmentChips(attachments, { onRemove = null } = {}) {
+  const listEl = document.createElement('div');
+  listEl.className = 'agent-window__attachments';
+  for (const attachment of attachments) {
+    const chipEl = document.createElement('span');
+    chipEl.className = 'agent-window__attachment';
+    chipEl.title = `${attachment.name} (${ATTACHMENT_KIND_LABELS[attachment.kind] || attachment.kind})${attachment.path ? `
+${attachment.path}` : ''}`;
+    chipEl.appendChild(iconFileText(13));
+    const nameEl = document.createElement('span');
+    nameEl.className = 'agent-window__attachment-name';
+    nameEl.textContent = attachment.name;
+    chipEl.appendChild(nameEl);
+    if (typeof onRemove === 'function') {
+      const removeEl = document.createElement('button');
+      removeEl.type = 'button';
+      removeEl.className = 'agent-window__attachment-remove';
+      removeEl.setAttribute('aria-label', `Remove ${attachment.name}`);
+      removeEl.title = 'Remove';
+      removeEl.appendChild(iconX(12));
+      removeEl.addEventListener('click', () => onRemove(attachment));
+      chipEl.appendChild(removeEl);
+    }
+    listEl.appendChild(chipEl);
+  }
+  return listEl;
+}
+
+function createUserMessageNode(content, { actionDisabled = false, onEdit = null, attachments = [] } = {}) {
   const { wrapper, bubbleEl } = createMessageShell('user');
   const contentEl = document.createElement('div');
   contentEl.className = 'agent-window__message-content';
   contentEl.textContent = content;
   bubbleEl.appendChild(contentEl);
+  if (attachments.length) bubbleEl.appendChild(createAttachmentChips(attachments));
   if (typeof onEdit === 'function') {
     const editButtonEl = document.createElement('button');
     editButtonEl.type = 'button';
@@ -423,12 +459,17 @@ async function requestTitle(credentialId, messages) {
  * @param {{getCanvasState: Function, inspectNode: (id: string, options?: object) => Promise<object>,
  *   getScoreComparisonRows: (id: string) => Promise<object[]>, getSelectedNodeIds: () => string[],
  *   extractInputFields: Function}} options.workspace read access to the live canvas
+ * attachButtonEl, attachmentTrayEl and dropZoneEl are given where the chat takes attachments (the
+ * desktop app, docs/design/AGENT_ATTACHMENTS_PLAN.md).
  */
 export function mountAgentChatSession({
   overlay,
   messagesEl,
   inputEl,
   sendButtonEl,
+  attachButtonEl = null,
+  attachmentTrayEl = null,
+  dropZoneEl = null,
   autoResizeComposer,
   onConversationUpdated,
   onConversationDraftChanged,
@@ -452,6 +493,8 @@ export function mountAgentChatSession({
   let editingMessageIndex = -1;
   let editingDraft = '';
   let renderScheduled = false;
+  // Why the last files offered to the tray were not attached; shown under it.
+  let attachmentError = '';
   const titleRequestSerialByConversation = new Map();
 
   function isMounted() {
@@ -549,6 +592,7 @@ export function mountAgentChatSession({
           messagesEl.appendChild(createUserMessageNode(message.content, {
             actionDisabled: busy || editingMessageIndex !== -1,
             onEdit: () => startEditingMessage(index),
+            attachments: message.attachments || [],
           }));
         }
         return;
@@ -613,9 +657,16 @@ export function mountAgentChatSession({
     const conversation = getActiveConversation();
     const hasText = Boolean((inputEl.value || '').trim());
     const composerLocked = sendInFlight || editingMessageIndex !== -1;
-    inputEl.disabled = !credentialId || composerLocked || !conversation;
-    sendButtonEl.disabled = !credentialId || composerLocked || !conversation || !hasText;
     const awaiting = conversation && findPendingInteraction(ensureConversationMessages(conversation));
+    // Attachments go with a new message, not with a reply to a card.
+    const canSendAttachments = !awaiting && pendingAttachments(conversation).length > 0;
+    inputEl.disabled = !credentialId || composerLocked || !conversation;
+    sendButtonEl.disabled = !credentialId || composerLocked || !conversation || !(hasText || canSendAttachments);
+    if (attachButtonEl) {
+      attachButtonEl.disabled = !conversation || composerLocked || Boolean(awaiting);
+      attachButtonEl.title = awaiting ? 'Answer the card above before attaching files' : 'Attach files';
+    }
+    renderAttachmentTray();
     inputEl.placeholder = editingMessageIndex !== -1
       ? 'Finish editing this message first'
       : !conversation
@@ -640,7 +691,114 @@ export function mountAgentChatSession({
   function syncComposerDraftFromConversation() {
     const conversation = getActiveConversation();
     inputEl.value = String(conversation?.unsentDraft || '');
+    attachmentError = '';
     if (typeof autoResizeComposer === 'function') autoResizeComposer();
+  }
+
+  // ---------- attachments (desktop app) ----------
+
+  function pendingAttachments(conversation) {
+    return Array.isArray(conversation?.unsentAttachments) ? conversation.unsentAttachments : [];
+  }
+
+  /** Ids run a1, a2, ... through a conversation, so the Agent can tell its attachments apart. */
+  function nextAttachmentNumber(conversation) {
+    const ids = [...ensureConversationMessages(conversation).flatMap((m) => m.attachments || []), ...pendingAttachments(conversation)]
+      .map((a) => Number(/^a(\d+)$/.exec(a.id)?.[1]) || 0);
+    return Math.max(0, ...ids) + 1;
+  }
+
+  function renderAttachmentTray() {
+    if (!attachmentTrayEl) return;
+    const list = pendingAttachments(getActiveConversation());
+    attachmentTrayEl.innerHTML = '';
+    attachmentTrayEl.hidden = !list.length && !attachmentError;
+    if (list.length) attachmentTrayEl.appendChild(createAttachmentChips(list, { onRemove: removePendingAttachment }));
+    if (attachmentError) {
+      const errorEl = document.createElement('div');
+      errorEl.className = 'agent-window__attachment-error';
+      errorEl.textContent = attachmentError;
+      attachmentTrayEl.appendChild(errorEl);
+    }
+  }
+
+  /** Adds files from the main process ([{path, name, size, kind}] or [{name, error}]) to the tray. */
+  function addPendingAttachments(files) {
+    const conversation = getActiveConversation();
+    if (!conversation || !Array.isArray(files) || !files.length) return;
+    const list = pendingAttachments(conversation).slice();
+    const problems = [];
+    let number = nextAttachmentNumber(conversation);
+    for (const file of files) {
+      if (file.error) problems.push(`${file.name}: ${file.error}`);
+      else if (list.some((a) => a.path === file.path)) continue;
+      else if (list.length >= MAX_ATTACHMENTS_PER_MESSAGE) problems.push(`${file.name}: at most ${MAX_ATTACHMENTS_PER_MESSAGE} files per message.`);
+      else list.push({ id: `a${number++}`, name: file.name, path: file.path, kind: file.kind, size: file.size });
+    }
+    conversation.unsentAttachments = list;
+    attachmentError = problems.join(' ');
+    notifyConversationDraftChanged(conversation);
+    updateComposerState();
+  }
+
+  function removePendingAttachment(attachment) {
+    const conversation = getActiveConversation();
+    if (!conversation) return;
+    conversation.unsentAttachments = pendingAttachments(conversation).filter((a) => a !== attachment);
+    attachmentError = '';
+    notifyConversationDraftChanged(conversation);
+    updateComposerState();
+  }
+
+  async function handleAttachClick() {
+    try {
+      addPendingAttachments(await window.electronAPI.pickAgentAttachments());
+    } catch (error) {
+      console.error('Attach files:', error);
+    }
+  }
+
+  function dropAllowed(event) {
+    return Boolean(attachButtonEl && !attachButtonEl.disabled && event.dataTransfer?.types?.includes('Files'));
+  }
+
+  function handleDragOver(event) {
+    if (!dropAllowed(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    dropZoneEl.classList.add('is-drop-target');
+  }
+
+  function handleDragLeave(event) {
+    if (!dropZoneEl.contains(event.relatedTarget)) dropZoneEl.classList.remove('is-drop-target');
+  }
+
+  async function handleDrop(event) {
+    dropZoneEl.classList.remove('is-drop-target');
+    if (!dropAllowed(event)) return;
+    event.preventDefault();
+    try {
+      addPendingAttachments(await window.electronAPI.attachDroppedFiles(event.dataTransfer.files));
+    } catch (error) {
+      console.error('Attach dropped files:', error);
+    }
+  }
+
+  /** The attachment `id` of one of this conversation's own messages; only those can be read. */
+  function conversationAttachment(conversation, id) {
+    return ensureConversationMessages(conversation).flatMap((m) => (m.role === 'user' ? m.attachments || [] : []))
+      .find((a) => a.id === String(id || '').trim()) || null;
+  }
+
+  // A preview is stored with the message, so it stays what the model saw; this caps it.
+  const MAX_PREVIEW_CHARS = 9000;
+
+  async function fillAttachmentPreviews(message) {
+    for (const attachment of message.attachments || []) {
+      if (attachment.preview != null) continue;
+      const preview = JSON.stringify(await readAttachmentWindow(attachment, {}, desktopAttachmentDeps));
+      attachment.preview = preview.length <= MAX_PREVIEW_CHARS ? preview : `${preview.slice(0, MAX_PREVIEW_CHARS)}… [preview cut; use read_attachment]`;
+    }
   }
 
   // ---------- editing ----------
@@ -673,7 +831,8 @@ export function mountAgentChatSession({
 
   // ---------- the agent turn ----------
 
-  async function buildToolRuntime() {
+  /** The tools' view of the canvas; `conversation` gives read_attachment its attachments. */
+  async function buildToolRuntime(conversation = null) {
     const { credentialsById, defaultRunCredential, defaultReviewCredential } = await loadCredentialContext();
     const inspectOptions = { credentialsById, defaultRunCredential };
     const inspectNode = (nodeId, readOptions = {}) => workspace.inspectNode(nodeId, { ...inspectOptions, ...readOptions });
@@ -692,6 +851,21 @@ export function mountAgentChatSession({
     const proposalWorkspace = {
       ...workspace,
       credentialsById,
+      // import_attachment: this conversation's attachments, read and stored as Create Dataset does.
+      ...(attachmentsSupported() && conversation ? {
+        findAttachment: (id) => conversationAttachment(conversation, id),
+        readAttachmentTable: async (attachment, sheet) => {
+          try {
+            return parseTableAttachment(attachment.name, await desktopAttachmentDeps.readBytes(attachment.path), String(sheet || ''));
+          } catch (error) {
+            return { error: error instanceof Error ? error.message : String(error) };
+          }
+        },
+        storeAttachmentFiles: (attachments) => {
+          const paths = attachments.map((a) => a.path);
+          return attachments[0].kind === 'image' ? window.electronAPI.importImages(paths) : window.electronAPI.importPdfs(paths);
+        },
+      } : {}),
     };
     const runWorkspace = {
       ...workspace,
@@ -713,6 +887,14 @@ export function mountAgentChatSession({
       executePipelineAction: (request, preview) => executePipelineAction(request, preview, workspace),
       previewCreateProject: (request) => previewCreateProject(request, workspace),
       executeCreateProject: (request, conversationId) => executeCreateProject(request, workspace, conversationId),
+      ...(attachmentsSupported() && conversation ? {
+        readAttachment: async (args) => {
+          const attachment = conversationAttachment(conversation, args.attachment_id);
+          if (!attachment) return { error: `No attachment ${args.attachment_id} in this conversation. Use an id from an attachment preview.` };
+          return readAttachmentWindow(attachment, args, desktopAttachmentDeps);
+        },
+        attachmentName: (id) => conversationAttachment(conversation, id)?.name || '',
+      } : {}),
     };
   }
 
@@ -742,11 +924,12 @@ export function mountAgentChatSession({
 
   /**
    * Run the agent until it answers or waits for the user. On Stop, the conversation is rolled back
-   * to `turn.baseline` messages and `restoreText` goes back into the composer. `prelude` runs first
+   * to `turn.baseline` messages and `restoreText` (and `restoreAttachments`, to the tray) goes back
+   * into the composer. `prelude` runs first
    * (applying a proposal) and may raise turn.baseline once its result must survive a Stop; it returns
    * {rebuildRuntime: true} when it opened a project, so the rest of the turn works on that project.
    */
-  async function runTurn(conversation, { baseline, restoreText = '', prelude = null }) {
+  async function runTurn(conversation, { baseline, restoreText = '', restoreAttachments = [], prelude = null }) {
     const turn = { baseline };
     const messages = ensureConversationMessages(conversation);
     sendInFlight = true;
@@ -762,7 +945,7 @@ export function mountAgentChatSession({
 
     let answered = false;
     try {
-      let runtime = await buildToolRuntime();
+      let runtime = await buildToolRuntime(conversation);
       if (prelude) {
         const done = await prelude({
           runtime,
@@ -774,7 +957,7 @@ export function mountAgentChatSession({
           },
         });
         conversation.pendingStatus = 'Reading the workspace...';
-        if (done?.rebuildRuntime) runtime = await buildToolRuntime();
+        if (done?.rebuildRuntime) runtime = await buildToolRuntime(conversation);
       }
       const workspaceSummary = await runtime.buildSummary();
       const outcome = await runAgentLoop({
@@ -808,6 +991,9 @@ export function mountAgentChatSession({
         messages.splice(turn.baseline);
         if ((conversation.contextSummary?.covered || 0) > messages.length) delete conversation.contextSummary;
         conversation.unsentDraft = restoreText;
+        if (restoreAttachments.length) {
+          conversation.unsentAttachments = restoreAttachments.map(({ preview, ...attachment }) => attachment);
+        }
         notifyConversationDraftChanged(conversation);
         if (isActive(conversation) && restoreText) {
           inputEl.value = restoreText;
@@ -1037,8 +1223,11 @@ export function mountAgentChatSession({
   async function sendMessage() {
     const text = String(inputEl.value || '').trim();
     const conversation = getActiveConversation();
-    if (!text || !credentialId || sendInFlight || !conversation || editingMessageIndex !== -1) return;
+    if (!credentialId || sendInFlight || !conversation || editingMessageIndex !== -1) return;
     const messages = ensureConversationMessages(conversation);
+    // Attachments go with a new message; while a card waits they stay in the tray.
+    const attachments = findPendingInteraction(messages) ? [] : pendingAttachments(conversation);
+    if (!text && !attachments.length) return;
     conversation.unsentDraft = '';
     notifyConversationDraftChanged(conversation);
     inputEl.value = '';
@@ -1067,12 +1256,23 @@ export function mountAgentChatSession({
       return;
     }
     if (messages.length === 0) {
-      conversation.title = deriveConversationTitle(text);
+      conversation.title = deriveConversationTitle(text || attachments.map((a) => a.name).join(', '));
       conversation.generatedTitle = true;
     }
     const baseline = messages.length;
-    messages.push({ role: 'user', content: text });
-    await runTurn(conversation, { baseline, restoreText: text });
+    const message = { role: 'user', content: text, ...(attachments.length ? { attachments: attachments.map((a) => ({ ...a })) } : {}) };
+    conversation.unsentAttachments = [];
+    attachmentError = '';
+    messages.push(message);
+    await runTurn(conversation, {
+      baseline,
+      restoreText: text,
+      restoreAttachments: attachments,
+      prelude: attachments.length ? async ({ setStatus }) => {
+        setStatus(attachments.length === 1 ? 'Reading the attached file...' : 'Reading the attached files...');
+        await fillAttachmentPreviews(message);
+      } : null,
+    });
   }
 
   async function initializeCredential() {
@@ -1125,6 +1325,12 @@ export function mountAgentChatSession({
   inputEl.addEventListener('keydown', handleKeyDown);
   sendButtonEl.addEventListener('click', handleSendClick);
   document.addEventListener('pointerdown', handleOutsidePointerDown);
+  attachButtonEl?.addEventListener('click', handleAttachClick);
+  if (attachButtonEl && dropZoneEl) {
+    dropZoneEl.addEventListener('dragover', handleDragOver);
+    dropZoneEl.addEventListener('dragleave', handleDragLeave);
+    dropZoneEl.addEventListener('drop', handleDrop);
+  }
   updateComposerState();
   initializeCredential();
 
@@ -1138,6 +1344,10 @@ export function mountAgentChatSession({
       inputEl.removeEventListener('keydown', handleKeyDown);
       sendButtonEl.removeEventListener('click', handleSendClick);
       document.removeEventListener('pointerdown', handleOutsidePointerDown);
+      attachButtonEl?.removeEventListener('click', handleAttachClick);
+      dropZoneEl?.removeEventListener('dragover', handleDragOver);
+      dropZoneEl?.removeEventListener('dragleave', handleDragLeave);
+      dropZoneEl?.removeEventListener('drop', handleDrop);
     },
   };
 }

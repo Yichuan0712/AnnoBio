@@ -398,6 +398,115 @@ html.dark .agent-window__loading-stop:hover {
   bottom: 10px;
 }
 
+/* Attachments (desktop app): the paperclip left of Send, the tray of files to send above the input,
+   and the chips under a sent message. */
+.agent-window-overlay--attachments .agent-window__composer-input {
+  padding-right: 84px;
+}
+
+.agent-window__composer-attach {
+  position: absolute;
+  right: 44px;
+  bottom: 10px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--control-radius, 6px);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.agent-window__composer-attach:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.agent-window__composer-attach:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.agent-window__attachment-tray {
+  margin-bottom: 8px;
+}
+
+.agent-window__attachment-tray[hidden] {
+  display: none;
+}
+
+.agent-window__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.agent-window__message-bubble .agent-window__attachments {
+  margin-top: 8px;
+}
+
+.agent-window__attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius, 6px);
+  background: var(--bg-bar);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.agent-window__attachment > svg {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.agent-window__attachment-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-window__attachment-remove {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-right: -4px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.agent-window__attachment-remove:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.agent-window__attachment-error {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--status-danger, #d92d20);
+}
+
+.agent-window__main.is-drop-target {
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
+}
+
 .agent-window__message-editor-save {
   position: static;
 }

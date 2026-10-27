@@ -5,7 +5,7 @@
  * bioRxiv/medRxiv or ChEMBL -- then preview.
  */
 
-import * as XLSX from 'xlsx';
+import { parseDelimitedText, parseWorkbookSheet, readWorkbook } from './datasetFileParsing.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { showConfirm } from './alertModal.js';
 import { imageCell, pdfCell } from './datasetContent.js';
@@ -113,37 +113,6 @@ function parsePreprintIdsInput(text) {
 
 function parseChemblIdsInput(text) {
   return parsePubmedIdsInput(text).map((s) => s.toUpperCase());
-}
-
-function parseCsvLine(line) {
-  line = String(line ?? '').trim();
-  const cols = [];
-  let i = 0;
-  while (i < line.length) {
-    if (line[i] === '"') {
-      const end = line.indexOf('"', i + 1);
-      if (end === -1) {
-        cols.push(line.slice(i + 1).trim());
-        break;
-      }
-      cols.push(line.slice(i + 1, end).replace(/""/g, '"'));
-      i = end + 1;
-      if (line[i] === ',') i += 1;
-    } else {
-      const comma = line.indexOf(',', i);
-      if (comma === -1) {
-        cols.push(line.slice(i).trim());
-        break;
-      }
-      cols.push(line.slice(i, comma).trim());
-      i = comma + 1;
-    }
-  }
-  return cols;
-}
-
-function parseTsvLine(line) {
-  return line.split('\t').map((s) => s.trim());
 }
 
 const MAX_PREVIEW_ROWS = 10;
@@ -487,26 +456,17 @@ export function openAddDatasetModal(workflowCanvasApi) {
   }
 
   function applyXlsxSheet(wb, sheetName, file) {
-    const sheet = wb.Sheets[sheetName];
-    if (!sheet) return;
-    const arr = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-    if (!arr || arr.length === 0) {
+    const parsed = parseWorkbookSheet(wb, sheetName);
+    if (!parsed) return;
+    if (parsed.error) {
       fileImported = false;
       parsedDatasetContent = null;
-      setFileInfoPlaceholder('Sheet is empty.');
-      previewEl.textContent = 'Sheet is empty.';
+      setFileInfoPlaceholder(parsed.error);
+      previewEl.textContent = parsed.error;
       previewEl.classList.add('prompt-preview--empty');
       return;
     }
-    const headerRow = arr[0];
-    const headers = (headerRow || []).map((c) => String(c ?? '').trim());
-    if (headers.length === 0 || headers.every((h) => !h)) {
-      setFileInfoPlaceholder('No columns in first row.');
-      previewEl.textContent = 'No columns in first row.';
-      previewEl.classList.add('prompt-preview--empty');
-      return;
-    }
-    const allRows = arr.slice(1).map((row) => headers.map((_, i) => (row && row[i] != null ? String(row[i]) : '')));
+    const { headers, rows: allRows } = parsed;
     fileImported = true;
     parsedDatasetContent = { headers, rows: allRows };
     setFileInfo(file, 'XLSX', headers.length, allRows.length, headers);
@@ -1162,7 +1122,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
       reader.onload = () => {
         try {
           const data = new Uint8Array(reader.result);
-          const wb = XLSX.read(data, { type: 'array' });
+          const wb = readWorkbook(data);
           xlsxWorkbook = wb;
           const sheetNames = wb.SheetNames || [];
           if (sheetNames.length === 0) {
@@ -1203,29 +1163,20 @@ export function openAddDatasetModal(workflowCanvasApi) {
 
     const reader = new FileReader();
     reader.onload = () => {
-      let text = reader.result;
-      text = text.replace(/^\uFEFF/, '');
-      const lines = text.split(/\r\n|\r|\n/).map((l) => l.trim()).filter((l) => l.length > 0);
-      const parseLine = isTsv ? parseTsvLine : parseCsvLine;
-      const headerLine = lines[0] ?? '';
-      const headers = parseLine(headerLine).filter((c) => c.length > 0);
-
-      if (headers.length === 0) {
+      const parsed = parseDelimitedText(reader.result, { tsv: isTsv });
+      if (parsed.error) {
         fileImported = false;
         parsedDatasetContent = null;
-        setFileInfoPlaceholder('No columns found in first line.');
-        previewEl.textContent = 'No columns found in first line.';
+        setFileInfoPlaceholder(parsed.error);
+        previewEl.textContent = parsed.error;
         previewEl.classList.add('prompt-preview--empty');
         return;
       }
+      const { headers, rows: allRows } = parsed;
       fileImported = true;
-      const allDataLines = lines.slice(1);
-      const allRows = allDataLines.map((line) => parseLine(line));
       parsedDatasetContent = { headers, rows: allRows };
       setFileInfo(file, isTsv ? 'TSV' : 'CSV', headers.length, allRows.length, headers);
-      const dataLines = lines.slice(1, 1 + MAX_PREVIEW_ROWS);
-      const rows = dataLines.map((line) => parseLine(line));
-      renderPreviewTable(headers, rows, allRows.length);
+      renderPreviewTable(headers, allRows.slice(0, MAX_PREVIEW_ROWS), allRows.length);
     };
     reader.onerror = () => {
       fileImported = false;

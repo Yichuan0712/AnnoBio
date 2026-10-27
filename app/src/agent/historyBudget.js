@@ -42,7 +42,19 @@ export function historyTokenBudget(context, { workspaceSummary = '', tools = [] 
 function messageTokens(message) {
   let tokens = estimateTokens(message.content) + MESSAGE_OVERHEAD_TOKENS;
   for (const call of message.toolCalls || []) tokens += estimateTokens(call.name) + estimateTokens(call.arguments);
+  for (const attachment of message.attachments || []) tokens += estimateTokens(attachment.preview);
   return tokens;
+}
+
+/** An earlier user message with its attachment previews cut to a note: read_attachment reads them again. */
+function withoutLargePreviews(message) {
+  if (!(message.attachments || []).some((a) => String(a.preview || '').length > OMITTABLE_RESULT_CHARS)) return null;
+  return {
+    ...message,
+    attachments: message.attachments.map((a) => (String(a.preview || '').length > OMITTABLE_RESULT_CHARS
+      ? { ...a, preview: JSON.stringify({ attachment: a.id, name: a.name, kind: a.kind, note: 'Preview omitted to keep the conversation within the model\'s context. Call read_attachment if you need it.' }) }
+      : a)),
+  };
 }
 
 /**
@@ -62,11 +74,17 @@ export function fitHistory(messages, budget) {
   for (let i = 0; i < currentTurn && total > budget; i += 1) {
     const message = fitted[i];
     const length = String(message.content || '').length;
-    if (message.role !== 'tool' || length <= OMITTABLE_RESULT_CHARS) continue;
-    fitted[i] = {
-      ...message,
-      content: `[Earlier ${message.name || 'tool'} result (${length} characters) omitted to keep the conversation within the model's context. Call the tool again if you need it.]`,
-    };
+    if (message.role === 'user') {
+      const shortened = withoutLargePreviews(message);
+      if (!shortened) continue;
+      fitted[i] = shortened;
+    } else {
+      if (message.role !== 'tool' || length <= OMITTABLE_RESULT_CHARS) continue;
+      fitted[i] = {
+        ...message,
+        content: `[Earlier ${message.name || 'tool'} result (${length} characters) omitted to keep the conversation within the model's context. Call the tool again if you need it.]`,
+      };
+    }
     const shrunk = messageTokens(fitted[i]);
     total -= tokens[i] - shrunk;
     tokens[i] = shrunk;

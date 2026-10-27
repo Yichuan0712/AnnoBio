@@ -21,7 +21,10 @@ function clip(text, limit) {
 function transcript(messages) {
   const lines = [];
   for (const message of messages) {
-    if (message.role === 'user') lines.push(`User: ${clip(message.content, TEXT_CHARS)}`);
+    if (message.role === 'user') {
+      const attached = (message.attachments || []).map((a) => `${a.id} ${a.name}`).join(', ');
+      lines.push(`User: ${clip(message.content, TEXT_CHARS)}${attached ? ` [attached: ${attached}]` : ''}`);
+    }
     else if (message.role === 'tool') lines.push(`Result of ${message.name || 'tool'}: ${clip(message.content, TOOL_RESULT_CHARS)}`);
     else {
       if (String(message.content || '').trim()) lines.push(`Agent: ${clip(message.content, TEXT_CHARS)}`);

@@ -1,7 +1,8 @@
 /**
  * propose_changes end to end: previewing a proposal for the confirmation card, and applying it once
  * the user approves. Both plan against the live canvas (it may have changed in between), so applying
- * re-validates everything; imports are fetched only at apply time.
+ * re-validates everything; imports are fetched, and attached image/PDF files copied into the project,
+ * only at apply time.
  */
 import { BACKEND_API_BASE } from '../../backendConfig.js';
 import { testedModels } from '../../modelPicker.js';
@@ -44,6 +45,30 @@ async function scoreTablesFor(operations, workspace) {
     if (table) tables.set(id, table);
   }
   return tables;
+}
+
+/**
+ * For each import_attachment (by operation index): the chat attachments it names and what was read from
+ * them, for changeSet.js's import_attachment. A table is read each time (the file may have changed since
+ * the proposal); `store` copies image and PDF files into the project, which only applying does.
+ */
+async function attachmentsFor(operations, workspace, { store = false, onStatus } = {}) {
+  const entries = new Map();
+  for (const [index, op] of (operations || []).entries()) {
+    if (op?.op !== 'import_attachment' || !workspace.findAttachment) continue;
+    const ids = (Array.isArray(op.attachments) ? op.attachments : [op.attachments]).map((id) => String(id || '').trim()).filter(Boolean);
+    const attachments = ids.map((id) => workspace.findAttachment(id)).filter(Boolean);
+    const kinds = new Set(attachments.map((a) => a.kind));
+    const entry = { attachments };
+    if (attachments.length === 1 && kinds.has('table')) {
+      entry.table = await workspace.readAttachmentTable(attachments[0], op.sheet);
+    } else if (store && attachments.length && attachments.length === ids.length && kinds.size === 1 && (kinds.has('image') || kinds.has('pdf'))) {
+      onStatus?.(`Copying ${attachments.length} attached file${attachments.length === 1 ? '' : 's'} into the project...`);
+      entry.assets = await workspace.storeAttachmentFiles(attachments);
+    }
+    entries.set(index, entry);
+  }
+  return entries;
 }
 
 /** The models the Create Generate and Optimize prompt pickers offer, by credential id. */
@@ -117,6 +142,7 @@ export async function previewProposal(proposal, workspace) {
     const contentLocks = await workspace.getContentLocks?.();
     const evaluationPrompts = await evaluationPromptsFor(proposal?.operations, workspace);
     const scoreTables = await scoreTablesFor(proposal?.operations, workspace);
+    const attachments = await attachmentsFor(proposal?.operations, workspace);
     const plan = planChangeSet(workspace.getCanvasState(), proposal?.operations, {
       extractInputFields: workspace.extractInputFields,
       sources,
@@ -124,6 +150,7 @@ export async function previewProposal(proposal, workspace) {
       evaluationPrompts,
       models: pickableModels(workspace),
       scoreTables,
+      attachments,
     });
     return {
       ok: true,
@@ -162,6 +189,7 @@ export async function applyProposal(proposal, workspace, { signal, onStatus } = 
   const contentLocks = await workspace.getContentLocks?.();
   const evaluationPrompts = await evaluationPromptsFor(operations, workspace);
   const scoreTables = await scoreTablesFor(operations, workspace);
+  const attachments = await attachmentsFor(operations, workspace, { store: true, onStatus });
   const plan = planChangeSet(workspace.getCanvasState(), operations, {
     extractInputFields: workspace.extractInputFields,
     sources,
@@ -170,6 +198,7 @@ export async function applyProposal(proposal, workspace, { signal, onStatus } = 
     evaluationPrompts,
     models: pickableModels(workspace),
     scoreTables,
+    attachments,
   });
   workspace.applyCanvasState(plan.state, { highlightNodeIds: plan.nodeIds });
   const byId = new Map(plan.state.nodes.map((n) => [n.nodeId, n]));
