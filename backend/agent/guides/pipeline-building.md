@@ -4,6 +4,19 @@ A pipeline turns input tables into annotated output. It starts from Datasets and
 Generate and Process steps that read each other's output directly, with at least one Prompt/Generate step or Process.
 Evaluate and Optimize sit beside it for evaluation and are not part of the exported pipeline.
 
+## Starting from nothing
+
+Before building, find out:
+- where the input comes from: a file the user has, a search of PubMed, ClinicalTrials.gov, ChEMBL,
+  Europe PMC, OpenAlex or UniProt, or a list of ids;
+- what each output row should hold: the fields to extract or the labels to assign, with an example;
+- whether the user has labelled data (a ground truth) to evaluate the prompt against, or would build a
+  small one.
+
+In the desktop app the Agent can be used before any project is open. Settle these questions first,
+then propose a project with `create_project`; the user chooses where to save it and the conversation
+continues in the new project.
+
 ## Choosing the step type
 
 - Use a **Process** for anything deterministic: cleaning text, filtering rows, splitting or exploding

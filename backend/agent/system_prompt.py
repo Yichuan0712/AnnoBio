@@ -79,8 +79,18 @@ When the user asks to improve or optimise a prompt, read the prompt-optimization
 - The chat renders plain text with light formatting: blank-line paragraphs, "- " bullet lines, **bold**, `inline code` and fenced code blocks. It does not render headings, tables or links, so do not use them.
 """
 
+# Added when the desktop app has no project open (docs/design/AGENT_NO_PROJECT_PLAN.md); the renderer
+# then offers only the tools listed here.
+NO_PROJECT_SECTION = """
+# No project is open
 
-def build_system_prompt(workspace_summary: str, conversation_summary: str = "") -> str:
+The user has not opened or created a project yet, so there is no canvas: nothing can be read, changed or run, and imports need a project to hold their files. Your tools now are read_guide, search_source, list_models, ask_user and create_project.
+
+Use this time to understand what the user wants to build: where the input data comes from, what to extract or classify, and whether they have labelled data to evaluate against. You can read guides, check sources (for example how many PubMed records a query matches) and suggest models. When the plan is clear, propose a project with create_project, with a short name saying what it is for. The user confirms it and chooses where to save the file; you then continue in the same turn, in the new project, with every tool. If the user would rather open an existing project, they do that with File → Open.
+"""
+
+
+def build_system_prompt(workspace_summary: str, conversation_summary: str = "", project_open: bool = True) -> str:
     summary = (workspace_summary or "").strip() or "(The canvas is empty.)"
     earlier = (conversation_summary or "").strip()
     # The renderer condenses the start of a long conversation to fit the model's context
@@ -92,7 +102,8 @@ def build_system_prompt(workspace_summary: str, conversation_summary: str = "") 
         if earlier
         else ""
     )
-    return SYSTEM_PROMPT + earlier_section + "\n# Current workspace\n\n" + summary + "\n"
+    no_project_section = "" if project_open else NO_PROJECT_SECTION
+    return SYSTEM_PROMPT + earlier_section + no_project_section + "\n# Current workspace\n\n" + summary + "\n"
 
 
 def list_guides() -> list[str]:

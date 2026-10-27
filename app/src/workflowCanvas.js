@@ -3420,6 +3420,10 @@ export function buildWorkflowCanvas(root, options = {}) {
       onClose: () => { workspacePanels.collapse('agent'); agentAssistantBtn.focus(); },
       isCurrent: () => generation === agentMountGeneration,
       workspace: {
+        hasProject: () => Boolean(getCurrentProjectPath()),
+        createProject: (request) => (agentProjectCreator
+          ? agentProjectCreator(request)
+          : Promise.resolve({ status: 'failed', error: 'Creating a project is not available here.' })),
         getCanvasState,
         inspectNode,
         // run_to runs through here, so the Agent's runs are in Executions too.
@@ -3490,21 +3494,39 @@ export function buildWorkflowCanvas(root, options = {}) {
     });
   }
 
-  /** Call after the open project changes, so the docks show its pipelines and chats. On desktop both
+  /**
+   * Call after the open project changes, so the docks show its pipelines and chats. On desktop both
    * docks are there with no project too (the Agent's chats from before a project are stored apart
-   * from every project); on web they appear with a project. */
-  function syncProjectPanels() {
+   * from every project); on web they appear with a project.
+   * @param {{adoptAgentConversationId?: string}} [options] set when the Agent's create_project made
+   *   this project: that chat moves into it and its turn carries on, instead of the dock being remounted
+   * @returns {Promise<void>|undefined} the move, when there is one
+   */
+  function syncProjectPanels({ adoptAgentConversationId = '' } = {}) {
     const projectPath = String(getCurrentProjectPath() || '');
     const available = isElectron || Boolean(projectPath);
     panelToggles.hidden = !available;
+    let adoption;
     if (projectPath !== panelProjectPath) {
+      const agentOverlay = workspacePanels.agentHost.querySelector('.agent-window-overlay');
+      if (adoptAgentConversationId && !panelProjectPath && agentOverlay?.adoptProject) {
+        adoption = agentOverlay.adoptProject(projectPath, adoptAgentConversationId);
+      } else {
+        agentMountGeneration += 1;
+        pendingAgentMount = false;
+        agentOverlay?.destroyAgentWindow?.();
+      }
       panelProjectPath = projectPath;
-      agentMountGeneration += 1;
-      pendingAgentMount = false;
-      workspacePanels.agentHost.querySelector('.agent-window-overlay')?.destroyAgentWindow?.();
       workspacePanels.pipelineHost.querySelector('.pipeline-overview-overlay')?.destroyPipelineOverview?.();
     }
     workspacePanels.setEnabled(available);
+    return adoption;
+  }
+
+  // Set by renderer.js, which owns the open project: makes a project for the Agent's create_project.
+  let agentProjectCreator = null;
+  function setAgentProjectCreator(creator) {
+    agentProjectCreator = creator;
   }
 
   const zoomToolbar = document.createElement('div');
@@ -6380,6 +6402,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     reconcileHistory,
     setOnCanvasChange,
     syncProjectPanels,
+    setAgentProjectCreator,
     panelToggles,
     isPromptNameAlreadyUsed,
     isDatasetNameAlreadyUsed,

@@ -187,11 +187,10 @@ window.addEventListener('DOMContentLoaded', () => {
     updateWindowTitle(name);
   }
 
-  const onNewProjectDesktop = async () => {
+  /** A blank project at `path`, which the user chose. `adoptAgentConversationId`: the Agent chat whose
+   * create_project made it, which moves into the project and carries on (see syncProjectPanels). */
+  const startNewProjectDesktop = async (path, { adoptAgentConversationId = '' } = {}) => {
     const api = window.electronAPI;
-    if (!api?.showNewProjectDialog) return;
-    const path = await api.showNewProjectDialog();
-    if (!path) return;
     setCurrentProject(path);
     updateWindowTitleFromPath(path);
     // Always a blank canvas — copying the open project into a new file is what Save as is for.
@@ -203,8 +202,28 @@ window.addEventListener('DOMContentLoaded', () => {
     topBarAPI.setAddMenuEnabled(true);
     topBarAPI.setSaveAsEnabled?.(true);
     topBarAPI.setMergeEnabled?.(true);
-    canvasAPI.syncProjectPanels?.();
+    await canvasAPI.syncProjectPanels?.({ adoptAgentConversationId });
   };
+
+  const onNewProjectDesktop = async () => {
+    const api = window.electronAPI;
+    if (!api?.showNewProjectDialog) return;
+    const path = await api.showNewProjectDialog();
+    if (!path) return;
+    await startNewProjectDesktop(path);
+  };
+
+  // The Agent's create_project card (agent/project/createProject.js): the user picks where to save,
+  // as with File → New. Only offered while no project is open, which only the desktop app shows.
+  canvasAPI.setAgentProjectCreator?.(async ({ name, adoptAgentConversationId }) => {
+    const api = window.electronAPI;
+    if (!api?.showNewProjectDialog) return { status: 'failed', error: 'Only the desktop app can create a project here.' };
+    if (currentProjectPath) return { status: 'failed', error: 'A project is already open.' };
+    const path = await api.showNewProjectDialog(name);
+    if (!path) return { status: 'cancelled', feedback: 'The user closed the save dialog without choosing where to save the project.' };
+    await startNewProjectDesktop(path, { adoptAgentConversationId });
+    return { status: 'created', name: path.replace(/^.*[/\\]/, '').replace(/\.(json|yc)$/i, ''), path };
+  });
 
   const onOpenProjectDesktop = async () => {
     const api = window.electronAPI;

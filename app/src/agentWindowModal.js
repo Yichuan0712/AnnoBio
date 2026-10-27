@@ -215,9 +215,10 @@ export async function openAgentWindowModal(options = {}) {
     return;
   }
 
-  const projectPath = String(options?.projectPath || '').trim();
+  // Both change once, when the Agent's create_project moves a chat into a new project (adoptProject).
+  let projectPath = String(options?.projectPath || '').trim();
   const workspace = options?.workspace || null;
-  const storageApi = projectPath ? window.electronAPI || webAgentStorageApi : globalAgentStorageApi;
+  let storageApi = projectPath ? window.electronAPI || webAgentStorageApi : globalAgentStorageApi;
   let storedState = { conversations: [], activeChatId: '' };
   // Saving after a failed load would replace the stored chats with this session's.
   let loadFailed = false;
@@ -289,11 +290,11 @@ export async function openAgentWindowModal(options = {}) {
   let chatSession = null;
   let saveChain = Promise.resolve();
 
-  function buildSavePayload() {
+  function buildSavePayload(list = chats, activeId = activeChatId) {
     return {
       format_version: CONVERSATIONS_FORMAT_VERSION,
-      activeConversationId: activeChatId,
-      conversations: chats.map((chat) => ({
+      activeConversationId: activeId,
+      conversations: list.map((chat) => ({
         ...chat,
         pending: chat.pending === true,
         pendingStatus: String(chat.pendingStatus || '').trim(),
@@ -315,6 +316,39 @@ export async function openAgentWindowModal(options = {}) {
         console.error('Save agent conversations:', error);
       });
   }
+
+  /**
+   * The Agent's create_project made `nextPath` (workflowCanvas.js's syncProjectPanels): chat
+   * `conversationId` moves out of the global store into that project and its turn carries on. The
+   * switch happens at once, so any save from here on goes to the project; the two writes queue after
+   * the saves already pending, project first, so a failure part-way leaves the chat in both, never
+   * in neither.
+   */
+  async function adoptProject(nextPath, conversationId) {
+    const chat = chats.find((item) => item.id === conversationId);
+    const remaining = chats.filter((item) => item !== chat);
+    const globalPayload = buildSavePayload(remaining, remaining[0]?.id || '');
+    const globalWritable = !loadFailed;
+    const projectStorage = window.electronAPI || webAgentStorageApi;
+    projectPath = nextPath;
+    storageApi = projectStorage;
+    loadFailed = false;
+    chats = [chat || createDraftChat()];
+    activeChatId = chats[0].id;
+    const projectPayload = buildSavePayload();
+    saveChain = saveChain
+      .catch(() => {})
+      .then(async () => {
+        await projectStorage.saveAgentConversations(nextPath, projectPayload);
+        if (globalWritable) await globalAgentStorageApi.saveAgentConversations('', globalPayload);
+      })
+      .catch((error) => {
+        console.error('Move agent conversation into the project:', error);
+      });
+    syncActiveChatUI();
+    await saveChain;
+  }
+  overlay.adoptProject = adoptProject;
 
   function getActiveChat() {
     return chats.find((chat) => chat.id === activeChatId) || chats[0] || null;

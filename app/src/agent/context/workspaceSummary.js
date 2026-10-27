@@ -206,13 +206,17 @@ function modelLines(options) {
  * @param {object} canvasState getCanvasState() output
  * @param {{extractInputFields: Function, inspectNode: (id: string) => Promise<object>,
  *   credentialsById: Map, defaultRunCredential: object|null, defaultReviewCredential?: object|null,
- *   selectedNodeIds?: string[]}} options
- *   inspectNode is the canvas's own (it adds live score metrics).
+ *   selectedNodeIds?: string[], projectOpen?: boolean}} options
+ *   inspectNode is the canvas's own (it adds live score metrics); projectOpen false (the desktop app
+ *   before a project is open) has no canvas to describe, only the models.
  */
 export async function buildWorkspaceSummary(canvasState, options = {}) {
-  const nodes = Array.isArray(canvasState?.nodes) ? canvasState.nodes : [];
+  const nodes = options.projectOpen === false ? [] : Array.isArray(canvasState?.nodes) ? canvasState.nodes : [];
   const models = modelLines(options);
-  if (!nodes.length) return ['The canvas is empty.', ...(models.length ? ['', ...models] : [])].join('\n');
+  if (!nodes.length) {
+    const opening = options.projectOpen === false ? 'No project is open.' : 'The canvas is empty.';
+    return [opening, ...(models.length ? ['', ...models] : [])].join('\n');
+  }
   const lookup = buildNodeLookup(canvasState);
   const inspectOptions = {
     extractInputFields: options.extractInputFields,

@@ -16,9 +16,10 @@ export const ASK_USER_TOOL = 'ask_user';
 export const PROPOSE_CHANGES_TOOL = 'propose_changes';
 export const RUN_NODES_TOOL = 'run_nodes';
 export const PIPELINE_ACTION_TOOL = 'pipeline_action';
+export const CREATE_PROJECT_TOOL = 'create_project';
 
 /** Tools answered by the user rather than by code; calling one ends the loop until they respond. */
-export const USER_TOOLS = new Set([ASK_USER_TOOL, PROPOSE_CHANGES_TOOL, RUN_NODES_TOOL, PIPELINE_ACTION_TOOL]);
+export const USER_TOOLS = new Set([ASK_USER_TOOL, PROPOSE_CHANGES_TOOL, RUN_NODES_TOOL, PIPELINE_ACTION_TOOL, CREATE_PROJECT_TOOL]);
 
 const GUIDE_TOPICS = [
   'pipeline-building',
@@ -231,6 +232,29 @@ Jobs ("kind" plus):
     ['question', 'options'],
   ),
 ];
+
+// With no project open (the desktop app, docs/design/AGENT_NO_PROJECT_PLAN.md) there is no canvas
+// to read, change or run, so only these are offered, plus create_project.
+const NO_PROJECT_TOOL_NAMES = new Set(['list_models', 'read_guide', 'search_source', ASK_USER_TOOL]);
+
+// Not in AGENT_TOOL_DEFINITIONS: it is only for when no project is open, and leaving it out keeps the
+// tools sent with a project open unchanged.
+const CREATE_PROJECT_DEFINITION = tool(
+  CREATE_PROJECT_TOOL,
+  'Ask the user to create a new project for what you have discussed; available only while no project is open. The user confirms on a card and chooses where to save the project file. This conversation then moves into the new project and you continue in the same turn with every tool and the new, empty workspace.',
+  {
+    name: { type: 'string', description: 'Short project name saying what it is for; suggested as the file name.' },
+    summary: { type: 'string', description: 'One sentence telling the user why this project and what you will build in it.' },
+  },
+  ['name', 'summary'],
+);
+
+/** The tools offered for one turn: every one with a project open, otherwise NO_PROJECT_TOOL_NAMES and create_project. */
+export function agentToolDefinitions({ projectOpen = true } = {}) {
+  return projectOpen
+    ? AGENT_TOOL_DEFINITIONS
+    : [...AGENT_TOOL_DEFINITIONS.filter((definition) => NO_PROJECT_TOOL_NAMES.has(definition.function.name)), CREATE_PROJECT_DEFINITION];
+}
 
 function truncate(text) {
   if (text.length <= MAX_TOOL_RESULT_CHARS) return text;

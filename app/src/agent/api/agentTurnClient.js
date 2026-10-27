@@ -3,11 +3,13 @@ import { BACKEND_API_BASE } from '../../backendConfig.js';
 /**
  * One streamed model response from POST /api/agent/turn.
  * @param {{credentialId: string, messages: object[], tools: object[], workspaceSummary: string,
- *   conversationSummary?: string, signal?: AbortSignal, onText?: (delta: string) => void}} request
- *   messages are OpenAI-format; conversationSummary replaces the conversation's earliest messages
+ *   conversationSummary?: string, projectOpen?: boolean, signal?: AbortSignal,
+ *   onText?: (delta: string) => void}} request messages are OpenAI-format; conversationSummary
+ *   replaces the conversation's earliest messages; projectOpen false adds the no-project section to
+ *   the system prompt
  * @returns {Promise<{text: string, toolCalls: {id: string, name: string, arguments: string}[], finishReason: string}>}
  */
-export async function streamAgentTurn({ credentialId, messages, tools, workspaceSummary, conversationSummary = '', signal, onText }) {
+export async function streamAgentTurn({ credentialId, messages, tools, workspaceSummary, conversationSummary = '', projectOpen = true, signal, onText }) {
   const res = await fetch(`${BACKEND_API_BASE}/api/agent/turn`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -17,6 +19,7 @@ export async function streamAgentTurn({ credentialId, messages, tools, workspace
       tools,
       workspace_summary: workspaceSummary,
       conversation_summary: conversationSummary,
+      project_open: projectOpen,
     }),
     signal,
   });

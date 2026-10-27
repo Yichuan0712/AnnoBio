@@ -2,8 +2,8 @@
  * The Agent's tool-calling loop. The model streams a response; any tool calls it makes are executed
  * here and their results appended, and the model is called again, until it answers without tools or
  * calls a tool only the user can answer: ask_user (a question), propose_changes (a change proposal
- * to apply or reject), run_nodes (jobs to start or cancel), or pipeline_action. That ends the loop
- * until the user responds.
+ * to apply or reject), run_nodes (jobs to start or cancel), pipeline_action, or create_project (with
+ * no project open). That ends the loop until the user responds.
  *
  * Conversation messages are stored in this shape and converted to OpenAI format per request:
  *   {role: 'user', content}
@@ -14,8 +14,9 @@
  */
 import { fetchAgentContext, streamAgentTurn } from './api/agentTurnClient.js';
 import {
-  AGENT_TOOL_DEFINITIONS,
+  agentToolDefinitions,
   ASK_USER_TOOL,
+  CREATE_PROJECT_TOOL,
   PROPOSE_CHANGES_TOOL,
   RUN_NODES_TOOL,
   PIPELINE_ACTION_TOOL,
@@ -95,7 +96,7 @@ export function findPendingInteraction(messages) {
       };
     }
     return {
-      kind: call.name === RUN_NODES_TOOL ? 'run' : call.name === PIPELINE_ACTION_TOOL ? 'pipeline' : 'proposal',
+      kind: { [RUN_NODES_TOOL]: 'run', [PIPELINE_ACTION_TOOL]: 'pipeline', [CREATE_PROJECT_TOOL]: 'project' }[call.name] || 'proposal',
       toolCallId: call.id,
       summary: String(args.summary || ''),
       request: args,
@@ -173,13 +174,32 @@ export function resolvePipelineAction(messages, request, result) {
 }
 
 /**
+ * Record what happened to a pending create_project.
+ * @param {{status: 'created' | 'cancelled' | 'failed', name?: string, feedback?: string, error?: string}} result
+ */
+export function resolveCreateProject(messages, request, result) {
+  messages.push({
+    role: 'tool',
+    toolCallId: request.toolCallId,
+    name: CREATE_PROJECT_TOOL,
+    content: JSON.stringify(result),
+    ok: result.status === 'created',
+    label: request.summary,
+    outcome: result.status === 'created' ? `Created: ${result.name}`
+      : result.status === 'cancelled' ? `Cancelled${result.feedback ? `: ${result.feedback}` : ''}`
+        : `Failed: ${result.error}`,
+  });
+}
+
+/**
  * Continue the conversation until the model answers or asks the user something.
  * @param {{messages: object[], credentialId: string, runtime: object, workspaceSummary: string,
  *   contextSummary?: {text: string, covered: number}|null, signal?: AbortSignal,
  *   onProgress?: (p: {status?: string, text?: string}) => void, onMessage?: () => void,
  *   onSummary?: (summary: {text: string, covered: number}) => void}} options messages is mutated in
  *   place; onMessage fires after each append; contextSummary is the conversation's summary so far,
- *   and onSummary receives a new one to store on the conversation
+ *   and onSummary receives a new one to store on the conversation; runtime.projectOpen false
+ *   (no project open) narrows the tools offered
  * @returns {Promise<'answered' | 'waiting'>} waiting: a question or proposal is open
  */
 export async function runAgentLoop({ messages, credentialId, runtime, workspaceSummary, contextSummary = null, signal, onProgress, onMessage, onSummary }) {
@@ -187,10 +207,13 @@ export async function runAgentLoop({ messages, credentialId, runtime, workspaceS
   let toolCallCount = 0;
   let budgetSpent = false;
   const progress = (p) => { if (onProgress) onProgress(p); };
+  const projectOpen = runtime.projectOpen !== false;
+  const tools = agentToolDefinitions({ projectOpen });
+  const offered = new Set(tools.map((definition) => definition.function.name));
   // The workspace summary and tools are fixed for this loop, so the history's share is too.
   const historyBudget = historyTokenBudget(await fetchAgentContext(credentialId), {
     workspaceSummary,
-    tools: AGENT_TOOL_DEFINITIONS,
+    tools,
   });
   let summary = contextSummary;
 
@@ -225,7 +248,8 @@ export async function runAgentLoop({ messages, credentialId, runtime, workspaceS
         credentialId,
         messages: toApiMessages(plan.messages),
         conversationSummary: plan.summaryText,
-        tools: AGENT_TOOL_DEFINITIONS,
+        tools,
+        projectOpen,
         workspaceSummary,
         signal,
         onText: (delta) => {
@@ -254,11 +278,29 @@ export async function runAgentLoop({ messages, credentialId, runtime, workspaceS
     const overBudget = () => toolCallCount >= MAX_TOOL_CALLS_PER_TURN || Date.now() - startedAt >= MAX_TURN_MS;
     let waiting = false;
     for (const call of toolCalls) {
+      if (!offered.has(call.name)) {
+        // A tool this turn did not offer (a canvas tool with no project open, or create_project with
+        // one open); it still costs a call.
+        const spent = overBudget();
+        if (spent) budgetSpent = true;
+        else toolCallCount += 1;
+        const unavailable = projectOpen ? 'a project is already open' : 'no project is open';
+        messages.push({
+          role: 'tool',
+          toolCallId: call.id,
+          name: call.name,
+          content: spent ? BUDGET_EXHAUSTED : JSON.stringify({ error: `${call.name} is not available: ${unavailable}.` }),
+          ok: false,
+          label: spent ? 'Stopped: tool budget used up' : `${call.name} is not available: ${unavailable}`,
+        });
+        if (onMessage) onMessage();
+        continue;
+      }
       if (call.name === ASK_USER_TOOL) {
         waiting = true;
         continue;
       }
-      if (call.name === PROPOSE_CHANGES_TOOL || call.name === RUN_NODES_TOOL || call.name === PIPELINE_ACTION_TOOL) {
+      if (call.name === PROPOSE_CHANGES_TOOL || call.name === RUN_NODES_TOOL || call.name === PIPELINE_ACTION_TOOL || call.name === CREATE_PROJECT_TOOL) {
         // A request sent back to fix costs another model call, so it counts toward the budget too:
         // otherwise a model that keeps sending invalid ones never stops.
         if (overBudget()) {
@@ -272,13 +314,15 @@ export async function runAgentLoop({ messages, credentialId, runtime, workspaceS
         const args = parseArguments(call.arguments);
         const isRun = call.name === RUN_NODES_TOOL;
         const isPipeline = call.name === PIPELINE_ACTION_TOOL;
-        progress({ status: isPipeline ? 'Checking the Pipeline...' : isRun ? 'Checking the jobs...' : 'Checking the proposal...' });
+        const isProject = call.name === CREATE_PROJECT_TOOL;
+        progress({ status: isProject ? 'Checking the project...' : isPipeline ? 'Checking the Pipeline...' : isRun ? 'Checking the jobs...' : 'Checking the proposal...' });
         const preview = !args
           ? { ok: false, error: argumentsError }
-          : await (isPipeline ? runtime.previewPipelineAction(args) : isRun ? runtime.previewRunRequest(args) : runtime.previewProposal(args));
+          : await (isProject ? runtime.previewCreateProject(args) : isPipeline ? runtime.previewPipelineAction(args) : isRun ? runtime.previewRunRequest(args) : runtime.previewProposal(args));
         if (preview.ok) {
-          call.preview = isPipeline ? { items: preview.items, action: preview.action, routeKey: preview.routeKey, runId: preview.runId, projectId: preview.projectId, projectIdentity: preview.projectIdentity, requestId: preview.requestId }
-            : isRun ? { items: preview.items, total: preview.total, stopGuards: preview.stopGuards, projectIdentity: preview.projectIdentity } : { items: preview.items, warnings: preview.warnings };
+          call.preview = isProject ? { items: preview.items, name: preview.name }
+            : isPipeline ? { items: preview.items, action: preview.action, routeKey: preview.routeKey, runId: preview.runId, projectId: preview.projectId, projectIdentity: preview.projectIdentity, requestId: preview.requestId }
+              : isRun ? { items: preview.items, total: preview.total, stopGuards: preview.stopGuards, projectIdentity: preview.projectIdentity } : { items: preview.items, warnings: preview.warnings };
           waiting = true;
           if (onMessage) onMessage();
         } else {
@@ -288,7 +332,7 @@ export async function runAgentLoop({ messages, credentialId, runtime, workspaceS
             name: call.name,
             content: JSON.stringify({ status: 'invalid', error: preview.error }),
             ok: false,
-            label: `Sent the ${isPipeline ? 'Pipeline action' : isRun ? 'run request' : 'proposal'} back for a fix: ${preview.error}`,
+            label: `Sent the ${isProject ? 'project' : isPipeline ? 'Pipeline action' : isRun ? 'run request' : 'proposal'} back for a fix: ${preview.error}`,
           });
           if (onMessage) onMessage();
         }

@@ -118,7 +118,7 @@
 .workspace-dock .pipeline-overview-body { padding: 14px 18px; overflow: auto; flex: 1; }
 .workspace-dock .pipeline-overview-card { margin-bottom: 18px; }
 .workspace-dock .pipeline-overview-card-title { font-size: 12px; color: var(--text-muted); }
-.workspace-dock .pipeline-overview-empty { margin: 12px 0; }
+.workspace-dock .pipeline-overview-empty { margin: 0; }
 .workspace-dock [data-canvas-node-ids] { cursor: pointer; }
 .workspace-dock [data-canvas-node-ids]:focus-visible { outline: 2px solid var(--primary-btn-text, #2563eb); outline-offset: 2px; }
 /* The agent list (opened from the header's pane toggle) takes a fixed share of the dock, so it

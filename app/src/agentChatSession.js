@@ -1,13 +1,14 @@
 import { AGENT_TITLE_MAX_CHARS, clampAgentTitle } from './agentTitleLimits.js';
 import { BACKEND_API_BASE, waitForBackend } from './backendConfig.js';
-import { answerQuestion, findPendingInteraction, resolvePipelineAction, resolveProposal, resolveRunRequest, runAgentLoop } from './agent/agentLoop.js';
+import { answerQuestion, findPendingInteraction, resolveCreateProject, resolvePipelineAction, resolveProposal, resolveRunRequest, runAgentLoop } from './agent/agentLoop.js';
 import { buildWorkspaceSummary } from './agent/context/workspaceSummary.js';
 import { formatAgentText } from './agent/formatAgentText.js';
 import { diffLines } from './agent/lineDiff.js';
 import { executeRunRequest, previewRunRequest } from './agent/execution/runJobs.js';
 import { createProposalRuntime } from './agent/operations/proposals.js';
 import { executePipelineAction, previewPipelineAction } from './agent/pipeline/pipelineActions.js';
-import { ASK_USER_TOOL, PIPELINE_ACTION_TOOL, PROPOSE_CHANGES_TOOL, RUN_NODES_TOOL, USER_TOOLS } from './agent/tools/agentTools.js';
+import { executeCreateProject, previewCreateProject } from './agent/project/createProject.js';
+import { ASK_USER_TOOL, CREATE_PROJECT_TOOL, PIPELINE_ACTION_TOOL, PROPOSE_CHANGES_TOOL, RUN_NODES_TOOL, USER_TOOLS } from './agent/tools/agentTools.js';
 
 const API_BASE = BACKEND_API_BASE;
 const TITLE_SUMMARY_MAX_ROUNDS = 3;
@@ -246,7 +247,7 @@ function createProposalNode({
 
   if (outcome != null) {
     const outcomeEl = document.createElement('div');
-    outcomeEl.className = `agent-window__proposal-outcome${/^(Applied|Completed|Started|Exported|Stopping|Resumed)\b/.test(outcome) ? ' is-applied' : ''}`;
+    outcomeEl.className = `agent-window__proposal-outcome${/^(Applied|Completed|Started|Exported|Stopping|Resumed|Created)\b/.test(outcome) ? ' is-applied' : ''}`;
     outcomeEl.textContent = outcome;
     cardEl.appendChild(outcomeEl);
     return cardEl;
@@ -569,16 +570,21 @@ export function mountAgentChatSession({
         } else if (call.preview) {
           const isRun = call.name === RUN_NODES_TOOL;
           const isPipeline = call.name === PIPELINE_ACTION_TOOL;
+          const isProject = call.name === CREATE_PROJECT_TOOL;
           const actionLabel = isPipeline ? { export: 'Export' }[args.action] || 'Continue' : '';
           messagesEl.appendChild(createProposalNode({
             summary: String(args.summary || ''),
             preview: call.preview,
             outcome: response ? (response.outcome || 'Resolved') : null,
             active: pendingInteraction?.toolCallId === call.id,
-            onApply: () => (isPipeline ? submitPipelineDecision({ apply: true }) : isRun ? submitRunDecision({ run: true }) : submitProposalDecision({ apply: true })),
-            onReject: (feedback) => (isPipeline ? submitPipelineDecision({ apply: false, feedback }) : isRun ? submitRunDecision({ run: false, feedback }) : submitProposalDecision({ apply: false, feedback })),
+            onApply: () => (isProject ? submitProjectDecision({ create: true }) : isPipeline ? submitPipelineDecision({ apply: true }) : isRun ? submitRunDecision({ run: true }) : submitProposalDecision({ apply: true })),
+            onReject: (feedback) => (isProject ? submitProjectDecision({ create: false, feedback }) : isPipeline ? submitPipelineDecision({ apply: false, feedback }) : isRun ? submitRunDecision({ run: false, feedback }) : submitProposalDecision({ apply: false, feedback })),
             onHighlight: workspace.highlightNodes,
-            ...(isPipeline ? {
+            ...(isProject ? {
+              applyLabel: 'Create',
+              rejectLabel: 'Cancel',
+              hint: 'Create asks where to save the project file. To change the name or the plan, type below.',
+            } : isPipeline ? {
               applyLabel: actionLabel,
               rejectLabel: 'Cancel',
               hint: 'The selected route is checked again before this action starts. To change the plan, type below.',
@@ -626,6 +632,8 @@ export function mountAgentChatSession({
                   ? 'Run or cancel the jobs above, or type what to change...'
                 : awaiting?.kind === 'pipeline'
                   ? 'Confirm or cancel the Pipeline action above, or type what to change...'
+                : awaiting?.kind === 'project'
+                  ? 'Create the project above, or type what to change...'
                   : credentialWarning || 'Send a message...';
   }
 
@@ -669,6 +677,8 @@ export function mountAgentChatSession({
     const { credentialsById, defaultRunCredential, defaultReviewCredential } = await loadCredentialContext();
     const inspectOptions = { credentialsById, defaultRunCredential };
     const inspectNode = (nodeId, readOptions = {}) => workspace.inspectNode(nodeId, { ...inspectOptions, ...readOptions });
+    // Only the desktop app shows the Agent with no project open.
+    const projectOpen = workspace.hasProject?.() !== false;
     const buildSummary = () => buildWorkspaceSummary(workspace.getCanvasState(), {
       extractInputFields: workspace.extractInputFields,
       inspectNode,
@@ -677,6 +687,7 @@ export function mountAgentChatSession({
       defaultReviewCredential,
       selectedNodeIds: workspace.getSelectedNodeIds?.() || [],
       pipelineSelections: workspace.getPipelineSelections?.() || [],
+      projectOpen,
     });
     const proposalWorkspace = {
       ...workspace,
@@ -688,6 +699,7 @@ export function mountAgentChatSession({
       inspectNode,
     };
     return {
+      projectOpen,
       getCanvasState: workspace.getCanvasState,
       inspectNode,
       getScoreComparisonRows: workspace.getScoreComparisonRows,
@@ -699,6 +711,8 @@ export function mountAgentChatSession({
       getAssetProjectId: workspace.getAssetProjectId,
       previewPipelineAction: (request) => previewPipelineAction(request, workspace),
       executePipelineAction: (request, preview) => executePipelineAction(request, preview, workspace),
+      previewCreateProject: (request) => previewCreateProject(request, workspace),
+      executeCreateProject: (request, conversationId) => executeCreateProject(request, workspace, conversationId),
     };
   }
 
@@ -729,7 +743,8 @@ export function mountAgentChatSession({
   /**
    * Run the agent until it answers or waits for the user. On Stop, the conversation is rolled back
    * to `turn.baseline` messages and `restoreText` goes back into the composer. `prelude` runs first
-   * (applying a proposal) and may raise turn.baseline once its result must survive a Stop.
+   * (applying a proposal) and may raise turn.baseline once its result must survive a Stop; it returns
+   * {rebuildRuntime: true} when it opened a project, so the rest of the turn works on that project.
    */
   async function runTurn(conversation, { baseline, restoreText = '', prelude = null }) {
     const turn = { baseline };
@@ -747,9 +762,9 @@ export function mountAgentChatSession({
 
     let answered = false;
     try {
-      const runtime = await buildToolRuntime();
+      let runtime = await buildToolRuntime();
       if (prelude) {
-        await prelude({
+        const done = await prelude({
           runtime,
           signal,
           turn,
@@ -759,6 +774,7 @@ export function mountAgentChatSession({
           },
         });
         conversation.pendingStatus = 'Reading the workspace...';
+        if (done?.rebuildRuntime) runtime = await buildToolRuntime();
       }
       const workspaceSummary = await runtime.buildSummary();
       const outcome = await runAgentLoop({
@@ -956,6 +972,47 @@ export function mountAgentChatSession({
     });
   }
 
+  /**
+   * Create the project the open create_project card names, or cancel it (optionally with feedback),
+   * then continue. Creating moves this conversation into the new project (agentWindowModal.js's
+   * adoptProject), so the turn carries on there with every tool.
+   */
+  async function submitProjectDecision({ create, feedback = '' }, restoreText = '') {
+    const conversation = getActiveConversation();
+    if (!conversation || !credentialId || sendInFlight) return;
+    const messages = ensureConversationMessages(conversation);
+    const request = findPendingInteraction(messages);
+    if (request?.kind !== 'project') return;
+    const baseline = messages.length;
+    if (!create) {
+      resolveCreateProject(messages, request, { status: 'cancelled', ...(feedback ? { feedback } : {}) });
+      if (findPendingInteraction(messages)) {
+        conversation.updatedAt = Date.now();
+        notifyConversationUpdated(conversation);
+        renderActiveConversation();
+        updateComposerState();
+        return;
+      }
+      await runTurn(conversation, { baseline, restoreText });
+      return;
+    }
+    await runTurn(conversation, {
+      baseline,
+      prelude: async ({ runtime, turn, setStatus }) => {
+        setStatus('Creating the project...');
+        let result;
+        try { result = await runtime.executeCreateProject(request.request, conversation.id); }
+        catch (error) { result = { status: 'failed', error: error instanceof Error ? error.message : String(error) }; }
+        resolveCreateProject(messages, request, result);
+        // The project exists (or the attempt is recorded); a Stop from here on keeps it.
+        turn.baseline = messages.length;
+        conversation.updatedAt = Date.now();
+        notifyConversationUpdated(conversation);
+        return { rebuildRuntime: result.status === 'created' };
+      },
+    });
+  }
+
   async function submitEditedMessage() {
     const text = String(editingDraft || '').trim();
     const conversation = getActiveConversation();
@@ -1003,6 +1060,10 @@ export function mountAgentChatSession({
     }
     if (pending?.kind === 'pipeline') {
       await submitPipelineDecision({ apply: false, feedback: text }, text);
+      return;
+    }
+    if (pending?.kind === 'project') {
+      await submitProjectDecision({ create: false, feedback: text }, text);
       return;
     }
     if (messages.length === 0) {

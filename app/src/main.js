@@ -470,10 +470,12 @@ const createWindow = () => {
 };
 
 // Project file IPC
-ipcMain.handle('project:new-dialog', async () => {
+// defaultName: the file name to suggest, e.g. the name the Agent proposed for the project.
+ipcMain.handle('project:new-dialog', async (_e, defaultName) => {
+  const fileName = String(defaultName || '').replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
   const { canceled, filePath } = await dialog.showSaveDialog({
     title: 'New Your Canvas',
-    defaultPath: app.getPath('documents'),
+    defaultPath: fileName ? path.join(app.getPath('documents'), `${fileName}${YC_EXTENSION}`) : app.getPath('documents'),
     filters: [
       { name: 'Your Canvas File', extensions: [YC_EXTENSION.slice(1)] },
       { name: 'Legacy JSON Project', extensions: ['json'] },

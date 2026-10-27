@@ -1355,6 +1355,7 @@ class AgentTurnRequest(BaseModel):
     tools: list[dict[str, Any]] = Field(default_factory=list, description="OpenAI-format function tools")
     workspace_summary: str = Field(default="", description="Workspace summary built by the renderer")
     conversation_summary: str = Field(default="", description="Summary replacing the start of a long conversation")
+    project_open: bool = Field(default=True, description="False in the desktop app before a project is open")
 
 
 def _sse(event: dict[str, Any]) -> str:
@@ -1368,7 +1369,7 @@ def agent_turn(body: AgentTurnRequest):
     api_key = cred.get("api_key", "")
     if not api_key:
         raise HTTPException(status_code=400, detail="Missing API key")
-    messages = [{"role": "system", "content": build_agent_system_prompt(body.workspace_summary, body.conversation_summary)}]
+    messages = [{"role": "system", "content": build_agent_system_prompt(body.workspace_summary, body.conversation_summary, body.project_open)}]
     messages += [m.model_dump(exclude_none=True) for m in body.messages]
 
     def events():
