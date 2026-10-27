@@ -2,7 +2,8 @@
 
 ## Export as Python
 
-Each pipeline in the Pipeline panel has an **Export Python Project** button. It exports the
+Each pipeline in the Pipeline panel has an **Export Python Project** button: the download icon at the
+right of the pipeline's name, labelled when hovered. It exports the
 route chosen in that pipeline's pickers as a standalone Python project (a zip). The Agent can request
 the same export through `pipeline_action`; the user confirms it before the download starts.
 

@@ -8,7 +8,10 @@
  * step (docs/design/RUN_TO_HERE_PLAN.md); its runs are listed in the Run tab.
  */
 import { showAlert } from './alertModal.js';
-import { iconRun } from './icons.js';
+import { iconDownload, iconRun } from './icons.js';
+
+// The export button is an icon; this is its tooltip and accessible name.
+const EXPORT_LABEL = 'Export Python Project';
 import { layoutPipelineFlow } from './pipelineFlow.js';
 import { exportPythonPipeline } from './pipelineExportClient.js';
 import { buildSelectedRoute, exportRoutePayload, getVisibleRoute } from './pipelineRouteSelection.js';
@@ -103,7 +106,7 @@ function renderPipeline(pipeline, index, selectedByChoiceId, canRename) {
       <div class="pipeline-overview-card-header">
         <h3 class="pipeline-overview-card-title">${canRename ? `<button type="button" class="pipeline-overview-name" title="${escapeAttr(`${name} — Click to rename`)}" aria-label="${escapeAttr(`Rename ${name}`)}">${escapeHtml(name)}</button>` : escapeHtml(name)}</h3>
         <div class="pipeline-overview-card-actions">
-          <button type="button" class="btn btn-secondary pipeline-overview-export" data-pipeline-index="${index}">Export Python Project</button>
+          <button type="button" class="pipeline-overview-export" data-pipeline-index="${index}" title="${EXPORT_LABEL}" aria-label="${EXPORT_LABEL}">${iconDownload(14).outerHTML}</button>
         </div>
       </div>
       ${renderFlow(visibleRoute)}
@@ -328,9 +331,9 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
       return;
     }
     const route = buildSelectedRoute(pipeline, selectedByChoiceId);
-    const originalLabel = button.textContent;
     button.disabled = true;
-    button.textContent = 'Exporting…';
+    button.title = 'Exporting…';
+    button.setAttribute('aria-label', 'Exporting…');
     try {
       const promptName = route.find((step) => step.selectedOption?.kind === 'prompt')
         ?.selectedOption?.promptName;
@@ -349,7 +352,8 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     } finally {
       if (button.isConnected) {
         button.disabled = false;
-        button.textContent = originalLabel;
+        button.title = EXPORT_LABEL;
+        button.setAttribute('aria-label', EXPORT_LABEL);
       }
       if (deferredRender) renderBody();
     }

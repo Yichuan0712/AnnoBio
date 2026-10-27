@@ -1,5 +1,5 @@
 /* Log tab of the bottom panel (backendLogPanel.js). */
-.backend-log { display: flex; flex-direction: column; min-height: 0; padding-top: 10px; box-sizing: border-box; }
+.backend-log { display: flex; flex-direction: column; min-height: 0; padding-top: 14px; box-sizing: border-box; }
 .backend-log__toolbar { padding: 0 18px 6px; }
 .backend-log__status { font-size: 12px; color: var(--text-muted); }
 .backend-log__output {
