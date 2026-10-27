@@ -1,5 +1,7 @@
 /* Base: theme variables, layout — light mode: 略深背景减轻刺眼 */
 :root {
+  /* Native scrollbars and form controls follow this; html.dark switches it to dark. */
+  color-scheme: light;
   --app-top-bar-height: 30px;
   --bg: #e2e6ea;
   --bg-bar: #e8eaee;
@@ -29,6 +31,7 @@
 /* Dark: 以中性灰为主，仅极少量冷色，避免发蓝。
    分割线使用低对比灰色，节点轮廓、次要文字和状态色保持清晰。 */
 html.dark {
+  color-scheme: dark;
   --bg: #222326;
   --bg-bar: #2e3036;
   --bg-canvas: #16181b;
