@@ -156,37 +156,34 @@ function normalizeStoredChats(data) {
   return { conversations: sortChatsByRecent(conversations), activeChatId };
 }
 
-/** Apply disk snapshot onto an in-memory chat when disk is newer or has completed a pending reply. */
-function mergeRemoteConversationIntoLocal(local, remote) {
-  if (!local || !remote || local.id !== remote.id) return false;
-  if (!Array.isArray(local.messages)) local.messages = [];
-  if (!Array.isArray(remote.messages)) return false;
-  const lm = local.messages.length;
-  const rm = remote.messages.length;
-  const lt = Number(local.updatedAt) || 0;
-  const rt = Number(remote.updatedAt) || 0;
-  const localPending = local.pending === true;
-  const remotePending = remote.pending === true;
-
-  const remoteAhead = rm > lm || (rt > lt && rm >= lm) || (localPending && !remotePending);
-  if (!remoteAhead) return false;
-
-  local.title = remote.title;
-  local.generatedTitle = remote.generatedTitle === true;
-  local.pending = remotePending;
-  local.pendingStatus = String(remote.pendingStatus || '').trim();
-  local.unsentDraft = String(remote.unsentDraft || '');
-  local.updatedAt = Math.max(lt, rt);
-  local.messages = remote.messages.map((m) => mapMessageForStorage(m));
-  const { contextSummary } = normalizeContextSummary(remote.contextSummary, local.messages.length);
-  if (contextSummary) local.contextSummary = contextSummary;
-  else delete local.contextSummary;
-  return true;
+/**
+ * A chat stored as pending was mid-turn when the app quit or crashed: turns run in this renderer,
+ * so nothing else is going to finish it. It gets a note if the turn ended part-way (last message a
+ * question, tool call or result). Returns whether any chat changed.
+ */
+function finalizeStalePendingChats(chats) {
+  let changed = false;
+  for (const chat of chats) {
+    if (!chat.pending) continue;
+    const last = chat.messages[chat.messages.length - 1];
+    chat.pending = false;
+    chat.pendingStatus = '';
+    chat.updatedAt = Date.now();
+    changed = true;
+    if (last && !(last.role === 'assistant' && !last.toolCalls?.length)) {
+      chat.messages.push({
+        role: 'assistant',
+        content: 'No response was saved for the previous in-flight request. Send again if you still need a reply.',
+      });
+    }
+  }
+  return changed;
 }
 
+/** Mounts the Agent Assistant into its workspace dock (`options.host`), one per open project. */
 export async function openAgentWindowModal(options = {}) {
-  const host = options.host || null;
-  const existing = (host || document).querySelector('.agent-window-overlay');
+  const host = options.host;
+  const existing = host.querySelector('.agent-window-overlay');
   if (existing) {
     const closeButton = existing.querySelector('.modal-close');
     if (closeButton) closeButton.focus();
@@ -206,22 +203,21 @@ export async function openAgentWindowModal(options = {}) {
   }
   if (options.isCurrent && !options.isCurrent()) return;
 
-  let chats = storedState.conversations.length ? storedState.conversations : [createDraftChat()];
+  const hadStalePending = finalizeStalePendingChats(storedState.conversations);
+  let chats = storedState.conversations.length ? sortChatsByRecent(storedState.conversations) : [createDraftChat()];
   const savedActiveId = String(storedState.activeChatId || '').trim();
   let activeChatId =
     savedActiveId && chats.some((c) => c.id === savedActiveId) ? savedActiveId : chats[0].id;
   const overlay = document.createElement('div');
-  overlay.className = host
-    ? 'workspace-dock agent-window-overlay'
-    : 'modal-overlay modal-overlay--no-maximize agent-window-overlay';
-  overlay.setAttribute('role', host ? 'region' : 'dialog');
+  overlay.className = 'workspace-dock agent-window-overlay';
+  overlay.setAttribute('role', 'region');
   overlay.setAttribute('aria-labelledby', 'agent-window-title');
 
   overlay.innerHTML = `
     <div class="modal-panel agent-window">
       <div class="modal-header">
         <h2 id="agent-window-title" class="modal-title">Agent Assistant</h2>
-        <button type="button" class="modal-close" aria-label="${host ? 'Collapse Agent Assistant' : 'Close'}" title="${host ? 'Collapse panel' : 'Close'}">${host ? '' : '×'}</button>
+        <button type="button" class="modal-close" aria-label="Collapse Agent Assistant" title="Collapse panel"></button>
       </div>
       <div class="modal-body agent-window__body">
         <aside class="agent-window__sidebar">
@@ -263,7 +259,6 @@ export async function openAgentWindowModal(options = {}) {
   const composerInputEl = overlay.querySelector('.agent-window__composer-input');
   const composerSendEl = overlay.querySelector('.agent-window__composer-send');
   let chatSession = null;
-  let pendingPollTimeout = null;
   let saveChain = Promise.resolve();
 
   function buildSavePayload() {
@@ -280,89 +275,6 @@ export async function openAgentWindowModal(options = {}) {
           : [],
       })),
     };
-  }
-
-  function stopPendingPoll() {
-    if (pendingPollTimeout != null) {
-      clearTimeout(pendingPollTimeout);
-      pendingPollTimeout = null;
-    }
-  }
-
-  /** If a chat was left pending while a request finished after the UI closed, merge from disk until caught up. */
-  function finalizeStalePendingChats() {
-    let changed = false;
-    for (const c of chats) {
-      if (!c.pending) continue;
-      if (!Array.isArray(c.messages)) c.messages = [];
-      const msgs = c.messages;
-      const last = msgs[msgs.length - 1];
-      c.pending = false;
-      c.pendingStatus = '';
-      c.updatedAt = Date.now();
-      changed = true;
-      // A turn that ended mid-way (last message a question, tool call or result) gets a note.
-      if (last && !(last.role === 'assistant' && !last.toolCalls?.length)) {
-        msgs.push({
-          role: 'assistant',
-          content:
-            'No response was saved for the previous in-flight request. Send again if you still need a reply.',
-        });
-      }
-    }
-    return changed;
-  }
-
-  async function pollAgentConversationsFromDiskOnce() {
-    if (!projectPath || !storageApi?.loadAgentConversations) return false;
-    const disk = normalizeStoredChats(await storageApi.loadAgentConversations(projectPath));
-    let changed = false;
-    for (const local of chats) {
-      const remote = disk.conversations.find((x) => x.id === local.id);
-      if (remote && mergeRemoteConversationIntoLocal(local, remote)) changed = true;
-    }
-    return changed;
-  }
-
-  function startPendingResolutionLoop() {
-    stopPendingPoll();
-    if (!projectPath || !storageApi?.loadAgentConversations) return;
-    if (!chats.some((c) => c.pending === true)) return;
-
-    const maxTicks = 700;
-    let tick = 0;
-
-    const step = async () => {
-      pendingPollTimeout = null;
-      if (!overlay.isConnected) return;
-      if (!chats.some((c) => c.pending === true)) return;
-
-      tick += 1;
-      try {
-        const changed = await pollAgentConversationsFromDiskOnce();
-        if (changed && overlay.isConnected) {
-          chats = sortChatsByRecent(chats);
-          syncActiveChatUI();
-          saveConversations();
-        }
-      } catch (e) {
-        console.error('Agent conversations poll:', e);
-      }
-
-      if (!overlay.isConnected) return;
-      if (!chats.some((c) => c.pending === true)) return;
-      if (tick >= maxTicks) {
-        if (finalizeStalePendingChats() && overlay.isConnected) {
-          chats = sortChatsByRecent(chats);
-          syncActiveChatUI();
-          saveConversations();
-        }
-        return;
-      }
-      pendingPollTimeout = setTimeout(step, 600);
-    };
-
-    pendingPollTimeout = setTimeout(step, 350);
   }
 
   function saveConversations() {
@@ -416,27 +328,17 @@ export async function openAgentWindowModal(options = {}) {
   }
 
   function destroy() {
-    stopPendingPoll();
     // A dock is destroyed only when switching projects; collapsing it keeps the turn alive.
-    if (host) chatSession?.stopAssistant?.();
+    chatSession?.stopAssistant?.();
     chatSession?.destroy?.();
     chatSession = null;
     overlay.remove();
-    document.removeEventListener('keydown', onKeyDown);
   }
   overlay.destroyAgentWindow = destroy;
 
-  function close() {
-    if (host) options.onClose?.();
-    else destroy();
-  }
-
-  function onKeyDown(e) {
-    if (e.key === 'Escape') close();
-  }
-
-  if (host) overlay.querySelector('.modal-close').appendChild(iconCollapse());
-  overlay.querySelector('.modal-close').addEventListener('click', close);
+  const closeButton = overlay.querySelector('.modal-close');
+  closeButton.appendChild(iconCollapse());
+  closeButton.addEventListener('click', () => options.onClose?.());
   const agentPaneToggle = attachModalPaneToggle({
     overlay,
     isCollapsed: () => overlay.classList.contains('agent-window-overlay--sidebar-collapsed'),
@@ -478,8 +380,7 @@ export async function openAgentWindowModal(options = {}) {
     syncActiveChatUI();
     saveConversations();
   });
-  if (!host) document.addEventListener('keydown', onKeyDown);
-  (host || document.body).appendChild(overlay);
+  host.appendChild(overlay);
   chatSession = mountAgentChatSession({
     overlay,
     messagesEl,
@@ -495,12 +396,11 @@ export async function openAgentWindowModal(options = {}) {
     onConversationUpdated: () => {
       chats = sortChatsByRecent(chats);
       saveConversations();
-      startPendingResolutionLoop();
       if (overlay.isConnected) syncActiveChatUI();
     },
   });
   syncActiveChatUI();
-  startPendingResolutionLoop();
+  if (hadStalePending) saveConversations();
   setSidebarCollapsed(true);
   agentPaneToggle.update();
   autoResizeComposer();

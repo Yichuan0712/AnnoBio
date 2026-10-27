@@ -31,6 +31,11 @@ const MAX_TURN_MS = 5 * 60 * 1000;
 const BUDGET_EXHAUSTED = JSON.stringify({
   error: 'The tool budget for this message is used up. Answer now with the information you already have, and say what you could not check.',
 });
+const INVALID_ARGUMENTS = 'The arguments were not valid JSON.';
+// A reply that hits the output token limit cuts its tool call's arguments off mid-JSON; without
+// saying so the model tends to send the same oversized call again.
+const TRUNCATED_ARGUMENTS = 'The arguments were cut off because the reply reached the output token limit. Send less in one call: fewer operations per proposal or jobs per request, or shorter code.';
+const TRUNCATING_FINISH_REASONS = new Set(['length', 'max_tokens']);
 
 /** OpenAI-format messages. A tool call left without a result (an interrupted turn) gets a
  * placeholder one, since providers reject a call that is never answered. */
@@ -212,10 +217,11 @@ export async function runAgentLoop({ messages, credentialId, runtime, workspaceS
     // tool call; one retry usually gets a real reply.
     let text = '';
     let toolCalls = [];
+    let finishReason = '';
     for (let attempt = 0; attempt < 2 && !text.trim() && !toolCalls.length; attempt += 1) {
       let streamed = '';
       progress({ status: 'Thinking...', text: '' });
-      ({ text, toolCalls } = await streamAgentTurn({
+      ({ text, toolCalls, finishReason } = await streamAgentTurn({
         credentialId,
         messages: toApiMessages(plan.messages),
         conversationSummary: plan.summaryText,
@@ -244,6 +250,8 @@ export async function runAgentLoop({ messages, credentialId, runtime, workspaceS
       return 'answered';
     }
 
+    const argumentsError = TRUNCATING_FINISH_REASONS.has(finishReason) ? TRUNCATED_ARGUMENTS : INVALID_ARGUMENTS;
+    const overBudget = () => toolCallCount >= MAX_TOOL_CALLS_PER_TURN || Date.now() - startedAt >= MAX_TURN_MS;
     let waiting = false;
     for (const call of toolCalls) {
       if (call.name === ASK_USER_TOOL) {
@@ -251,13 +259,22 @@ export async function runAgentLoop({ messages, credentialId, runtime, workspaceS
         continue;
       }
       if (call.name === PROPOSE_CHANGES_TOOL || call.name === RUN_NODES_TOOL || call.name === PIPELINE_ACTION_TOOL) {
+        // A request sent back to fix costs another model call, so it counts toward the budget too:
+        // otherwise a model that keeps sending invalid ones never stops.
+        if (overBudget()) {
+          budgetSpent = true;
+          messages.push({ role: 'tool', toolCallId: call.id, name: call.name, content: BUDGET_EXHAUSTED, ok: false, label: 'Stopped: tool budget used up' });
+          if (onMessage) onMessage();
+          continue;
+        }
+        toolCallCount += 1;
         // Validate before showing it: an invalid request goes straight back to the model to fix.
         const args = parseArguments(call.arguments);
         const isRun = call.name === RUN_NODES_TOOL;
         const isPipeline = call.name === PIPELINE_ACTION_TOOL;
         progress({ status: isPipeline ? 'Checking the Pipeline...' : isRun ? 'Checking the jobs...' : 'Checking the proposal...' });
         const preview = !args
-          ? { ok: false, error: 'The arguments were not valid JSON.' }
+          ? { ok: false, error: argumentsError }
           : await (isPipeline ? runtime.previewPipelineAction(args) : isRun ? runtime.previewRunRequest(args) : runtime.previewProposal(args));
         if (preview.ok) {
           call.preview = isPipeline ? { items: preview.items, action: preview.action, routeKey: preview.routeKey, runId: preview.runId, projectId: preview.projectId, projectIdentity: preview.projectIdentity, requestId: preview.requestId }
@@ -278,10 +295,9 @@ export async function runAgentLoop({ messages, credentialId, runtime, workspaceS
         continue;
       }
       const args = parseArguments(call.arguments);
-      const overBudget = toolCallCount >= MAX_TOOL_CALLS_PER_TURN || Date.now() - startedAt >= MAX_TURN_MS;
       let result;
-      if (!args) result = { ok: false, content: JSON.stringify({ error: 'The arguments were not valid JSON.' }) };
-      else if (overBudget) {
+      if (!args) result = { ok: false, content: JSON.stringify({ error: argumentsError }) };
+      else if (overBudget()) {
         budgetSpent = true;
         result = { ok: false, content: BUDGET_EXHAUSTED };
       } else {
