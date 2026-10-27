@@ -687,6 +687,23 @@ def save_agent_conversations(project_id: str, body: AgentConversationsSave):
     return {"ok": True}
 
 
+# Agent chats from before any project is open (docs/design/AGENT_NO_PROJECT_PLAN.md; only the desktop
+# app has a dock without a project). They belong to no project, so they live beside settings and credentials.
+AGENT_CONVERSATIONS_FILE = DATA_DIR / "agent_conversations.json"
+
+
+def load_global_agent_conversations() -> dict:
+    try:
+        return json.loads(AGENT_CONVERSATIONS_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"activeConversationId": "", "conversations": []}
+
+
+def save_global_agent_conversations(body: AgentConversationsSave) -> None:
+    with _lock:
+        _atomic_write_json(AGENT_CONVERSATIONS_FILE, body.model_dump())
+
+
 @router.get("/{project_id}/history")
 def get_history_index(project_id: str):
     _read_project(project_id)

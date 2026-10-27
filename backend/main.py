@@ -86,7 +86,12 @@ from pipeline_runner import (
 from provider_detect import detect_provider, verify_credential
 
 from asset_store import router as asset_router, resolve_content
-from project_store import router as project_router
+from project_store import (
+    AgentConversationsSave,
+    load_global_agent_conversations,
+    router as project_router,
+    save_global_agent_conversations,
+)
 
 app = FastAPI()
 app.include_router(asset_router)
@@ -1451,6 +1456,18 @@ def agent_search(body: AgentSourceSearchRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"The source did not respond: {e}")
+
+
+@app.get("/api/agent/conversations")
+def get_global_agent_conversations():
+    """Agent chats from before any project is open; a project's own are under /api/projects/{id}."""
+    return load_global_agent_conversations()
+
+
+@app.put("/api/agent/conversations")
+def put_global_agent_conversations(body: AgentConversationsSave):
+    save_global_agent_conversations(body)
+    return {"ok": True}
 
 
 @app.get("/api/agent/guides/{topic}")

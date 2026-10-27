@@ -156,7 +156,7 @@ export function showPipelineOverviewModal(pipelineSource, options = {}) {
     route: buildSelectedRoute(pipeline, selectedByChoiceId),
     nodeIds: [...pipelineStepNodeIds(pipeline)],
   }));
-  const emptyText = 'No pipelines detected yet — a pipeline needs at least one Prompt with a Generate, or a Process.';
+  const emptyText = 'No pipelines detected yet.';
 
   overlay.innerHTML = `
     <div class="modal-panel modal-panel--pipeline-overview">

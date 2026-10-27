@@ -67,7 +67,7 @@ export function subscribeAppErrors(listener) {
   return () => listeners.delete(listener);
 }
 
-/** True while a project is open and its Log tab is available. */
+/** True once the bottom panel's Log tab exists (desktop); until then errors show as a notice. */
 export function setLogPanelAvailable(available) {
   panelAvailable = available;
   renderNotice();

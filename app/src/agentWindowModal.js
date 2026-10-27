@@ -1,13 +1,13 @@
 import { attachModalPaneToggle } from './paneToggleButton.js';
 import { mountAgentChatSession } from './agentChatSession.js';
 import { clampAgentTitle } from './agentTitleLimits.js';
-import { BACKEND_API_BASE } from './backendConfig.js';
+import { BACKEND_API_BASE, waitForBackend } from './backendConfig.js';
 import { iconCollapse } from './modalMaximize.js';
 
 // Web fallback for the electronAPI methods this module relies on: same two method names,
 // backed by backend/project_store.py's REST endpoints instead of local-file IPC, keyed by
 // project id instead of a file path. Every call site below only ever calls through
-// `storageApi`, so this is the only place that needs to branch on environment.
+// `storageApi`, so this is the only place that needs to branch on where chats are stored.
 const webAgentStorageApi = {
   async loadAgentConversations(projectId) {
     const res = await fetch(`${BACKEND_API_BASE}/api/projects/${projectId}/agent-conversations`);
@@ -16,6 +16,28 @@ const webAgentStorageApi = {
   },
   async saveAgentConversations(projectId, payload) {
     const res = await fetch(`${BACKEND_API_BASE}/api/projects/${projectId}/agent-conversations`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error('Could not save agent conversations.');
+    return { ok: true };
+  },
+};
+
+// Chats from before any project is open, kept by the backend apart from every project; only the
+// desktop app shows the dock without a project (docs/design/AGENT_NO_PROJECT_PLAN.md). A failed load
+// throws rather than reading as empty, so the dock never saves an empty list over chats it could not read.
+const globalAgentStorageApi = {
+  async loadAgentConversations() {
+    // The desktop dock mounts at launch, possibly before the backend is listening.
+    await waitForBackend();
+    const res = await fetch(`${BACKEND_API_BASE}/api/agent/conversations`);
+    if (!res.ok) throw new Error('Could not load agent conversations.');
+    return res.json();
+  },
+  async saveAgentConversations(_projectPath, payload) {
+    const res = await fetch(`${BACKEND_API_BASE}/api/agent/conversations`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -180,7 +202,10 @@ function finalizeStalePendingChats(chats) {
   return changed;
 }
 
-/** Mounts the Agent Assistant into its workspace dock (`options.host`), one per open project. */
+/**
+ * Mounts the Agent Assistant into its workspace dock (`options.host`): the open project's chats,
+ * or with no project (`projectPath` empty) the chats kept apart from every project.
+ */
 export async function openAgentWindowModal(options = {}) {
   const host = options.host;
   const existing = host.querySelector('.agent-window-overlay');
@@ -192,12 +217,15 @@ export async function openAgentWindowModal(options = {}) {
 
   const projectPath = String(options?.projectPath || '').trim();
   const workspace = options?.workspace || null;
-  const storageApi = window.electronAPI || webAgentStorageApi;
+  const storageApi = projectPath ? window.electronAPI || webAgentStorageApi : globalAgentStorageApi;
   let storedState = { conversations: [], activeChatId: '' };
-  if (projectPath && storageApi?.loadAgentConversations) {
+  // Saving after a failed load would replace the stored chats with this session's.
+  let loadFailed = false;
+  if (storageApi?.loadAgentConversations) {
     try {
       storedState = normalizeStoredChats(await storageApi.loadAgentConversations(projectPath));
     } catch (error) {
+      loadFailed = true;
       console.error('Load agent conversations:', error);
     }
   }
@@ -278,7 +306,7 @@ export async function openAgentWindowModal(options = {}) {
   }
 
   function saveConversations() {
-    if (!projectPath || !storageApi?.saveAgentConversations) return;
+    if (loadFailed || !storageApi?.saveAgentConversations) return;
     const payload = buildSavePayload();
     saveChain = saveChain
       .catch(() => {})

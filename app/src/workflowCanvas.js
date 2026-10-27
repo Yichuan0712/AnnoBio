@@ -3490,18 +3490,21 @@ export function buildWorkflowCanvas(root, options = {}) {
     });
   }
 
-  function setAgentWindowVisible(visible) {
-    panelToggles.hidden = !visible;
-    const projectPath = visible ? String(getCurrentProjectPath() || '') : '';
-    if (projectPath !== panelProjectPath || !visible) {
+  /** Call after the open project changes, so the docks show its pipelines and chats. On desktop both
+   * docks are there with no project too (the Agent's chats from before a project are stored apart
+   * from every project); on web they appear with a project. */
+  function syncProjectPanels() {
+    const projectPath = String(getCurrentProjectPath() || '');
+    const available = isElectron || Boolean(projectPath);
+    panelToggles.hidden = !available;
+    if (projectPath !== panelProjectPath) {
       panelProjectPath = projectPath;
       agentMountGeneration += 1;
       pendingAgentMount = false;
       workspacePanels.agentHost.querySelector('.agent-window-overlay')?.destroyAgentWindow?.();
       workspacePanels.pipelineHost.querySelector('.pipeline-overview-overlay')?.destroyPipelineOverview?.();
     }
-    workspacePanels.setEnabled(visible);
-    if (isElectron) setLogPanelAvailable(visible);
+    workspacePanels.setEnabled(available);
   }
 
   const zoomToolbar = document.createElement('div');
@@ -6341,6 +6344,8 @@ export function buildWorkflowCanvas(root, options = {}) {
   document.addEventListener('workflow:history-resolved', () => getCanvasState());
   if (isElectron) {
     mountBackendLogPanel(workspacePanels.tabHost('log'));
+    // The bottom panel is there with or without a project, so errors always have its Log tab.
+    setLogPanelAvailable(true);
     subscribeAppErrors((list) => {
       appErrorCount = list.length;
       workspacePanels.setTabBadge('log', list.length);
@@ -6374,7 +6379,7 @@ export function buildWorkflowCanvas(root, options = {}) {
     recoverHistoryJobs,
     reconcileHistory,
     setOnCanvasChange,
-    setAgentWindowVisible,
+    syncProjectPanels,
     panelToggles,
     isPromptNameAlreadyUsed,
     isDatasetNameAlreadyUsed,

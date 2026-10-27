@@ -203,7 +203,7 @@ window.addEventListener('DOMContentLoaded', () => {
     topBarAPI.setAddMenuEnabled(true);
     topBarAPI.setSaveAsEnabled?.(true);
     topBarAPI.setMergeEnabled?.(true);
-    canvasAPI.setAgentWindowVisible?.(true);
+    canvasAPI.syncProjectPanels?.();
   };
 
   const onOpenProjectDesktop = async () => {
@@ -222,7 +222,7 @@ window.addEventListener('DOMContentLoaded', () => {
     topBarAPI.setAddMenuEnabled(true);
     topBarAPI.setSaveAsEnabled?.(true);
     topBarAPI.setMergeEnabled?.(true);
-    canvasAPI.setAgentWindowVisible?.(true);
+    canvasAPI.syncProjectPanels?.();
   };
 
   const onSaveAsProjectDesktop = async () => {
@@ -238,7 +238,7 @@ window.addEventListener('DOMContentLoaded', () => {
     topBarAPI.setAddMenuEnabled(true);
     topBarAPI.setSaveAsEnabled?.(true);
     topBarAPI.setMergeEnabled?.(true);
-    canvasAPI.setAgentWindowVisible?.(true);
+    canvasAPI.syncProjectPanels?.();
   };
 
   const onMergeProjectDesktop = async () => {
@@ -282,7 +282,7 @@ window.addEventListener('DOMContentLoaded', () => {
       topBarAPI.setSaveAsEnabled?.(true);
       topBarAPI.setMergeEnabled?.(true);
       topBarAPI.setPublishEnabled?.(true);
-      canvasAPI.setAgentWindowVisible?.(true);
+      canvasAPI.syncProjectPanels?.();
     } catch (err) {
       if (silent) { setStoredWebProjectId(null); return; }
       if (err.capacityExceeded) { await offerDesktopDownload(err.message); return; }
@@ -382,7 +382,7 @@ window.addEventListener('DOMContentLoaded', () => {
   topBarAPI.setProjectTitle?.(APP_TITLE);
   topBarAPI.setAddMenuEnabled(false);
   topBarAPI.setPublishEnabled?.(false);
-  canvasAPI.setAgentWindowVisible?.(false);
+  canvasAPI.syncProjectPanels?.();
 
   // Keyboard shortcuts — Delete/Backspace and undo/redo are ignored while typing in a field
   // (including CodeMirror's process-node editor) so they don't fight normal text editing there.
