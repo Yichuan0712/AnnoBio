@@ -5,6 +5,7 @@
  * runs without Electron or a DOM.
  */
 import { parseDelimitedText, parseJsonRecords, parseWorkbookSheet, readWorkbook } from '../../datasetFileParsing.js';
+import { tableFileFormat } from '../../fileTypes.js';
 
 export const PREVIEW_TABLE_ROWS = 20;
 export const MAX_READ_TABLE_ROWS = 50;
@@ -25,10 +26,13 @@ function decodeText(bytes) {
 
 /** {headers, rows, sheet?, sheets?} or {error}, parsed as Create Dataset parses it. */
 export function parseTableAttachment(name, bytes, sheetName = '') {
-  const lower = String(name || '').toLowerCase();
-  if (/\.(?:json|jsonl|ndjson)$/.test(lower)) return parseJsonRecords(decodeText(bytes), { lines: !lower.endsWith('.json') });
-  if (lower.endsWith('.csv') || lower.endsWith('.tsv')) return parseDelimitedText(decodeText(bytes), { tsv: lower.endsWith('.tsv') });
-  const workbook = readWorkbook(bytes);
+  const format = tableFileFormat(name);
+  if (format === 'json' || format === 'jsonl') return parseJsonRecords(decodeText(bytes), { lines: format === 'jsonl' });
+  if (format === 'csv' || format === 'tsv') return parseDelimitedText(decodeText(bytes), { tsv: format === 'tsv' });
+  if (format !== 'workbook') return { error: 'Unsupported table format.' };
+  let workbook;
+  try { workbook = readWorkbook(bytes); }
+  catch (_) { return { error: 'Could not read the workbook. It may be damaged or password-protected; provide an unencrypted supported copy.' }; }
   const sheets = workbook.SheetNames || [];
   if (!sheets.length) return { error: 'No sheets in workbook.' };
   const sheet = sheetName || sheets[0];
@@ -75,11 +79,18 @@ export async function readAttachmentWindow(attachment, request, deps) {
       more_rows: start - 1 + rows.length < parsed.rows.length,
     };
   }
-  if (attachment.kind === 'text' || (json && request.format === 'text')) {
-    const text = decodeText(bytes);
+  if (attachment.kind === 'text' || attachment.kind === 'document' || (json && request.format === 'text')) {
+    let text;
+    let note;
+    try {
+      if (attachment.kind === 'document') {
+        const { extractDocumentText } = await import('./documentText.js');
+        ({ text, note } = extractDocumentText(attachment.name, bytes));
+      } else text = decodeText(bytes);
+    } catch (error) { return { ...base, error: `Could not read the document: ${error.message}` }; }
     const offset = Math.max(0, Math.floor(Number(request.offset) || 0));
     const limit = Math.min(MAX_READ_TEXT_CHARS, Math.max(1, Math.floor(Number(request.max_chars) || PREVIEW_TEXT_CHARS)));
-    return { ...base, total_chars: text.length, offset, text: text.slice(offset, offset + limit), more_text: offset + limit < text.length };
+    return { ...base, total_chars: text.length, offset, text: text.slice(offset, offset + limit), more_text: offset + limit < text.length, ...(note ? { note } : {}) };
   }
   if (attachment.kind === 'pdf') {
     const firstPage = Math.max(1, Math.floor(Number(request.page) || 1));

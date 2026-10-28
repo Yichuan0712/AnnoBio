@@ -1,5 +1,5 @@
 /**
- * Reads the tables Create Dataset accepts (CSV/TSV/Excel/JSON/JSONL) into {headers, rows}. The Agent's
+ * Reads the tables in fileTypes.js (delimited text, workbooks and JSON records) into {headers, rows}. The Agent's
  * chat attachments use the same rules, so a table it imports matches one the user would import
  * (docs/design/AGENT_ATTACHMENTS_PLAN.md).
  */

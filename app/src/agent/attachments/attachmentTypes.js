@@ -1,14 +1,16 @@
 /**
  * Which files can be attached to an Agent chat (desktop app; docs/design/AGENT_ATTACHMENTS_PLAN.md),
  * shared by the main process, which only reads these, and the chat. Tables, images and PDFs are the
- * kinds Create Dataset imports; text and code files are only for the Agent to read.
+ * kinds Create Dataset imports; documents, text and code are for the Agent to read.
  */
+import { TABLE_FILE_EXTENSIONS, IMAGE_FILE_EXTENSIONS, DOCUMENT_FILE_EXTENSIONS, fileExtension } from '../../fileTypes.js';
 
 const MB = 1024 * 1024;
 
 const EXTENSIONS = {
-  table: ['csv', 'tsv', 'xlsx', 'xls', 'xlsm', 'json', 'jsonl', 'ndjson'],
-  image: ['png', 'jpg', 'jpeg', 'webp'],
+  table: TABLE_FILE_EXTENSIONS,
+  image: IMAGE_FILE_EXTENSIONS,
+  document: DOCUMENT_FILE_EXTENSIONS,
   pdf: ['pdf'],
   text: [
     // Text, markup and config
@@ -51,21 +53,16 @@ const TEXT_FILE_NAMES = new Set([
 ]);
 
 // Images and PDFs as in Create Dataset (projectAssets.js, asset_store.py).
-export const ATTACHMENT_MAX_BYTES = { table: 20 * MB, image: 30 * MB, pdf: 50 * MB, text: 20 * MB };
+export const ATTACHMENT_MAX_BYTES = { table: 20 * MB, image: 30 * MB, pdf: 50 * MB, text: 20 * MB, document: 20 * MB };
 export const MAX_ATTACHMENTS_PER_MESSAGE = 20;
 
 const KIND_BY_EXTENSION = new Map(Object.entries(EXTENSIONS).flatMap(([kind, list]) => list.map((ext) => [ext, kind])));
 
-function extensionOf(name) {
-  const match = /\.([^./\\]+)$/.exec(String(name || ''));
-  return match ? match[1].toLowerCase() : '';
-}
-
-/** 'table' | 'image' | 'pdf' | 'text', or '' for a file that cannot be attached. */
+/** 'table' | 'image' | 'pdf' | 'document' | 'text', or '' when unsupported. */
 export function attachmentKind(name) {
   const baseName = String(name || '').split(/[/\\]/).pop().toLowerCase();
   if (TEXT_FILE_NAMES.has(baseName)) return 'text';
-  return KIND_BY_EXTENSION.get(extensionOf(baseName)) || '';
+  return KIND_BY_EXTENSION.get(fileExtension(baseName)) || '';
 }
 
 /** Why a file of `kind` (attachmentKind, or 'text' from looksLikeText) cannot be attached, or '' when it can. */
@@ -124,6 +121,7 @@ export function attachmentDialogFilters() {
   return [
     { name: 'Supported files', extensions: all },
     { name: 'Tables', extensions: EXTENSIONS.table },
+    { name: 'Documents and presentations', extensions: EXTENSIONS.document },
     { name: 'Images', extensions: EXTENSIONS.image },
     { name: 'PDF', extensions: EXTENSIONS.pdf },
     { name: 'Text and code', extensions: unique(EXTENSIONS.text) },

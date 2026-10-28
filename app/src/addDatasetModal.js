@@ -6,6 +6,7 @@
  */
 
 import { parseDelimitedText, parseJsonRecords, parseWorkbookSheet, readWorkbook } from './datasetFileParsing.js';
+import { TABLE_FILE_ACCEPT, IMAGE_FILE_ACCEPT, tableFileFormat } from './fileTypes.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { showConfirm } from './alertModal.js';
 import { imageCell, pdfCell } from './datasetContent.js';
@@ -168,9 +169,9 @@ export function openAddDatasetModal(workflowCanvasApi) {
                 <div class="dataset-source-panel dataset-source-panel--active" data-source-panel="upload">
                   <div class="dataset-import">
                     <h3 class="dataset-import-title">Upload a table</h3>
-                    <p class="dataset-sheet-hint">Import rows from CSV, TSV, Excel, JSON or JSONL on your computer. Each column becomes a text column you can retype as Image afterward.</p>
+                    <p class="dataset-sheet-hint">Import rows from CSV, TSV, Excel (including templates), OpenDocument, Numbers, DBF, DIF, SYLK, JSON or JSONL. Each column becomes a text column you can retype as Image afterward.</p>
                     <div class="dataset-import-actions">
-                      <input type="file" id="dataset-file-input" accept=".csv,.tsv,.xlsx,.xls,.xlsm,.json,.jsonl,.ndjson,text/csv,text/tab-separated-values,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/vnd.ms-excel.sheet.macroEnabled.12" hidden />
+                      <input type="file" id="dataset-file-input" accept="${TABLE_FILE_ACCEPT}" hidden />
                       <button type="button" class="btn btn-secondary dataset-import-btn">Choose table file</button>
                       <span class="dataset-filename" aria-live="polite"></span>
                     </div>
@@ -187,7 +188,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
                     <h3 class="dataset-import-title">Upload images</h3>
                     <p class="dataset-sheet-hint">One row per image, with a Filename column and an Image column.</p>
                     <div class="dataset-import-actions">
-                      <input type="file" id="image-file-input" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" multiple hidden />
+                      <input type="file" id="image-file-input" accept="${IMAGE_FILE_ACCEPT}" multiple hidden />
                       <button type="button" class="btn btn-secondary image-import-choose-btn">Choose images</button>
                       ${window.electronAPI?.importDatasetFolder ? '<button type="button" class="btn btn-secondary" data-import-folder="image">Import a folder</button><label><input type="checkbox" data-folder-recursive="image" /> Include subfolders</label>' : ''}
                       <span class="dataset-filename image-import-filenames" aria-live="polite"></span>
@@ -1124,17 +1125,16 @@ export function openAddDatasetModal(workflowCanvasApi) {
     const file = fileInput.files?.[0];
     if (!file) return;
     const name = file.name.toLowerCase();
-    const isCsv = name.endsWith('.csv');
-    const isTsv = name.endsWith('.tsv');
-    const isXlsx = /\.(?:xlsx|xls|xlsm)$/.test(name);
-    const isJson = /\.(?:json|jsonl|ndjson)$/.test(name);
-    if (!isCsv && !isTsv && !isXlsx && !isJson) {
+    const format = tableFileFormat(name);
+    const isTsv = format === 'tsv';
+    const isJson = format === 'json' || format === 'jsonl';
+    if (!format) {
       fileImported = false;
       parsedDatasetContent = null;
       xlsxWorkbook = null;
       if (sheetWrap) sheetWrap.style.display = 'none';
-      filenameEl.textContent = 'Choose a CSV, TSV, Excel, JSON or JSONL file.';
-      setFileInfoPlaceholder('Choose a CSV, TSV, Excel, JSON or JSONL file.');
+      filenameEl.textContent = 'Choose a supported table file.';
+      setFileInfoPlaceholder('Choose a supported table file.');
       previewEl.textContent = '';
       previewEl.classList.add('prompt-preview--empty');
       return;
@@ -1146,7 +1146,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
     filenameEl.textContent = file.name;
     setFileInfoPlaceholder('Loading…');
 
-    if (isXlsx) {
+    if (format === 'workbook') {
       const reader = new FileReader();
       reader.onload = () => {
         try {
@@ -1172,8 +1172,8 @@ export function openAddDatasetModal(workflowCanvasApi) {
           fileImported = false;
           parsedDatasetContent = null;
           xlsxWorkbook = null;
-          setFileInfoPlaceholder('Failed to parse Excel workbook.');
-          previewEl.textContent = 'Failed to parse Excel workbook.';
+          setFileInfoPlaceholder('Failed to parse workbook. The file may be damaged or password-protected.');
+          previewEl.textContent = 'Failed to parse workbook. The file may be damaged or password-protected.';
           previewEl.classList.add('prompt-preview--empty');
         }
       };

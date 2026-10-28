@@ -661,6 +661,7 @@ export function planChangeSet(state, operations, ctx) {
       const found = ids.map((id) => entry.attachments.find((a) => a.id === id));
       const kinds = new Set(found.map((a) => a.kind));
       if (kinds.has('text')) fail('Text and code attachments cannot be imported as a Dataset; read them with read_attachment.');
+      if (kinds.has('document')) fail('Document attachments provide extracted text only; read them with read_attachment and create a Dataset from the needed records.');
       if ([...kinds].some((kind) => !['table', 'image', 'pdf'].includes(kind))) fail('Import tables, images or PDFs; select files inside a folder.');
       if (kinds.size > 1) fail('Import one table, a batch of images or a batch of PDFs in one operation, not a mix.');
       const kind = found[0].kind;

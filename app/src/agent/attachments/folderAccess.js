@@ -367,7 +367,7 @@ export function createFolderAccessStore(storagePath, { home = os.homedir(), impo
         for (const entry of inventory.entries) {
           if (timedOut) break;
           if (Date.now() >= deadline) { timedOut = true; break; }
-          if (!['text', 'unknown'].includes(entry.kind) && !/\.(?:csv|tsv|json|jsonl|ndjson)$/i.test(entry.path)) continue;
+          if (!['text', 'unknown'].includes(entry.kind) && !/\.(?:csv|tsv|tab|json|jsonl|ndjson)$/i.test(entry.path)) continue;
           if (entry.size > 20 * 1024 * 1024 || bytesScanned + entry.size > 50 * 1024 * 1024) { budgetError = 'Search byte limit reached.'; break; }
           let file;
           try { file = await read(conversation, id, entry.path); }

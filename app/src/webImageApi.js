@@ -5,6 +5,7 @@
  * datasetDetailModal.js, only when `window.electronAPI` is absent.
  */
 import { BACKEND_API_BASE } from './backendConfig.js';
+import { IMAGE_FILE_ACCEPT } from './fileTypes.js';
 
 function pickFiles({ multiple = true, directory = false } = {}) {
   return new Promise((resolve) => {
@@ -16,7 +17,7 @@ function pickFiles({ multiple = true, directory = false } = {}) {
       // the tradeoff already made for the folder-relative-path import flow's UX.
       input.webkitdirectory = true;
     } else {
-      input.accept = 'image/png,image/jpeg,image/webp';
+      input.accept = IMAGE_FILE_ACCEPT;
     }
     input.style.display = 'none';
     function settle(files) {

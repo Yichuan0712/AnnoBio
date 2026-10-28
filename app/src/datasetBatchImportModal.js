@@ -4,6 +4,7 @@ import { iconFileText } from './icons.js';
 import { mountModalDialog } from './modalDialog.js';
 import { BatchAssetDraft } from './batchAssetDraft.js';
 import { fillDatasetTextCells } from './datasetTableLayout.js';
+import { IMAGE_FILE_ACCEPT, IMAGE_FILE_EXTENSIONS, fileExtension } from './fileTypes.js';
 
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -41,7 +42,7 @@ export function openDatasetBatchImport({ host, kind, targetColumn, headers, colu
       </label>` : ''}
       <div class="dataset-batch-panel__drop">
         <button type="button" class="btn btn-secondary dataset-batch-panel__pick">Choose ${fileLabel}</button>
-        <input class="dataset-batch-panel__file-input" type="file" accept="${isPdf ? 'application/pdf' : 'image/png,image/jpeg,image/webp'}" multiple hidden>
+        <input class="dataset-batch-panel__file-input" type="file" accept="${isPdf ? '.pdf,application/pdf' : IMAGE_FILE_ACCEPT}" multiple hidden>
         <span>or drop ${fileLabel} here</span>
       </div>
       <p class="dataset-image-import-note dataset-batch-panel__hint">${emptyPlacementHint}</p>
@@ -357,7 +358,7 @@ export function openDatasetBatchImport({ host, kind, targetColumn, headers, colu
   function addFiles(entries) {
     if (!entries?.length || busy) return;
     const selected = Array.from(entries);
-    const valid = selected.every((entry) => (isPdf ? /\.pdf$/i : /\.(png|jpe?g|webp)$/i).test(entry.name));
+    const valid = selected.every((entry) => isPdf ? fileExtension(entry.name) === 'pdf' : IMAGE_FILE_EXTENSIONS.includes(fileExtension(entry.name)));
     if (!valid) {
       errorMessage = `Choose only ${isPdf ? 'PDF' : 'PNG, JPEG, or WebP'} files.`;
       refresh(false);

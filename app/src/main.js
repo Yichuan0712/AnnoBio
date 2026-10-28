@@ -13,6 +13,7 @@ import { ProjectAssets, YC_EXTENSION, isBundledProjectFile } from './projectAsse
 import { createBackendLog } from './backendLog.js';
 import { createFolderAccessStore, listFolder } from './agent/attachments/folderAccess.js';
 import { APP_NAME, WINDOWS_APP_ID, windowsTaskbarDetails } from './appIdentity.js';
+import { IMAGE_FILE_EXTENSIONS } from './fileTypes.js';
 
 if (process.platform === 'win32') app.setAppUserModelId(WINDOWS_APP_ID);
 
@@ -77,7 +78,7 @@ const projectAssets = new ProjectAssets({
 
 ipcMain.handle('assets:import', async (_event, paths) => {
   if (!Array.isArray(paths)) {
-    const result = await dialog.showOpenDialog({ title: 'Import images', properties: ['openFile', 'multiSelections'], filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] });
+    const result = await dialog.showOpenDialog({ title: 'Import images', properties: ['openFile', 'multiSelections'], filters: [{ name: 'Images', extensions: IMAGE_FILE_EXTENSIONS }] });
     paths = result.canceled ? [] : result.filePaths;
   }
   return projectAssets.importFiles(paths);
@@ -98,7 +99,7 @@ ipcMain.handle('assets:pick-files', async () => {
   const result = await dialog.showOpenDialog({
     title: 'Choose images to import',
     properties: ['openFile', 'multiSelections'],
-    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+    filters: [{ name: 'Images', extensions: IMAGE_FILE_EXTENSIONS }],
   });
   return result.canceled ? [] : result.filePaths;
 });
