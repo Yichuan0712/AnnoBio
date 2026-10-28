@@ -1,0 +1,760 @@
+{
+  "cbioportal": {
+    "record": {
+      "studyId": "brca_tcga",
+      "cancerTypeId": "brca",
+      "name": "Breast Invasive Carcinoma (TCGA, Firehose Legacy)",
+      "description": "TCGA Breast Invasive Carcinoma. Source data from <A HREF=\"http://gdac.broadinstitute.org/runs/stddata__2016_01_28/data/BRCA/20160128/\">GDAC Firehose</A>. Previously known as TCGA Provisional.",
+      "publicStudy": true,
+      "groups": "PUBLIC",
+      "status": 1,
+      "importDate": "2026-01-05 19:58:22",
+      "allSampleCount": 1108,
+      "sequencedSampleCount": 982,
+      "cnaSampleCount": 1080,
+      "mrnaRnaSeqSampleCount": 0,
+      "mrnaRnaSeqV2SampleCount": 1100,
+      "mrnaMicroarraySampleCount": 529,
+      "miRnaSampleCount": 0,
+      "methylationHm27SampleCount": 316,
+      "rppaSampleCount": 892,
+      "massSpectrometrySampleCount": 74,
+      "completeSampleCount": 960,
+      "referenceGenome": "hg19",
+      "treatmentCount": 0,
+      "structuralVariantCount": 0,
+      "cancerType": {
+        "id": "brca",
+        "name": "Invasive Breast Carcinoma",
+        "dedicatedColor": "HotPink",
+        "shortName": "BRCA",
+        "parent": "breast"
+      },
+      "readPermission": true,
+      "resourceCounts": []
+    },
+    "expected_id": "brca_tcga",
+    "expected_name": "Breast Invasive Carcinoma (TCGA, Firehose Legacy)"
+  },
+  "dbsnp": {
+    "record": {
+      "refsnp_id": "328",
+      "last_update_date": "2024-11-3T07:48Z",
+      "last_update_build_id": "157",
+      "primary_snapshot_data": {
+        "variant_type": "snv",
+        "placements_with_allele": [
+          {
+            "is_ptlp": true,
+            "alleles": [
+              {
+                "hgvs": "NC_000008.11:g.19962213="
+              },
+              {
+                "hgvs": "NC_000008.11:g.19962213C>A"
+              },
+              {
+                "hgvs": "NC_000008.11:g.19962213C>G"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expected_id": "rs328",
+    "expected_name": "rs328"
+  },
+  "emdb": {
+    "record": {
+      "admin": {
+        "title": "Real space refinement of acto-myosin structures from sectioned muscle."
+      },
+      "sample": {
+        "name": {
+          "valueOf_": "Rigor insect flight muscle from Lethocerus maximus"
+        }
+      },
+      "structure_determination_list": {}
+    },
+    "expected_id": "EMD-1001",
+    "expected_name": "Real space refinement of acto-myosin structures from sectioned muscle."
+  },
+  "jaspar": {
+    "record": {
+      "matrix_id": "MA0139.1",
+      "name": "CTCF",
+      "base_id": "MA0139",
+      "version": 1,
+      "collection": "CORE",
+      "sequence_logo": "https://jaspar.elixir.no/static/logos/svg/MA0139.1.svg",
+      "versions_url": "https://jaspar.elixir.no/api/v1/matrix/MA0139/versions",
+      "sites_url": null,
+      "pfm": {
+        "A": [
+          87.0,
+          167.0,
+          281.0,
+          56.0,
+          8.0,
+          744.0,
+          40.0,
+          107.0,
+          851.0,
+          5.0,
+          333.0,
+          54.0,
+          12.0,
+          56.0,
+          104.0,
+          372.0,
+          82.0,
+          117.0,
+          402.0
+        ],
+        "C": [
+          291.0,
+          145.0,
+          49.0,
+          800.0,
+          903.0,
+          13.0,
+          528.0,
+          433.0,
+          11.0,
+          0.0,
+          3.0,
+          12.0,
+          0.0,
+          8.0,
+          733.0,
+          13.0,
+          482.0,
+          322.0,
+          181.0
+        ],
+        "G": [
+          76.0,
+          414.0,
+          449.0,
+          21.0,
+          0.0,
+          65.0,
+          334.0,
+          48.0,
+          32.0,
+          903.0,
+          566.0,
+          504.0,
+          890.0,
+          775.0,
+          5.0,
+          507.0,
+          307.0,
+          73.0,
+          266.0
+        ],
+        "T": [
+          459.0,
+          187.0,
+          134.0,
+          36.0,
+          2.0,
+          91.0,
+          11.0,
+          324.0,
+          18.0,
+          3.0,
+          9.0,
+          341.0,
+          8.0,
+          71.0,
+          67.0,
+          17.0,
+          37.0,
+          396.0,
+          59.0
+        ]
+      },
+      "class": [
+        "C2H2 zinc finger factors"
+      ],
+      "family": [
+        "More than 3 adjacent zinc fingers"
+      ],
+      "tfe_id": [],
+      "medline": [
+        "17512414"
+      ],
+      "pazar_tf_id": [],
+      "comment": "TF has several motif variants.",
+      "remap_tf_name": "CTCF",
+      "tax_group": "vertebrates",
+      "tfbs_shape_id": "133",
+      "type": "ChIP-seq",
+      "tfe_ids": [],
+      "pubmed_ids": [
+        "17512414"
+      ],
+      "pazar_tf_ids": [],
+      "uniprot_ids": [
+        "P49711"
+      ],
+      "species": [
+        {
+          "tax_id": 9606,
+          "name": "Homo sapiens"
+        }
+      ],
+      "tffm": {
+        "tffm_id": "TFFM0014.1",
+        "base_id": "TFFM0014",
+        "version": 1,
+        "log_p_1st_order": 87772.8,
+        "log_p_detailed": 86597.0,
+        "experiment_name": "wgEncodeSydhTfbsCh12CtcfbIggrabPk.narrowPeak",
+        "tffm_url": "https://jaspar.elixir.no/api/v1/tffm/TFFM0014.1/"
+      }
+    },
+    "expected_id": "MA0139.1",
+    "expected_name": "CTCF"
+  },
+  "kegg": {
+    "record": {
+      "ENTRY": [
+        "7157              CDS       T01001"
+      ],
+      "NAME": [
+        "(RefSeq) cellular tumor antigen p53 isoform a"
+      ],
+      "SYMBOL": [
+        "TP53, BCC7, BMFS5, LFS1, P53, TRP53"
+      ],
+      "ORGANISM": [
+        "hsa  Homo sapiens (human)"
+      ],
+      "PATHWAY": [
+        "hsa01522  Endocrine resistance",
+        "hsa01524  Platinum drug resistance"
+      ]
+    },
+    "expected_id": "hsa:7157",
+    "expected_name": "(RefSeq) cellular tumor antigen p53 isoform a"
+  },
+  "monarch": {
+    "record": {
+      "id": "MONDO:0007947",
+      "name": "Marfan syndrome",
+      "description": "A disorder of the connective tissue. Connective tissue provides strength and flexibility to structures throughout the body such as bones, ligaments, muscles, walls of blood vessels, and heart valves. Marfan syndrome affects most organs and tissues, especially the skeleton, lungs, eyes, heart, and the large blood vessel that distributes blood from the heart to the rest of the body (the aorta). It is caused by mutations in the FBN1 gene, which provides instructions for making a protein called fibrillin-1. Marfan syndrome is inherited in an autosomal dominant pattern. At least 25% of cases are due to a new (de novo) mutation. Treatment is based on the signs and symptoms in each person.",
+      "category": "biolink:Disease",
+      "synonym": [
+        "MFS",
+        "MFS1"
+      ]
+    },
+    "expected_id": "MONDO:0007947",
+    "expected_name": "Marfan syndrome"
+  },
+  "mpd": {
+    "record": {
+      "ageweeks": "6-8wks*",
+      "assay_id": null,
+      "association": null,
+      "datatype": null,
+      "descrip": "susceptibility to Bacillus anthracis (0=susceptible, 1=resistant)",
+      "descrip2": null,
+      "download_fileid": null,
+      "extname": null,
+      "file_column": null,
+      "granularity": "strainsex",
+      "intervention": "Bacillus anthracis lethal toxin",
+      "is_baseline": false,
+      "is_control": false,
+      "is_covar": null,
+      "is_measure": true,
+      "keymeasnum": 1501,
+      "label": null,
+      "listorder": 1,
+      "magnitude": null,
+      "measnum": 1501,
+      "method": "in vitro assay",
+      "mpdsector": "css",
+      "native_method": null,
+      "nstrainstested": 50,
+      "paneldesc": "inbred",
+      "private": null,
+      "projsym": "Dietrich1",
+      "projyear": "1998",
+      "reference": null,
+      "seriestype": null,
+      "sextested": "f",
+      "sourceparm": null,
+      "supplemental": null,
+      "units": "designation",
+      "upload_factors": null,
+      "varname": "anthrax_lethal_toxin"
+    },
+    "expected_id": "1501",
+    "expected_name": "anthrax_lethal_toxin"
+  },
+  "paleobiology": {
+    "record": {
+      "oid": "txn:54585",
+      "flg": "B",
+      "rnk": "species",
+      "nam": "Engelhardia nevadensis",
+      "att": "MacGinitie 1941",
+      "par": "txn:54586",
+      "rid": "ref:6791",
+      "noc": 0
+    },
+    "expected_id": "txn:54585",
+    "expected_name": "Engelhardia nevadensis"
+  },
+  "quickgo": {
+    "record": {
+      "id": "GO:0006915",
+      "isObsolete": false,
+      "name": "apoptotic process",
+      "definition": {
+        "text": "A programmed cell death process which begins when a cell receives an internal (e.g. DNA damage) or external signal (e.g. an extracellular death ligand), and proceeds through a series of biochemical events (signaling pathway phase) which trigger an execution phase. The execution phase is the last step of an apoptotic process, and is typically characterized by rounding-up of the cell, retraction of pseudopodes, reduction of cellular volume (pyknosis), chromatin condensation, nuclear fragmentation (karyorrhexis), plasma membrane blebbing and fragmentation of the cell into apoptotic bodies. When the execution phase is completed, the cell has died.",
+        "xrefs": [
+          {
+            "dbCode": "ISBN",
+            "dbId": "0198506732"
+          },
+          {
+            "dbCode": "PMID",
+            "dbId": "18846107"
+          },
+          {
+            "dbCode": "PMID",
+            "dbId": "21494263"
+          }
+        ]
+      },
+      "synonyms": [
+        {
+          "name": "activation of apoptosis",
+          "type": "narrow"
+        },
+        {
+          "name": "apoptosis",
+          "type": "narrow"
+        },
+        {
+          "name": "apoptosis activator activity",
+          "type": "related"
+        },
+        {
+          "name": "apoptosis signaling",
+          "type": "narrow"
+        },
+        {
+          "name": "apoptotic cell death",
+          "type": "exact"
+        },
+        {
+          "name": "apoptotic program",
+          "type": "narrow"
+        },
+        {
+          "name": "apoptotic programmed cell death",
+          "type": "exact"
+        },
+        {
+          "name": "caspase-dependent programmed cell death",
+          "type": "related"
+        },
+        {
+          "name": "cell suicide",
+          "type": "broad"
+        },
+        {
+          "name": "cellular suicide",
+          "type": "broad"
+        },
+        {
+          "name": "commitment to apoptosis",
+          "type": "related"
+        },
+        {
+          "name": "induction of apoptosis",
+          "type": "related"
+        },
+        {
+          "name": "induction of apoptosis by p53",
+          "type": "related"
+        },
+        {
+          "name": "programmed cell death by apoptosis",
+          "type": "exact"
+        },
+        {
+          "name": "signaling (initiator) caspase activity",
+          "type": "related"
+        },
+        {
+          "name": "type I programmed cell death",
+          "type": "narrow"
+        }
+      ],
+      "children": [
+        {
+          "id": "GO:0097194",
+          "relation": "part_of"
+        },
+        {
+          "id": "GO:0097152",
+          "relation": "is_a"
+        },
+        {
+          "id": "GO:0097190",
+          "relation": "part_of"
+        },
+        {
+          "id": "GO:0008637",
+          "relation": "part_of"
+        },
+        {
+          "id": "GO:0044346",
+          "relation": "is_a"
+        },
+        {
+          "id": "GO:1990009",
+          "relation": "is_a"
+        },
+        {
+          "id": "GO:0016505",
+          "relation": "part_of"
+        },
+        {
+          "id": "GO:0010657",
+          "relation": "is_a"
+        },
+        {
+          "id": "GO:0072577",
+          "relation": "is_a"
+        },
+        {
+          "id": "GO:0071839",
+          "relation": "is_a"
+        },
+        {
+          "id": "GO:1904516",
+          "relation": "is_a"
+        },
+        {
+          "id": "GO:0071887",
+          "relation": "is_a"
+        },
+        {
+          "id": "GO:0043065",
+          "relation": "positively_regulates"
+        },
+        {
+          "id": "GO:1902110",
+          "relation": "part_of"
+        },
+        {
+          "id": "GO:1902362",
+          "relation": "is_a"
+        },
+        {
+          "id": "GO:0042981",
+          "relation": "regulates"
+        },
+        {
+          "id": "GO:0043276",
+          "relation": "is_a"
+        },
+        {
+          "id": "GO:1902742",
+          "relation": "is_a"
+        },
+        {
+          "id": "GO:0051402",
+          "relation": "is_a"
+        },
+        {
+          "id": "GO:0043066",
+          "relation": "negatively_regulates"
+        },
+        {
+          "id": "GO:0006925",
+          "relation": "is_a"
+        },
+        {
+          "id": "GO:1902489",
+          "relation": "is_a"
+        },
+        {
+          "id": "GO:1902109",
+          "relation": "part_of"
+        },
+        {
+          "id": "GO:1902108",
+          "relation": "part_of"
+        },
+        {
+          "id": "GO:0140208",
+          "relation": "is_a"
+        },
+        {
+          "id": "GO:1904019",
+          "relation": "is_a"
+        },
+        {
+          "id": "GO:0033028",
+          "relation": "is_a"
+        },
+        {
+          "id": "GO:0034349",
+          "relation": "is_a"
+        },
+        {
+          "id": "GO:1904606",
+          "relation": "is_a"
+        }
+      ],
+      "aspect": "biological_process",
+      "usage": "Unrestricted"
+    },
+    "expected_id": "GO:0006915",
+    "expected_name": "apoptotic process"
+  },
+  "regulomedb": {
+    "record": {
+      "@graph": [
+        {
+          "ancestry": null,
+          "biosample_ontology": {
+            "@id": "https://www.encodeproject.org/biosample-types/cell_line_EFO_0001203/",
+            "@type": [
+              "BiosampleType",
+              "Item"
+            ],
+            "aliases": [
+              "encode:MCF7"
+            ],
+            "cell_slims": [
+              "cancer cell",
+              "epithelial cell"
+            ],
+            "classification": "cell line",
+            "dbxrefs": [
+              "Cellosaurus:CVCL_0031"
+            ],
+            "developmental_slims": [
+              "ectoderm"
+            ],
+            "name": "cell_line_EFO_0001203",
+            "organ_slims": [
+              "epithelium",
+              "mammary gland",
+              "exocrine gland"
+            ],
+            "references": [],
+            "schema_version": "1",
+            "status": "released",
+            "synonyms": [
+              "MCF7",
+              "MCF7 cell",
+              "MCF-7 cell"
+            ],
+            "system_slims": [
+              "integumental system",
+              "exocrine system"
+            ],
+            "term_id": "EFO:0001203",
+            "term_name": "MCF-7",
+            "uuid": "d960788d-1d16-42c8-a443-0d9a996a0c62"
+          },
+          "chrom": "chrx",
+          "dataset": "https://www.encodeproject.org/experiments/ENCSR000BSR/",
+          "dataset_rel": "/experiments/ENCSR000BSR/",
+          "disease_term_name": null,
+          "documents": [],
+          "end": 15602317,
+          "file": "ENCFF240ZHW",
+          "files_for_genome_browser": [
+            {
+              "accession": "ENCFF464JOC",
+              "cloud_metadata_url": "https://encode-public.s3.amazonaws.com/2020/12/12/f30f31f2-cd7f-4cca-805d-9083fc3550cc/ENCFF464JOC.bigWig",
+              "href": "/files/ENCFF464JOC/@@download/ENCFF464JOC.bigWig"
+            },
+            {
+              "accession": "ENCFF772ZTQ",
+              "cloud_metadata_url": "https://encode-public.s3.amazonaws.com/2020/12/12/70279b9e-7b56-4d49-a32f-61f227e68f44/ENCFF772ZTQ.bigBed",
+              "href": "/files/ENCFF772ZTQ/@@download/ENCFF772ZTQ.bigBed"
+            }
+          ],
+          "method": "ChIP-seq",
+          "start": 15602179,
+          "strand": ".",
+          "target_label": "CEBPB",
+          "targets": [
+            "CEBPB"
+          ],
+          "value": "76.62392"
+        }
+      ],
+      "rsids": []
+    },
+    "expected_id": "rs190509934",
+    "expected_name": "rs190509934"
+  },
+  "remap": {
+    "record": {
+      "region": "chr1:100000-150000",
+      "size": 41,
+      "datatype": "all",
+      "assembly": "hg38",
+      "version": "2022",
+      "peaks": [
+        {
+          "peakValues": {
+            "chrom": "chr1",
+            "chromStart": "115702",
+            "chromEnd": "115757",
+            "name": {
+              "Experiment": "GSE104676",
+              "TF": "GATA1",
+              "Biotype": "CD34",
+              "Treatments": {
+                "size": 2,
+                "data": [
+                  "Day7",
+                  "30min"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "peakValues": {
+            "chrom": "chr1",
+            "chromStart": "136027",
+            "chromEnd": "136269",
+            "name": {
+              "Experiment": "GSE100074",
+              "TF": "ESR1_Y537C",
+              "Biotype": "SUM44PE",
+              "Treatments": {
+                "size": 4,
+                "data": [
+                  "",
+                  "ESR1",
+                  "mutant",
+                  "LTED"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "expected_id": "hg38/chr1:100000-150000",
+    "expected_name": "hg38/chr1:100000-150000"
+  },
+  "synapse": {
+    "record": {
+      "name": "rnaSeqReprocessing",
+      "id": "syn9702085",
+      "etag": "98c953eb-0919-459c-b72b-5bb7a0c49dcb",
+      "createdOn": "2017-04-26T00:24:09.086Z",
+      "modifiedOn": "2026-02-24T23:11:14.059Z",
+      "createdBy": "273995",
+      "modifiedBy": "3446625",
+      "parentId": "syn5550378",
+      "concreteType": "org.sagebionetworks.repo.model.Folder"
+    },
+    "expected_id": "syn9702085",
+    "expected_name": "rnaSeqReprocessing"
+  },
+  "ucsc": {
+    "record": {
+      "downloadTime": "2026:10:28T18:00:14Z",
+      "downloadTimeStamp": 1793210414,
+      "genome": "hg38",
+      "chrom": "chrM",
+      "start": 0,
+      "end": 50,
+      "dna": "GATCACAGGTCTATCACCCTATTAACCACTCACGGGAGCTCTCCATGCAT"
+    },
+    "expected_id": "hg38/chrM:0-50",
+    "expected_name": "hg38 chrM:0-50"
+  },
+  "unichem": {
+    "record": {
+      "inchi": {
+        "charge": "",
+        "connections": "1-6(10)13-8-5-3-2-4-7(8)9(11)12",
+        "formula": "C9H8O4",
+        "hAtoms": "2-5H,1H3,(H,11,12)",
+        "inchi": "InChI=1S/C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,11,12)",
+        "isotopicAtoms": "",
+        "isotopicExchangeableH": "",
+        "protons": "",
+        "stereoDbond": "",
+        "stereoSP3": "",
+        "stereoSP3inverted": "",
+        "stereoType": "",
+        "version": "1S"
+      },
+      "sources": [
+        {
+          "baseIDURLAvailable": true,
+          "compoundId": "CHEMBL25",
+          "id": 1,
+          "longName": "ChEMBL",
+          "shortName": "chembl",
+          "url": "https://www.ebi.ac.uk/chembldb/compound/inspect/CHEMBL25"
+        },
+        {
+          "baseIDURLAvailable": true,
+          "compoundId": "DB00945",
+          "id": 2,
+          "longName": "DrugBank",
+          "shortName": "drugbank",
+          "url": "https://go.drugbank.com/drugs/DB00945"
+        }
+      ]
+    },
+    "expected_id": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
+    "expected_name": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N"
+  },
+  "worms": {
+    "record": {
+      "AphiaID": 1371,
+      "url": "https://www.marinespecies.org/aphia.php?p=taxdetails&id=1371",
+      "scientificname": "Siphonophorae",
+      "authority": "Eschscholtz, 1829",
+      "status": "accepted",
+      "unacceptreason": null,
+      "taxonRankID": 100,
+      "rank": "Order",
+      "valid_AphiaID": 1371,
+      "valid_name": "Siphonophorae",
+      "valid_authority": "Eschscholtz, 1829",
+      "parentNameUsageID": 19494,
+      "originalNameUsageID": 1371,
+      "kingdom": "Animalia",
+      "phylum": "Cnidaria",
+      "class": "Hydrozoa",
+      "order": "Siphonophorae",
+      "family": null,
+      "genus": null,
+      "citation": "Schuchert, P.; Choong, H.; Galea, H.; Hoeksema, B.; Lindsay, D.; Mańko, M.; Pica, D. (2026). World Hydrozoa Database. Siphonophorae. Accessed through: World Register of Marine Species at: https://www.marinespecies.org/aphia.php?p=taxdetails&id=1371 on 2026-10-28",
+      "lsid": "urn:lsid:marinespecies.org:taxname:1371",
+      "isMarine": 1,
+      "isBrackish": 0,
+      "isFreshwater": 0,
+      "isTerrestrial": 0,
+      "isExtinct": null,
+      "match_type": "exact",
+      "modified": "2017-11-13T07:28:09.813Z"
+    },
+    "expected_id": "1371",
+    "expected_name": "Siphonophorae"
+  }
+}

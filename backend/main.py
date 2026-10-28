@@ -2796,14 +2796,15 @@ def cancel_chembl_import(job_id: str):
     return {"ok": True, "status": "cancelling"}
 
 
-# ---------- Europe PMC / OpenAlex / UniProt / Wikipedia import (reference_import.py) ----------
-# One job runner for the four, at /api/<source>/import like the sources above, so the dataset tabs and the
-# Agent's import_dataset poll them the same way. Jobs are kept in memory only: an import is short, and a
-# job left "running" by a restart could never finish.
+# ---------- Shared database imports (reference_import.py) ----------
+# One job runner at /api/<source>/import like the sources above, so the database picker and the
+# Agent's import_dataset poll them the same way. Jobs are kept in memory only; a job left "running"
+# by a restart could never finish. Credentials never enter job results or persistence files.
 
 class ReferenceImportRequest(BaseModel):
-    ids: list[str] = Field(..., min_length=1, description="Ids to fetch, in the source's id format")
+    ids: list[str] = Field(default_factory=list, max_length=2000, description="Ids to fetch, or optional snapshot filter values")
     fields: list[str] = Field(..., min_length=1, description="Field keys from reference_import.REFERENCE_IMPORTERS[source]['fields']")
+    options: dict[str, Any] = Field(default_factory=dict, description="Source-specific connection options; credentials are not saved")
 
 
 class _ReferenceStopSignal(Exception):
@@ -2819,8 +2820,20 @@ _reference_last_activity: dict[str, float] = {}
 def _do_reference_import_work(job_id: str, source: str, req: ReferenceImportRequest) -> None:
     from reference_import import REFERENCE_IMPORTERS, fetch_records
 
+    def check_cancelled():
+        if job_id in _reference_cancelled or time.time() - _reference_last_activity.get(job_id, 0) > RUN_ABANDON_TIMEOUT_SEC:
+            raise _ReferenceStopSignal()
+
     try:
-        field_labels = REFERENCE_IMPORTERS[source]["fields"]
+        check_cancelled()
+        importer = REFERENCE_IMPORTERS[source]
+        if importer.get("kind") == "snapshot":
+            from biomni_data_lake import describe_snapshot_fields
+            from reference_import import _client
+            with _client() as client:
+                field_labels = describe_snapshot_fields(source, req.options, client, check_cancelled)["fields"]
+        else:
+            field_labels = importer["fields"]
         fields = [f for f in req.fields if f in field_labels]
         if not fields:
             with _reference_jobs_lock:
@@ -2840,13 +2853,16 @@ def _do_reference_import_work(job_id: str, source: str, req: ReferenceImportRequ
                 raise _ReferenceStopSignal()
 
         try:
-            fetch_records(source, req.ids, fields, on_batch=on_batch)
+            fetch_records(source, req.ids, fields, on_batch=on_batch, options=req.options)
         except _ReferenceStopSignal:
             with _reference_jobs_lock:
                 _reference_jobs[job_id]["status"] = "cancelled" if job_id in _reference_cancelled else "done"
             return
         with _reference_jobs_lock:
             _reference_jobs[job_id]["status"] = "done"
+    except _ReferenceStopSignal:
+        with _reference_jobs_lock:
+            _reference_jobs[job_id]["status"] = "cancelled"
     except Exception as e:
         with _reference_jobs_lock:
             _reference_jobs[job_id] = {"status": "done", "error": str(e)}
@@ -2863,6 +2879,12 @@ def _register_reference_import_routes(source: str, label: str) -> None:
     from fastapi.responses import JSONResponse
 
     def start(body: ReferenceImportRequest):
+        from reference_import import REFERENCE_IMPORTERS
+        from database_availability import source_enabled
+        if not source_enabled(REFERENCE_IMPORTERS[source]):
+            raise HTTPException(status_code=404, detail="This import source is disabled on this server.")
+        if not body.ids and REFERENCE_IMPORTERS[source].get("kind") != "snapshot":
+            raise HTTPException(status_code=422, detail="Enter at least one identifier.")
         job_id = str(uuid.uuid4())
         with _reference_jobs_lock:
             _reference_jobs[job_id] = {"status": "running", "completed": 0, "total": 0, "headers": [], "rows": []}
@@ -2880,7 +2902,7 @@ def _register_reference_import_routes(source: str, label: str) -> None:
             return JSONResponse(status_code=202, content={key: snapshot.get(key) for key in ("status", "completed", "total", "headers", "rows")})
         if snapshot.get("error"):
             return {"status": "done", "error": snapshot["error"], "headers": [], "rows": []}
-        return {key: snapshot.get(key) for key in ("status", "completed", "total", "headers", "rows", "not_found")}
+        return {key: snapshot.get(key) for key in ("status", "completed", "total", "headers", "rows", "not_found", "schema")}
 
     def cancel(job_id: str):
         with _reference_jobs_lock:
@@ -2898,9 +2920,11 @@ def _register_reference_import_routes(source: str, label: str) -> None:
 
 def _register_reference_imports() -> None:
     from reference_import import REFERENCE_IMPORTERS
+    from database_availability import source_enabled
 
     for key, importer in REFERENCE_IMPORTERS.items():
-        _register_reference_import_routes(key, importer["label"])
+        if source_enabled(importer):
+            _register_reference_import_routes(key, importer["label"])
 
 
 _register_reference_imports()
@@ -2908,10 +2932,57 @@ _register_reference_imports()
 
 @app.get("/api/reference/import/sources")
 def reference_import_sources():
-    """Fields (key → label) and default fields of the Europe PMC, OpenAlex, UniProt and Wikipedia imports."""
+    """Available database importers, their identifier formats and selectable Dataset columns."""
     from reference_import import describe_importers
 
     return describe_importers()
+
+
+@app.post("/api/reference/import/sources/{source}/schema")
+def reference_import_schema(source: str, body: dict[str, Any] = Body(default_factory=dict)):
+    from database_availability import data_lake_enabled
+    if not data_lake_enabled():
+        raise HTTPException(status_code=404, detail="Downloadable dataset imports are disabled on this server.")
+    from biomni_data_lake import GROUPS, describe_snapshot_fields, resolve_dataset
+    from reference_import import _client
+    from fastapi.responses import JSONResponse
+    if source not in GROUPS:
+        raise HTTPException(status_code=404, detail="Unknown snapshot source")
+    try:
+        resolve_dataset(source, body)
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    job_id = str(uuid.uuid4())
+    with _reference_jobs_lock:
+        _reference_jobs[job_id] = {"status": "running", "completed": 0, "total": 0, "rows": [], "headers": []}
+        _reference_last_activity[job_id] = time.time()
+
+    def work():
+        def heartbeat():
+            if job_id in _reference_cancelled or time.time() - _reference_last_activity.get(job_id, 0) > RUN_ABANDON_TIMEOUT_SEC:
+                raise _ReferenceStopSignal()
+        try:
+            heartbeat()
+            with _client() as client:
+                schema = describe_snapshot_fields(source, body, client, heartbeat)
+            heartbeat()
+            with _reference_jobs_lock:
+                _reference_jobs[job_id].update(status="done", schema=schema)
+        except _ReferenceStopSignal:
+            with _reference_jobs_lock:
+                _reference_jobs[job_id]["status"] = "cancelled"
+        except Exception as error:
+            with _reference_jobs_lock:
+                _reference_jobs[job_id].update(status="done", error=str(error))
+
+    threading.Thread(target=work, daemon=True).start()
+    return JSONResponse(status_code=202, content={"job_id": job_id})
+
+
+@app.get("/api/reference/import/coverage")
+def reference_import_coverage():
+    from biomni_coverage import describe_coverage
+    return describe_coverage()
 
 
 # ---------- Process node (runs a user Python function per dataset row, delegates to process_exec.py) ----------

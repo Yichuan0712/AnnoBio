@@ -1,0 +1,471 @@
+{
+  "repository": "https://github.com/snap-stanford/Biomni",
+  "commit": "400c1f366b96a35ca253e13c9b06c5076af41d65",
+  "checked_on": "2026-10-28",
+  "database_tools": [
+    "query_uniprot",
+    "query_alphafold",
+    "query_interpro",
+    "query_pdb",
+    "query_pdb_identifiers",
+    "query_kegg",
+    "query_stringdb",
+    "query_iucn",
+    "query_paleobiology",
+    "query_jaspar",
+    "query_worms",
+    "query_cbioportal",
+    "query_clinvar",
+    "query_geo",
+    "query_dbsnp",
+    "query_ucsc",
+    "query_ensembl",
+    "query_opentarget",
+    "query_monarch",
+    "query_openfda",
+    "query_gwas_catalog",
+    "query_gnomad",
+    "blast_sequence",
+    "query_reactome",
+    "query_regulomedb",
+    "query_pride",
+    "query_gtopdb",
+    "query_remap",
+    "query_mpd",
+    "query_emdb",
+    "query_synapse",
+    "query_pubchem",
+    "query_chembl",
+    "query_unichem",
+    "query_clinicaltrials",
+    "query_dailymed",
+    "query_quickgo",
+    "query_encode",
+    "region_to_ccre_screen",
+    "get_genes_near_ccre"
+  ],
+  "data_lake": {
+    "affinity_capture-ms.parquet": {
+      "description": "Protein-protein interactions detected via affinity capture and mass spectrometry.",
+      "bytes": 5587239,
+      "etag": "f69fff96b7f9a63a2ac75f645718d65e"
+    },
+    "affinity_capture-rna.parquet": {
+      "description": "Protein-RNA interactions detected by affinity capture.",
+      "bytes": 42956,
+      "etag": "133de9dc1d2811c4548542a0ef926059"
+    },
+    "BindingDB_All_202409.tsv": {
+      "description": "Measured binding affinities between proteins and small molecules for drug discovery.",
+      "bytes": 6245551822,
+      "etag": "b61409f1db136d90cc142d77d01f5fb2-364"
+    },
+    "broad_repurposing_hub_molecule_with_smiles.parquet": {
+      "description": "Molecules from Broad Institute's Drug Repurposing Hub with SMILES annotations.",
+      "bytes": 1142823,
+      "etag": "e013d0b746b4f102f1309a2b51f8388e"
+    },
+    "broad_repurposing_hub_phase_moa_target_info.parquet": {
+      "description": "Drug phases, mechanisms of action, and target information from Broad Institute.",
+      "bytes": 178149,
+      "etag": "48cd09829abdd713c841b8e9dd42490e"
+    },
+    "co-fractionation.parquet": {
+      "description": "Protein-protein interactions from co-fractionation experiments.",
+      "bytes": 1488231,
+      "etag": "a2ee6817251bc8237b759062a346b54c"
+    },
+    "czi_census_datasets_v4.parquet": {
+      "description": "Datasets from the Chan Zuckerberg Initiative's Cell Census.",
+      "bytes": 376421,
+      "etag": "0fc858235d8c948253ee6f75e8bff69c"
+    },
+    "DepMap_CRISPRGeneDependency.csv": {
+      "description": "Gene dependency probability estimates for cancer cell lines, including all DepMap models.",
+      "bytes": 422842760,
+      "etag": "9e5f5ab9a62cf4310a872fb2a2b6787f-25"
+    },
+    "DepMap_CRISPRGeneEffect.csv": {
+      "description": "Genome-wide CRISPR gene effect estimates for cancer cell lines, including all DepMap models.",
+      "bytes": 430424412,
+      "etag": "4bca5450be5339133459bb76c200bd4c-26"
+    },
+    "DepMap_Model.csv": {
+      "description": "Metadata describing all cancer models/cell lines which are referenced by a dataset contained within the DepMap portal.",
+      "bytes": 694278,
+      "etag": "9f7b51859a22c6fbe4c8cce43ae4bdf5"
+    },
+    "DepMap_OmicsExpressionProteinCodingGenesTPMLogp1.csv": {
+      "description": "Gene expression in TPMs for cancer cell lines, including all DepMap models.",
+      "bytes": 521526607,
+      "etag": "099136c546093f5086e830ca44dbf8e4-31"
+    },
+    "ddinter_alimentary_tract_metabolism.csv": {
+      "description": "Drug-drug interactions for alimentary tract and metabolism drugs from DDInter 2.0 database.",
+      "bytes": 3343434,
+      "etag": "11513be8e9eb147a0e1a4e76a795bdaf"
+    },
+    "ddinter_antineoplastic.csv": {
+      "description": "Drug-drug interactions for antineoplastic and immunomodulating agents from DDInter 2.0 database.",
+      "bytes": 3885702,
+      "etag": "dfa6789f8c3cb90dbddeeea011087770"
+    },
+    "ddinter_antiparasitic.csv": {
+      "description": "Drug-drug interactions for antiparasitic products from DDInter 2.0 database.",
+      "bytes": 317460,
+      "etag": "bd5deb19f47977a090ed7b79fd6fee2e"
+    },
+    "ddinter_blood_organs.csv": {
+      "description": "Drug-drug interactions for blood and blood forming organs drugs from DDInter 2.0 database.",
+      "bytes": 867726,
+      "etag": "3bfcadec20429cafb46fbd9cdc4dd4f1"
+    },
+    "ddinter_dermatological.csv": {
+      "description": "Drug-drug interactions for dermatological drugs from DDInter 2.0 database.",
+      "bytes": 1520704,
+      "etag": "5b360769d34618268eaeab66e4f906f8"
+    },
+    "ddinter_hormonal.csv": {
+      "description": "Drug-drug interactions for systemic hormonal preparations from DDInter 2.0 database.",
+      "bytes": 705088,
+      "etag": "13d56d52c201a2ca8b98517fbaef408e"
+    },
+    "ddinter_respiratory.csv": {
+      "description": "Drug-drug interactions for respiratory system drugs from DDInter 2.0 database.",
+      "bytes": 1793766,
+      "etag": "37d522c258fe89a5a3fb71e8499ca361"
+    },
+    "ddinter_various.csv": {
+      "description": "Drug-drug interactions for various drugs from DDInter 2.0 database.",
+      "bytes": 700777,
+      "etag": "5c425fa5d8d2a8a35b0ffb713cf9c3cc"
+    },
+    "DisGeNET.parquet": {
+      "description": "Gene-disease associations from multiple sources.",
+      "bytes": 2951989,
+      "etag": "0900d58fae114437d43b0c3402d194db"
+    },
+    "dosage_growth_defect.parquet": {
+      "description": "Gene dosage changes affecting growth.",
+      "bytes": 21623,
+      "etag": "a00caf7d6c0ddd4d75985dcf4d7773bf"
+    },
+    "enamine_cloud_library_smiles.pkl": {
+      "description": "Compounds from Enamine REAL library with SMILES annotations.",
+      "bytes": 15690,
+      "etag": "a94046c92c47a72afb2ec5b9cf4f1bce"
+    },
+    "evebio_assay_table.csv": {
+      "description": "Assay metadata with one row per assay from EveBio pharmome mapping.",
+      "bytes": 12588,
+      "etag": "b4ec9211a1fb7e8efa6f16fc1de5eb70"
+    },
+    "evebio_bundle_table.csv": {
+      "description": "Target subfamily bundles used for screening-to-profiling progression.",
+      "bytes": 8211,
+      "etag": "c4e22347a309e06fff273aa3964ed2d1"
+    },
+    "evebio_compound_table.csv": {
+      "description": "Compound metadata with common identifiers from EveBio screening.",
+      "bytes": 150488,
+      "etag": "5e04ff3792e2f7fe3132fea646f93ed1"
+    },
+    "evebio_control_table.csv": {
+      "description": "Control datapoints for all screening and profiling plates.",
+      "bytes": 5477898,
+      "etag": "0de034545390765ff3041aa9da77a704"
+    },
+    "evebio_detailed_result_table.csv": {
+      "description": "Expanded results on evebio_summary_result_table with curve fit parameters and phase categories.",
+      "bytes": 48820614,
+      "etag": "44a43b79032078870c8d012120cd2463-3"
+    },
+    "evebio_observed_points_table.csv": {
+      "description": "Raw observed datapoints from all screening and profiling experiments.",
+      "bytes": 175336052,
+      "etag": "7e76a58b531b74c6ee857a09a606796e-11"
+    },
+    "evebio_summary_result_table.csv": {
+      "description": "Succinct summary of results for each assay-compound combination.",
+      "bytes": 24076309,
+      "etag": "d239e403c443ad7231eeda597c5b6115-2"
+    },
+    "evebio_target_table.csv": {
+      "description": "Target metadata with common identifiers from EveBio screening.",
+      "bytes": 4295,
+      "etag": "f86cf702514fd47943c20be10d225d6f"
+    },
+    "genebass_missense_LC_filtered.pkl": {
+      "description": "Filtered missense variants from GeneBass.",
+      "bytes": 1662521913,
+      "etag": "bdb9d54917ae4e980b33b6aa87628206-97"
+    },
+    "genebass_pLoF_filtered.pkl": {
+      "description": "Predicted loss-of-function variants from GeneBass.",
+      "bytes": 1524965298,
+      "etag": "93045cb14a9448217b877d107022875b-89"
+    },
+    "genebass_synonymous_filtered.pkl": {
+      "description": "Filtered synonymous variants from GeneBass.",
+      "bytes": 1659139054,
+      "etag": "1b92f440d2a09415f4046c293a286bc7-97"
+    },
+    "gene_info.parquet": {
+      "description": "Comprehensive gene information.",
+      "bytes": 3945531,
+      "etag": "12d1ef614e4b40d087f630ea0af47cd5"
+    },
+    "genetic_interaction.parquet": {
+      "description": "Genetic interactions between genes.",
+      "bytes": 8460950,
+      "etag": "2c3c27b62656bd33c725312a04512dd8"
+    },
+    "go-plus.json": {
+      "description": "Gene ontology data for functional gene annotations.",
+      "bytes": 129939533,
+      "etag": "fba2c18ae14e74fbd19370705fa5ce0d-8"
+    },
+    "gtex_tissue_gene_tpm.parquet": {
+      "description": "Gene expression (TPM) across human tissues from GTEx.",
+      "bytes": 10873592,
+      "etag": "5472fb1553eb2cebb9536277cbae6a4c"
+    },
+    "gwas_catalog.pkl": {
+      "description": "Genome-wide association studies (GWAS) results.",
+      "bytes": 181492262,
+      "etag": "bce38898c6204e2c76d83d2b5080ea9c-11"
+    },
+    "hp.obo": {
+      "description": "Official HPO release in obographs format",
+      "bytes": 10058110,
+      "etag": "caccaf0f3858c2aa01a9f1f99bfa4d78"
+    },
+    "kg.csv": {
+      "description": "Precision medicine knowledge graph with 17,080 diseases and 4+ million relationships across biological scales.",
+      "bytes": 981751236,
+      "etag": "71254c25978283e7189c9cb686867a76-58"
+    },
+    "marker_celltype.parquet": {
+      "description": "Cell type marker genes for identification.",
+      "bytes": 73416,
+      "etag": "3e9b2076d12f3277ed4c94e36827f73a"
+    },
+    "McPAS-TCR.parquet": {
+      "description": "T-cell receptor sequences and specificity data from McPAS database.",
+      "bytes": 1035297,
+      "etag": "8378be840878f7f00cf948e10e0f20de"
+    },
+    "miRDB_v6.0_results.parquet": {
+      "description": "Predicted microRNA targets from miRDB.",
+      "bytes": 68651385,
+      "etag": "ab9601a7e298a3a5024adcdf4e627770-4"
+    },
+    "miRTarBase_microRNA_target_interaction.parquet": {
+      "description": "Experimentally validated microRNA-target interactions from miRTarBase.",
+      "bytes": 4765587,
+      "etag": "1e0fe11a2b54938c364113405a21c048"
+    },
+    "miRTarBase_microRNA_target_interaction_pubmed_abtract.txt": {
+      "description": "PubMed abstracts for microRNA-target interactions in miRTarBase.",
+      "bytes": 1725217,
+      "etag": "f19071132f4e954e6e404c4b02ffe4de"
+    },
+    "miRTarBase_MicroRNA_Target_Sites.parquet": {
+      "description": "Binding sites of microRNAs on target genes from miRTarBase.",
+      "bytes": 285973,
+      "etag": "7cedc8a6dafa257bbd7655823c366ce3"
+    },
+    "mousemine_m1_positional_geneset.parquet": {
+      "description": "Positional gene sets from MouseMine.",
+      "bytes": 271199,
+      "etag": "c04dad69daeb55fd7cc4e68cc68280c2"
+    },
+    "mousemine_m2_curated_geneset.parquet": {
+      "description": "Curated gene sets from MouseMine.",
+      "bytes": 1052069,
+      "etag": "7f92c706171d406bc8236fb06f132cef"
+    },
+    "mousemine_m3_regulatory_target_geneset.parquet": {
+      "description": "Regulatory target gene sets from MouseMine.",
+      "bytes": 1992605,
+      "etag": "ac64b04843a734758bdfe85e28dea5c7"
+    },
+    "mousemine_m5_ontology_geneset.parquet": {
+      "description": "Ontology-based gene sets from MouseMine.",
+      "bytes": 4201180,
+      "etag": "bcabf1634d3bd1b5ee46b325b138b3f9"
+    },
+    "mousemine_m8_celltype_signature_geneset.parquet": {
+      "description": "Cell type signature gene sets from MouseMine.",
+      "bytes": 232412,
+      "etag": "b85e278b8b51cf0ba0d6b74c734363a0"
+    },
+    "mousemine_mh_hallmark_geneset.parquet": {
+      "description": "Hallmark gene sets from MouseMine.",
+      "bytes": 47205,
+      "etag": "52b2389ef7b9d0233f2aaa5e45ca2a84"
+    },
+    "msigdb_human_c1_positional_geneset.parquet": {
+      "description": "Human positional gene sets from MSigDB.",
+      "bytes": 269292,
+      "etag": "a135ac14d8e9257071e4c6994085ce4a"
+    },
+    "msigdb_human_c2_curated_geneset.parquet": {
+      "description": "Curated human gene sets from MSigDB.",
+      "bytes": 3031807,
+      "etag": "09a7f08b1c9f5b7f2e68502f341bd262"
+    },
+    "msigdb_human_c3_regulatory_target_geneset.parquet": {
+      "description": "Regulatory target gene sets from MSigDB.",
+      "bytes": 4112233,
+      "etag": "9a9f5f8360dbac8761558f01ed48d030"
+    },
+    "msigdb_human_c3_subset_transcription_factor_targets_from_GTRD.parquet": {
+      "description": "Transcription factor targets from GTRD/MSigDB.",
+      "bytes": 2158592,
+      "etag": "1c12aa540780ef663cf2d3aec76ce52f"
+    },
+    "msigdb_human_c4_computational_geneset.parquet": {
+      "description": "Computationally derived gene sets from MSigDB.",
+      "bytes": 406170,
+      "etag": "2a6f88a054504bf697d9466a774a38f9"
+    },
+    "msigdb_human_c5_ontology_geneset.parquet": {
+      "description": "Ontology-based gene sets from MSigDB.",
+      "bytes": 6423126,
+      "etag": "05e4cba7bffa556219b3d3a47a11f0f1"
+    },
+    "msigdb_human_c6_oncogenic_signature_geneset.parquet": {
+      "description": "Oncogenic signatures from MSigDB.",
+      "bytes": 166656,
+      "etag": "84145181ae1be8c39a1c7991d542fe52"
+    },
+    "msigdb_human_c7_immunologic_signature_geneset.parquet": {
+      "description": "Immunologic signatures from MSigDB.",
+      "bytes": 5124930,
+      "etag": "5fe73c1373c6d7284f7f62e2b899df38"
+    },
+    "msigdb_human_c8_celltype_signature_geneset.parquet": {
+      "description": "Cell type signatures from MSigDB.",
+      "bytes": 762458,
+      "etag": "a68fd03ba108ad5c8ef6cfa1deba1555"
+    },
+    "msigdb_human_h_hallmark_geneset.parquet": {
+      "description": "Hallmark gene sets from MSigDB.",
+      "bytes": 45321,
+      "etag": "16e3f4d994f9904ec37d749d49ac6f21"
+    },
+    "omim.parquet": {
+      "description": "Genetic disorders and associated genes from OMIM.",
+      "bytes": 2115285,
+      "etag": "1007489ab826da47601637230b4d3d4a"
+    },
+    "proteinatlas.tsv": {
+      "description": "Protein expression data from Human Protein Atlas.",
+      "bytes": 36611106,
+      "etag": "834910490427af6c0e3b11a384278f1b-3"
+    },
+    "proximity_label-ms.parquet": {
+      "description": "Protein interactions via proximity labeling and mass spectrometry.",
+      "bytes": 856099,
+      "etag": "60129216be109e28f1681088c5f33b43"
+    },
+    "reconstituted_complex.parquet": {
+      "description": "Protein complexes reconstituted in vitro.",
+      "bytes": 15137,
+      "etag": "905b51e2cfb16ff0f7a72a0191243aa7"
+    },
+    "sgRNA_KO_SP_mouse.txt": {
+      "description": "sgRNA knockout data for mouse.",
+      "bytes": 372277534,
+      "etag": "e1ce4c63d9caf64d04112fa1755042ea-22"
+    },
+    "sgRNA_KO_SP_human.txt": {
+      "description": "sgRNA knockout data for human.",
+      "bytes": 379198983,
+      "etag": "e53fcfebad5d21292da063a73beeb1ee-23"
+    },
+    "synthetic_growth_defect.parquet": {
+      "description": "Synthetic growth defects from genetic interactions.",
+      "bytes": 20585,
+      "etag": "024811c09bdb1aabe3e1480d926e349c"
+    },
+    "synthetic_lethality.parquet": {
+      "description": "Synthetic lethal interactions.",
+      "bytes": 42885,
+      "etag": "ded82506dee621f4a5cd7404e08ed795"
+    },
+    "synthetic_rescue.parquet": {
+      "description": "Genetic interactions rescuing phenotypes.",
+      "bytes": 7170,
+      "etag": "040a03858543181a5dc4d301a928acc4"
+    },
+    "two-hybrid.parquet": {
+      "description": "Protein-protein interactions detected by yeast two-hybrid assays.",
+      "bytes": 49160,
+      "etag": "d595ee0714d7ca3acca52512a208fd75"
+    },
+    "variant_table.parquet": {
+      "description": "Annotated genetic variants table.",
+      "bytes": 9220367,
+      "etag": "10b5b0bc7d877ef6028f01abe5995ef4"
+    },
+    "Virus-Host_PPI_P-HIPSTER_2020.parquet": {
+      "description": "Virus-host protein-protein interactions from P-HIPSTER.",
+      "bytes": 793066,
+      "etag": "64c31138574e6d84c46fac429312d8fd"
+    },
+    "txgnn_name_mapping.pkl": {
+      "description": "Name mapping for TXGNN.",
+      "bytes": 1618512,
+      "etag": "03c724eaef6f4d78b86abc9d14cc98ba"
+    },
+    "txgnn_prediction.pkl": {
+      "description": "Prediction data for TXGNN.",
+      "bytes": 68272378,
+      "etag": "1e7f0c91c90f204eab0c4980203b42cf-4"
+    }
+  },
+  "tool_sources": {
+    "query_uniprot": "uniprot",
+    "query_alphafold": "alphafold",
+    "query_interpro": "interpro",
+    "query_pdb": "pdb",
+    "query_pdb_identifiers": "pdb",
+    "query_kegg": "kegg",
+    "query_stringdb": "string",
+    "query_iucn": "iucn",
+    "query_paleobiology": "paleobiology",
+    "query_jaspar": "jaspar",
+    "query_worms": "worms",
+    "query_cbioportal": "cbioportal",
+    "query_clinvar": "clinvar",
+    "query_geo": "geo",
+    "query_dbsnp": "dbsnp",
+    "query_ucsc": "ucsc",
+    "query_ensembl": "ensembl",
+    "query_opentarget": "opentargets",
+    "query_monarch": "monarch",
+    "query_openfda": "openfda",
+    "query_gwas_catalog": "gwas",
+    "query_gnomad": "gnomad",
+    "blast_sequence": "blast",
+    "query_reactome": "reactome",
+    "query_regulomedb": "regulomedb",
+    "query_pride": "pride",
+    "query_gtopdb": "gtopdb",
+    "query_remap": "remap",
+    "query_mpd": "mpd",
+    "query_emdb": "emdb",
+    "query_synapse": "synapse",
+    "query_pubchem": "pubchem",
+    "query_chembl": "chembl",
+    "query_unichem": "unichem",
+    "query_clinicaltrials": "clinicaltrials",
+    "query_dailymed": "dailymed",
+    "query_quickgo": "quickgo",
+    "query_encode": "encode",
+    "region_to_ccre_screen": "screen",
+    "get_genes_near_ccre": "screen"
+  }
+}

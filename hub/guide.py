@@ -96,10 +96,19 @@ outputs with reference annotations later.</p>
 <thead><tr><th>Starting point</th><th>How to use it</th></tr></thead><tbody>
 <tr><td>A few example records</td><td>Create an empty table, then add column names and rows in the Dataset editor.</td></tr>
 <tr><td>An existing table</td><td>Import a spreadsheet, CSV/TSV, or JSON/JSONL file. Check the selected worksheet and parsed columns.</td></tr>
-<tr><td>Literature or database IDs</td><td>Import from PubMed, ClinicalTrials.gov, bioRxiv/medRxiv, ChEMBL, Europe PMC, OpenAlex, or UniProt using the identifiers requested by that source.</td></tr>
+<tr><td>Literature or database IDs</td><td>Use the PubMed shortcut, or select <strong>Import from other databases</strong>. Search or filter the database list, choose a source, then enter its identifiers and select the fields to import.</td></tr>
 <tr><td>Images or PDFs</td><td>Import files into Image or PDF columns. A compatible model receives those files when the column is mapped to a Prompt input.</td></tr>
 </tbody></table></div>
 {fig("dataset-table", "The example Dataset: five abstracts, each with an ID, a title, and the abstract text.")}
+<p>The database picker covers literature, clinical trials, compounds, genes and variants,
+proteins, pathways, experimental data, species, and data snapshots. Online sources accept IDs,
+genomic intervals, or sequences as indicated by the form. Some sources require an API key.
+Study and structure imports provide metadata and download links. gnomAD variant IDs use GRCh38 coordinates.</p>
+<p>Data snapshots are available in the desktop app. The web app offers online database APIs.
+For a desktop data snapshot, choose its file, click <strong>Load columns</strong>, select columns, and
+set the maximum rows. To filter, choose a column and enter exact values, one per line.
+Search column names in wide tables. Large pickle files require a full download and sufficient
+server memory unless a prepared Parquet copy is available.</p>
 <p>Select the Dataset node to open it, then verify the import before building the pipeline. Confirm that one row
 corresponds to the intended unit of analysis, identifiers are unique, text has not been truncated, and
 file columns contain the expected files. Check missing values, duplicate records, worksheet selection,

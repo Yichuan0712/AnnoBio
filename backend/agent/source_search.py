@@ -30,8 +30,8 @@ SOURCES: dict[str, dict[str, Any]] = {
     "clinicaltrials": {"label": "ClinicalTrials.gov", "id": "NCT id", "fields": CT_FIELDS, "searchable": True},
     "chembl": {"label": "ChEMBL", "id": "ChEMBL id", "fields": CHEMBL_FIELDS, "searchable": True},
     "preprint": {"label": "bioRxiv/medRxiv", "id": "DOI", "fields": PREPRINT_FIELDS, "searchable": False},
-    **{key: {"label": s["label"], "id": s["id"], "fields": s["fields"], "searchable": True}
-       for key, s in REFERENCE_IMPORTERS.items()},
+    **{key: {"label": s["label"], "id": s["id"], "fields": s["fields"], "searchable": s.get("searchable", True), "option_fields": s.get("option_fields", [])}
+       for key, s in REFERENCE_IMPORTERS.items() if s.get("kind") != "snapshot"},
 }
 LOOKUP_SEARCHES = {"europepmc": search_europepmc, "openalex": search_openalex, "uniprot": search_uniprot, "wikipedia": search_wikipedia}
 
@@ -42,7 +42,7 @@ class SourceSearchError(ValueError):
 
 def describe_sources() -> dict[str, Any]:
     return {
-        key: {"label": s["label"], "id": s["id"], "fields": s["fields"], "searchable": s["searchable"]}
+        key: {"label": s["label"], "id": s["id"], "fields": s["fields"], "searchable": s["searchable"], "option_fields": s.get("option_fields", [])}
         for key, s in SOURCES.items()
     }
 
@@ -93,7 +93,9 @@ def search_source(source: str, query: str, limit: int = 100, ncbi_api_key: str =
     if key not in SOURCES:
         raise SourceSearchError(f"Unknown source. Use one of: {', '.join(SOURCES)}.")
     if not SOURCES[key]["searchable"]:
-        raise SourceSearchError(f"{SOURCES[key]['label']} has no keyword search. Search europepmc with SRC:PPR, then import preprints by DOI.")
+        if key == "preprint":
+            raise SourceSearchError("bioRxiv/medRxiv has no keyword search. Search europepmc with SRC:PPR, then import preprints by DOI.")
+        raise SourceSearchError(f"{SOURCES[key]['label']} currently supports import by {SOURCES[key]['id']}, not keyword search.")
     text = (query or "").strip()
     if not text:
         raise SourceSearchError("A search query is required.")

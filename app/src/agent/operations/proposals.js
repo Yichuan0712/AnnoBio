@@ -115,7 +115,7 @@ async function fetchSourceRows(source, ids, fields, signal) {
   if (!start.ok || !started.job_id) throw new Error(started.detail || `Could not start the ${source} import.`);
   const startedAt = Date.now();
   for (;;) {
-    if (Date.now() - startedAt > IMPORT_MAX_WAIT_MS) throw new Error(`The ${source} import timed out.`);
+    if (Date.now() - startedAt > (source === 'blast' ? 15 * 60 * 1000 : IMPORT_MAX_WAIT_MS)) throw new Error(`The ${source} import timed out.`);
     const res = await fetch(`${BACKEND_API_BASE}/api/${source}/import/result/${started.job_id}`, { signal });
     const data = await res.json().catch(() => ({}));
     if (!res.ok && res.status !== 202) throw new Error(data.detail || `The ${source} import failed.`);

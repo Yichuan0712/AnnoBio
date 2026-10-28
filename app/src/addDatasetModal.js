@@ -1,8 +1,7 @@
 /**
  * "Add a new dataset" modal: two steps.
  * Step 1: Name & description.
- * Step 2: choose a data source -- upload CSV/TSV/Excel, import from PubMed, ClinicalTrials.gov,
- * bioRxiv/medRxiv or ChEMBL -- then preview.
+ * Step 2: upload files, use the PubMed shortcut, or select another database -- then preview.
  */
 
 import { parseDelimitedText, parseJsonRecords, parseWorkbookSheet, readWorkbook } from './datasetFileParsing.js';
@@ -13,6 +12,7 @@ import { imageCell, pdfCell } from './datasetContent.js';
 import { getCurrentProjectId } from './currentProject.js';
 import * as webImageApi from './webImageApi.js';
 import { mountReferenceImports, referenceImportPanelsHtml, referenceImportTabsHtml } from './referenceImportPanels.js';
+import { databasePickerHtml, getDatabase, isOtherDatabase, mountDatabasePicker } from './databaseCatalog.js';
 
 const API_BASE = BACKEND_API_BASE;
 const PUBMED_POLL_INTERVAL_MS = 1200;
@@ -158,14 +158,15 @@ export function openAddDatasetModal(workflowCanvasApi) {
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="image">Upload Images</button>
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="pdf">Upload PDF</button>
                 <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="pubmed">Import from PubMed</button>
-                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="clinicaltrials">Import from ClinicalTrials.gov</button>
-                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="preprint">Import from bioRxiv / medRxiv</button>
-                <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" data-source="chembl">Import from ChEMBL</button>
                 ${referenceImportTabsHtml()}
               </div>
             </div>
             <div class="dataset-add-step2-scroll">
               <div class="dataset-add-step2-left">
+                <div class="dataset-database-navigation" hidden>
+                  <button type="button" class="btn btn-secondary" data-database-back>← Choose another database</button>
+                </div>
+                ${databasePickerHtml()}
                 <div class="dataset-source-panel dataset-source-panel--active" data-source-panel="upload">
                   <div class="dataset-import">
                     <h3 class="dataset-import-title">Upload a table</h3>
@@ -363,6 +364,8 @@ export function openAddDatasetModal(workflowCanvasApi) {
   const imageChooseBtn = overlay.querySelector('.image-import-choose-btn');
   const imageFilenamesEl = overlay.querySelector('.image-import-filenames');
   let dataSource = 'upload';
+  let sourceRevision = 0;
+  let closed = false;
   let pubmedJobId = null;
   let pubmedPollTimer = null;
   let clinicaltrialsJobId = null;
@@ -607,6 +610,12 @@ export function openAddDatasetModal(workflowCanvasApi) {
     previewEl.classList.remove('prompt-preview--empty');
   }
 
+  function cancelLateImport(source, revision, jobId) {
+    if (!closed && revision === sourceRevision) return false;
+    if (jobId) fetch(`${API_BASE}/api/${source}/import/cancel/${jobId}`, { method: 'POST' }).catch(() => {});
+    return true;
+  }
+
   async function switchDataSource(target) {
     if (target === dataSource) return;
     if (fileImported) {
@@ -641,9 +650,11 @@ export function openAddDatasetModal(workflowCanvasApi) {
       setChemblRunningUi(false);
     }
     referenceImports.cancel(dataSource);
+    sourceRevision += 1;
     dataSource = target;
+    panel.dataset.datasetSource = target;
     sourceSwitchBtns.forEach((b) => {
-      const on = b.dataset.source === target;
+      const on = b.dataset.source === target || (b.dataset.source === 'database' && isOtherDatabase(target));
       b.classList.toggle('review-detail-tab--active', on);
       b.setAttribute('aria-selected', on ? 'true' : 'false');
     });
@@ -652,21 +663,28 @@ export function openAddDatasetModal(workflowCanvasApi) {
       p.classList.toggle('dataset-source-panel--active', on);
       p.hidden = !on;
     });
+    overlay.querySelector('.dataset-database-navigation').hidden = !isOtherDatabase(target);
     hideError();
     resetStagedContent();
     if (target === 'empty') {
       stageEmptyDataset();
     }
+    if (target === 'database') overlay.querySelector('[data-database-search]').focus();
+    else if (isOtherDatabase(target)) overlay.querySelector(`[data-source-panel="${target}"] textarea`)?.focus();
   }
 
   sourceSwitchBtns.forEach((btn) => {
     btn.addEventListener('click', () => switchDataSource(btn.dataset.source));
   });
+  mountDatabasePicker(overlay, switchDataSource);
+  overlay.querySelector('[data-database-back]').addEventListener('click', () => switchDataSource('database'));
 
   async function pollPubmedJob(jobId) {
     try {
       const res = await fetch(`${API_BASE}/api/pubmed/import/result/${jobId}`);
       const data = await res.json().catch(() => ({}));
+      if (closed || jobId !== pubmedJobId) return;
+      if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : `HTTP ${res.status}`);
       if (data.status === 'running') {
         setPubmedFetchStatus(`Fetching… ${data.completed ?? 0}/${data.total ?? '?'}`);
         pubmedPollTimer = setTimeout(() => pollPubmedJob(jobId), PUBMED_POLL_INTERVAL_MS);
@@ -699,6 +717,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
         showError(`${notFound.length} PMID${notFound.length === 1 ? '' : 's'} not found on PubMed and skipped: ${notFound.join(', ')}`);
       }
     } catch (e) {
+      if (closed || jobId !== pubmedJobId) return;
       setPubmedRunningUi(false);
       pubmedJobId = null;
       showError(`Could not reach backend: ${(e && e.message) || e}`);
@@ -707,6 +726,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
   }
 
   pubmedFetchBtn.addEventListener('click', async () => {
+    const requestRevision = sourceRevision;
     hideError();
     const fields = Array.from(overlay.querySelectorAll('.pm-field-checkbox:checked')).map((el) => el.value);
     if (fields.length === 0) {
@@ -729,15 +749,18 @@ export function openAddDatasetModal(workflowCanvasApi) {
         body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
+      if (cancelLateImport('pubmed', requestRevision, data.job_id)) return;
       if (!res.ok) {
         setPubmedRunningUi(false);
         showError(`Could not start import: ${typeof data.detail === 'string' ? data.detail : 'unknown error'}`);
         setPubmedFetchStatus('');
         return;
       }
+      if (!data.job_id) throw new Error('The database did not return an import job.');
       pubmedJobId = data.job_id;
       pollPubmedJob(pubmedJobId);
     } catch (e) {
+      if (closed || requestRevision !== sourceRevision) return;
       setPubmedRunningUi(false);
       showError(`Could not reach backend: ${(e && e.message) || e}`);
       setPubmedFetchStatus('');
@@ -748,6 +771,8 @@ export function openAddDatasetModal(workflowCanvasApi) {
     try {
       const res = await fetch(`${API_BASE}/api/clinicaltrials/import/result/${jobId}`);
       const data = await res.json().catch(() => ({}));
+      if (closed || jobId !== clinicaltrialsJobId) return;
+      if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : `HTTP ${res.status}`);
       if (data.status === 'running') {
         setClinicaltrialsFetchStatus(`Fetching… ${data.completed ?? 0}/${data.total ?? '?'}`);
         clinicaltrialsPollTimer = setTimeout(() => pollClinicaltrialsJob(jobId), CLINICALTRIALS_POLL_INTERVAL_MS);
@@ -780,6 +805,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
         showError(`${notFound.length} NCT ID${notFound.length === 1 ? '' : 's'} not found on ClinicalTrials.gov and skipped: ${notFound.join(', ')}`);
       }
     } catch (e) {
+      if (closed || jobId !== clinicaltrialsJobId) return;
       setClinicaltrialsRunningUi(false);
       clinicaltrialsJobId = null;
       showError(`Could not reach backend: ${(e && e.message) || e}`);
@@ -788,6 +814,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
   }
 
   clinicaltrialsFetchBtn.addEventListener('click', async () => {
+    const requestRevision = sourceRevision;
     hideError();
     const fields = Array.from(overlay.querySelectorAll('.ct-field-checkbox:checked')).map((el) => el.value);
     if (fields.length === 0) {
@@ -810,15 +837,18 @@ export function openAddDatasetModal(workflowCanvasApi) {
         body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
+      if (cancelLateImport('clinicaltrials', requestRevision, data.job_id)) return;
       if (!res.ok) {
         setClinicaltrialsRunningUi(false);
         showError(`Could not start import: ${typeof data.detail === 'string' ? data.detail : 'unknown error'}`);
         setClinicaltrialsFetchStatus('');
         return;
       }
+      if (!data.job_id) throw new Error('The database did not return an import job.');
       clinicaltrialsJobId = data.job_id;
       pollClinicaltrialsJob(clinicaltrialsJobId);
     } catch (e) {
+      if (closed || requestRevision !== sourceRevision) return;
       setClinicaltrialsRunningUi(false);
       showError(`Could not reach backend: ${(e && e.message) || e}`);
       setClinicaltrialsFetchStatus('');
@@ -829,6 +859,8 @@ export function openAddDatasetModal(workflowCanvasApi) {
     try {
       const res = await fetch(`${API_BASE}/api/preprint/import/result/${jobId}`);
       const data = await res.json().catch(() => ({}));
+      if (closed || jobId !== preprintJobId) return;
+      if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : `HTTP ${res.status}`);
       if (data.status === 'running') {
         setPreprintFetchStatus(`Fetching… ${data.completed ?? 0}/${data.total ?? '?'}`);
         preprintPollTimer = setTimeout(() => pollPreprintJob(jobId), PREPRINT_POLL_INTERVAL_MS);
@@ -861,6 +893,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
         showError(`${notFound.length} DOI${notFound.length === 1 ? '' : 's'} not found on bioRxiv or medRxiv and skipped: ${notFound.join(', ')}`);
       }
     } catch (e) {
+      if (closed || jobId !== preprintJobId) return;
       setPreprintRunningUi(false);
       preprintJobId = null;
       showError(`Could not reach backend: ${(e && e.message) || e}`);
@@ -869,6 +902,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
   }
 
   preprintFetchBtn.addEventListener('click', async () => {
+    const requestRevision = sourceRevision;
     hideError();
     const fields = Array.from(overlay.querySelectorAll('.pp-field-checkbox:checked')).map((el) => el.value);
     if (fields.length === 0) {
@@ -891,15 +925,18 @@ export function openAddDatasetModal(workflowCanvasApi) {
         body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
+      if (cancelLateImport('preprint', requestRevision, data.job_id)) return;
       if (!res.ok) {
         setPreprintRunningUi(false);
         showError(`Could not start import: ${typeof data.detail === 'string' ? data.detail : 'unknown error'}`);
         setPreprintFetchStatus('');
         return;
       }
+      if (!data.job_id) throw new Error('The database did not return an import job.');
       preprintJobId = data.job_id;
       pollPreprintJob(preprintJobId);
     } catch (e) {
+      if (closed || requestRevision !== sourceRevision) return;
       setPreprintRunningUi(false);
       showError(`Could not reach backend: ${(e && e.message) || e}`);
       setPreprintFetchStatus('');
@@ -910,6 +947,8 @@ export function openAddDatasetModal(workflowCanvasApi) {
     try {
       const res = await fetch(`${API_BASE}/api/chembl/import/result/${jobId}`);
       const data = await res.json().catch(() => ({}));
+      if (closed || jobId !== chemblJobId) return;
+      if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : `HTTP ${res.status}`);
       if (data.status === 'running') {
         setChemblFetchStatus(`Fetching… ${data.completed ?? 0}/${data.total ?? '?'}`);
         chemblPollTimer = setTimeout(() => pollChemblJob(jobId), CHEMBL_POLL_INTERVAL_MS);
@@ -942,6 +981,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
         showError(`${notFound.length} ChEMBL ID${notFound.length === 1 ? '' : 's'} not found on ChEMBL and skipped: ${notFound.join(', ')}`);
       }
     } catch (e) {
+      if (closed || jobId !== chemblJobId) return;
       setChemblRunningUi(false);
       chemblJobId = null;
       showError(`Could not reach backend: ${(e && e.message) || e}`);
@@ -950,6 +990,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
   }
 
   chemblFetchBtn.addEventListener('click', async () => {
+    const requestRevision = sourceRevision;
     hideError();
     const fields = Array.from(overlay.querySelectorAll('.chembl-field-checkbox:checked')).map((el) => el.value);
     if (fields.length === 0) {
@@ -972,24 +1013,28 @@ export function openAddDatasetModal(workflowCanvasApi) {
         body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
+      if (cancelLateImport('chembl', requestRevision, data.job_id)) return;
       if (!res.ok) {
         setChemblRunningUi(false);
         showError(`Could not start import: ${typeof data.detail === 'string' ? data.detail : 'unknown error'}`);
         setChemblFetchStatus('');
         return;
       }
+      if (!data.job_id) throw new Error('The database did not return an import job.');
       chemblJobId = data.job_id;
       pollChemblJob(chemblJobId);
     } catch (e) {
+      if (closed || requestRevision !== sourceRevision) return;
       setChemblRunningUi(false);
       showError(`Could not reach backend: ${(e && e.message) || e}`);
       setChemblFetchStatus('');
     }
   });
 
-  // Europe PMC, OpenAlex and UniProt share one panel and fetch loop (referenceImportPanels.js).
+  // Database forms share one fetch loop and the backend's selectable field registry.
   const referenceImports = mountReferenceImports(overlay, {
     apiBase: API_BASE,
+    onReset: resetStagedContent,
     onRows(headers, rows) {
       fileImported = true;
       parsedDatasetContent = { headers, rows };
@@ -1250,7 +1295,11 @@ export function openAddDatasetModal(workflowCanvasApi) {
                   ? 'Choose at least one image file first.'
                   : dataSource === 'empty'
                     ? 'Empty dataset is not ready yet.'
-                    : 'Choose a file to import first.');
+                    : dataSource === 'database'
+                      ? 'Choose a database first.'
+                      : isOtherDatabase(dataSource)
+                        ? `Fetch at least one record from ${getDatabase(dataSource).label} first.`
+                        : 'Choose a file to import first.');
       return;
     }
     const headers = parsedDatasetContent.headers;
@@ -1271,6 +1320,9 @@ export function openAddDatasetModal(workflowCanvasApi) {
   });
 
   const close = () => {
+    closed = true;
+    sourceRevision += 1;
+    referenceImports.cancelAll();
     stopPubmedPolling();
     if (pubmedJobId) fetch(`${API_BASE}/api/pubmed/import/cancel/${pubmedJobId}`, { method: 'POST' }).catch(() => {});
     stopClinicaltrialsPolling();

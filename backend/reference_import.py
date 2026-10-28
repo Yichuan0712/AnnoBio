@@ -1,17 +1,19 @@
 """
-Import by id from Europe PMC, OpenAlex, UniProt and Wikipedia, for the "Import from ..." dataset tabs
-and the Agent's import_dataset. One module for the four because they share the job runner in main.py
-(/api/<source>/import): each source only says which fields it offers, how its ids look and how to fetch
-a batch. All four are free public APIs that need no key. Synchronous: callers run in a background thread.
+Shared identifier-based Dataset imports for the database picker and the Agent's import_dataset.
+Source adapters declare fields, identifier formats and fetch functions. Routes share the job runner
+in main.py (/api/<source>/import). Synchronous: callers run in a background thread.
 """
 
 from __future__ import annotations
 
 import re
+import threading
 import time
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 import httpx
+from database_availability import require_data_lake, source_enabled
 
 USER_AGENT = "AnnoBio (https://annobio.org)"
 BATCH_DELAY_SEC = 0.2
@@ -21,17 +23,30 @@ _TAG = re.compile(r"<[^>]+>")
 _UNIPROT_CITATION = re.compile(r"\s*\((?:PubMed:\d+[,;\s]*)+\)")
 # https://www.uniprot.org/help/accession_numbers
 _UNIPROT_ACCESSION = re.compile(r"^(?:[OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9](?:[A-Z][A-Z0-9]{2}[0-9]){1,2})$")
+_RATE_LOCK = threading.Lock()
+_LAST_REQUEST: dict[str, float] = {}
+
+
+def _pace(url: str) -> None:
+    host = urlparse(url).hostname or ""
+    interval = {"eutils.ncbi.nlm.nih.gov": 0.36, "pubchem.ncbi.nlm.nih.gov": 0.22,
+                "string-db.org": 1.0, "blast.ncbi.nlm.nih.gov": 10.0}.get(host, 0)
+    if interval:
+        with _RATE_LOCK:
+            time.sleep(max(0, interval - (time.monotonic() - _LAST_REQUEST.get(host, 0))))
+            _LAST_REQUEST[host] = time.monotonic()
 
 
 def _client() -> httpx.Client:
     return httpx.Client(timeout=_TIMEOUT, headers={"User-Agent": USER_AGENT}, follow_redirects=True)
 
 
-def _get(client: httpx.Client, url: str, params: dict[str, Any], max_retries: int = 2) -> httpx.Response:
+def _get(client: httpx.Client, url: str, params: dict[str, Any], max_retries: int = 2, *, headers=None) -> httpx.Response:
     for attempt in range(max_retries + 1):
         try:
-            resp = client.get(url, params=params)
-            if resp.status_code == 429 and attempt < max_retries:
+            _pace(url)
+            resp = client.get(url, params=params, headers=headers)
+            if resp.status_code in (429, 502, 503, 504) and attempt < max_retries:
                 time.sleep(1.0 * (attempt + 1))
                 continue
             resp.raise_for_status()
@@ -286,12 +301,23 @@ REFERENCE_IMPORTERS: dict[str, dict[str, Any]] = {
                   "default_fields": ["title", "url", "summary"],
                   "key": _wikipedia_key, "batch": _wikipedia_batch, "batch_size": 20},
 }
+
+from database_importers import build_database_importers
+
+REFERENCE_IMPORTERS.update(build_database_importers(_get))
+from biomni_database_importers import build_biomni_database_importers
+
+REFERENCE_IMPORTERS.update(build_biomni_database_importers(_get))
+from biomni_data_lake import build_data_lake_importers
+
+REFERENCE_IMPORTERS.update(build_data_lake_importers())
 MAX_IDS = 2000
 
 
 def describe_importers() -> dict[str, Any]:
-    return {key: {"label": s["label"], "id": s["id"], "fields": s["fields"], "default_fields": s["default_fields"]}
-            for key, s in REFERENCE_IMPORTERS.items()}
+    return {key: {"label": s["label"], "id": s["id"], "fields": s["fields"], "default_fields": s["default_fields"],
+                  **{name: s[name] for name in ("kind", "option_fields", "example", "category", "datasets", "help_url") if name in s}}
+            for key, s in REFERENCE_IMPORTERS.items() if source_enabled(s)}
 
 
 def fetch_records(
@@ -299,6 +325,7 @@ def fetch_records(
     ids: list[str],
     fields: list[str],
     on_batch: Callable[[list[dict[str, str]], list[str], int, int], None] | None = None,
+    options: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     """
     Fetch `fields` for `ids` from `source`, in the requested order and without duplicates. Ids that are
@@ -307,6 +334,11 @@ def fetch_records(
     so the job can show progress and keep what it has if it is stopped.
     """
     importer = REFERENCE_IMPORTERS[source]
+    if importer.get("kind") == "snapshot":
+        require_data_lake()
+        from biomni_data_lake import fetch_snapshot_records
+        with _client() as client:
+            return fetch_snapshot_records(source, ids, fields, options or {}, client, on_batch)
     keyed = [(token, importer["key"](token)) for token in ids if str(token).strip()]
     keys = list(dict.fromkeys(key for _, key in keyed if key))[:MAX_IDS]
     invalid = list(dict.fromkeys(token.strip() for token, key in keyed if not key))
@@ -319,12 +351,18 @@ def fetch_records(
     with _client() as client:
         for start in range(0, len(keys), size):
             batch = keys[start:start + size]
-            found = importer["batch"](client, batch, fields)
+            if "batch_options" in importer:
+                batch_options = {**(options or {})}
+                if on_batch:
+                    batch_options['_heartbeat'] = lambda: on_batch([], [], processed, total)
+                found = importer["batch_options"](client, batch, fields, batch_options)
+            else:
+                found = importer["batch"](client, batch, fields)
             rows = [{f: found[key].get(f, "") for f in fields} for key in batch if key in found]
             out.extend(rows)
             processed += len(batch)
             if on_batch:
                 on_batch(rows, [key for key in batch if key not in found], processed, total)
             if start + size < len(keys):
-                time.sleep(BATCH_DELAY_SEC)
+                time.sleep(max(BATCH_DELAY_SEC, 1.0 if source == "gnomad" else 0))
     return out

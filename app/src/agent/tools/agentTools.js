@@ -3,6 +3,7 @@
  * here in the renderer against the live canvas. ask_user is defined here but handled by the loop,
  * since answering it takes the user, not code.
  */
+import { REFERENCE_DATABASES } from '../../databaseCatalog.js';
 import { BACKEND_API_BASE } from '../../backendConfig.js';
 import { nodeTitle, readNodeRows, traceRunRow } from '../canvas/workflowNodeInspector.js';
 import { loadSources } from '../operations/proposals.js';
@@ -65,7 +66,7 @@ Operations ("op" plus the fields listed):
 - add_dataset: ref, name, note?, columns (names, or {name, type: text | image | pdf}), rows (lists of cells, or objects keyed by column). Image/PDF cells reuse existing uploaded asset cells from read_rows; null is an empty cell. It cannot upload new local files or invent asset IDs.
 - duplicate_dataset: ref, dataset, name?, note?, as_version? (default false). Copies the complete table including image/PDF cells. as_version links a new editable version and keeps row identities; an ordinary duplicate is standalone. Neither consumes another Sample pull.
 - move_image: dataset, from_row, from_column, to_row, to_column, image? (1-based image within the source cell, default 1). Moves that image to the end of the target image cell in the same Dataset, removing it from the source, like dragging an image in the table. Row numbers are 1-based; both columns must be image columns and the Dataset must be editable.
-- import_dataset: ref, source (pubmed | clinicaltrials | chembl | preprint | europepmc | openalex | uniprot | wikipedia), ids, fields (from search_source's importable_fields), name, note?. Records are fetched when applied. Ids: europepmc PMIDs, PMCIDs or PPR ids; openalex W ids or DOIs; uniprot accessions; wikipedia article titles.
+- import_dataset: ref, source (pubmed | clinicaltrials | chembl | preprint | ${REFERENCE_DATABASES.filter((s) => s.kind !== 'snapshot').map((s) => s.source).join(' | ')} | wikipedia), ids, fields (from search_source's importable_fields), name, note?. Records are fetched when applied. Ids: europepmc PMIDs, PMCIDs or PPR ids; openalex W ids or DOIs; uniprot accessions; wikipedia article titles.
 ${attachments ? IMPORT_ATTACHMENT_OPERATION : ''}- add_sampler: ref (the Sample), dataset_ref? (the sampled Dataset), source (dataset), sampling? (random | random_with_replacement | rows), size + size_unit (rows | percent) for random, rows ("1 3 5-10") for rows, name?, dataset_name?, create_dataset? (default true). With create_dataset false, only adds a configurable Sample node; defaults are random without replacement, 100 percent. Once it has an output Dataset its settings lock.
 - sample_dataset: ref (new Dataset), sampler (an existing Sample), name?, note?. Draws again using its saved settings. Random without replacement consumes unused source rows across pulls and fails when a full pull no longer fits; specified rows and replacement sampling are repeatable. inspect_node reports settingsLocked, outputs and finite progress (completed, total, remaining).
 - add_process: ref, name?, primary_input? (a dataset, run or process: df in the code), primary_branch (only for a process with several branches), code? defining process(df, ...); every other input (a dataset or a step output) is a parameter after df named after its df_<alias> (inspect_node on a process lists them under availableInputs; see the process-code guide). Without primary_input, creates an unconnected Process whose code can be edited before connecting its Data input; default code returns df. Not run until the user runs it.
@@ -154,7 +155,7 @@ export const AGENT_TOOL_DEFINITIONS = [
   ),
   tool(
     'list_models',
-    'Search the OpenRouter model catalog with prices and capabilities, for example to compare the tested models or find one that reads images or pdfs, or a cheaper one. Only the tested models in the workspace summary\'s Models list can be given to a Generate or Optimize; suggest the user add and test another in Settings → Credentials.',
+    'Search the OpenRouter model catalog with prices and capabilities, for example to compare the tested models or find one that reads images or pdfs, or a cheaper one. Only the tested models in the workspace summary\'s Models list can be given to a Generate or Optimize; suggest the user add and test another in Settings â†’ Credentials.',
     {
       query: { type: 'string', description: 'Case-insensitive text to match in the model id or name.' },
       vision: { type: 'boolean', description: 'Only models that accept images.' },
@@ -173,9 +174,9 @@ export const AGENT_TOOL_DEFINITIONS = [
   tool(
     'search_source',
     `Keyword search of an external source. Returns the total number of matches, the matching ids (up to limit), a few samples and the fields that can be imported. Nothing is imported; use import_dataset in propose_changes for that.
-Sources: pubmed, clinicaltrials, chembl; europepmc (literature with abstracts, including preprints; also returns pmids and bioRxiv/medRxiv preprint_dois), openalex (works with citation counts and abstracts; also returns pmids), uniprot (protein entries with function), wikipedia (article introductions for general concepts). Their samples can also be read to answer questions. preprint (bioRxiv/medRxiv) cannot be searched: find preprints in europepmc.`,
+Sources: pubmed, clinicaltrials, chembl; europepmc (literature with abstracts, including preprints; also returns pmids and bioRxiv/medRxiv preprint_dois), openalex (works with citation counts and abstracts; also returns pmids), uniprot (protein entries with function), wikipedia (article introductions for general concepts). Their samples can also be read to answer questions. preprint (bioRxiv/medRxiv) cannot be searched: find preprints in europepmc. Other databases support import by ID: this tool returns their identifier format and importable fields without a keyword search. Use those fields and user-provided IDs with import_dataset.`,
     {
-      source: { type: 'string', enum: ['pubmed', 'clinicaltrials', 'chembl', 'preprint', 'europepmc', 'openalex', 'uniprot', 'wikipedia'] },
+      source: { type: 'string', enum: ['pubmed', 'clinicaltrials', 'chembl', 'preprint', ...REFERENCE_DATABASES.filter((s) => s.kind !== 'snapshot').map((s) => s.source), 'wikipedia'] },
       query: { type: 'string', description: 'PubMed accepts its full query syntax, e.g. "CDK2[tiab] AND phosphorylation[tiab] AND 2020:2025[dp]". Europe PMC accepts its syntax, e.g. "CDK2 AND SRC:PPR" for preprints. UniProt accepts its syntax, e.g. "gene:CDK2 AND organism_id:9606 AND reviewed:true".' },
       limit: { type: 'integer', minimum: 1, maximum: 500, description: 'How many ids to return. Default 100.' },
     },
@@ -365,6 +366,10 @@ async function listModels(args) {
 async function searchSource(args) {
   const sources = await loadSources();
   const importableFields = sources[args.source]?.fields;
+  if (sources[args.source]?.searchable === false && args.source !== 'preprint') {
+    return { source: args.source, searchable: false, identifier_format: sources[args.source].id,
+      importable_fields: importableFields, connection_options: sources[args.source].option_fields || [], note: 'Import records by ID with import_dataset. Configure any required credential on the server, or use the Dataset import dialog to enter it.' };
+  }
   const res = await fetch(`${BACKEND_API_BASE}/api/agent/search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

@@ -7,6 +7,9 @@ FROM python:3.12-slim
 
 WORKDIR /app/backend
 
+# Hosted workspaces offer online database APIs; large downloadable snapshots are desktop-only.
+ENV ANNOBIO_ENABLE_DATA_LAKE=0
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     # textgrad is deliberately not in requirements.txt (see its comment there) — installed the
