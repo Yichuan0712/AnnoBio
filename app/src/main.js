@@ -11,6 +11,7 @@ import {
 import { BACKEND_PORT } from './backendConfig.js';
 import { ProjectAssets, YC_EXTENSION, isBundledProjectFile } from './projectAssets.js';
 import { createBackendLog } from './backendLog.js';
+import { createFolderAccessStore, listFolder } from './agent/attachments/folderAccess.js';
 import { APP_NAME, WINDOWS_APP_ID, windowsTaskbarDetails } from './appIdentity.js';
 
 if (process.platform === 'win32') app.setAppUserModelId(WINDOWS_APP_ID);
@@ -237,6 +238,63 @@ ipcMain.handle('agent:read-attachment', async (_event, filePath) => {
   return problem ? { error: problem } : { data: await fs.readFile(resolved) };
 });
 
+let folderAccessStore;
+function localPaths() {
+  return folderAccessStore ||= createFolderAccessStore(path.join(app.getPath('userData'), 'agent-path-grants.json'), {
+    importFiles: (paths, kind) => kind === 'pdf' ? projectAssets.importPdfFiles(paths) : projectAssets.importFiles(paths),
+  });
+}
+ipcMain.handle('assets:import-folder', async (_event, kind, recursive = false) => {
+  if (!['image', 'pdf'].includes(kind)) return { error: 'Choose images or PDFs.' };
+  const picked = await dialog.showOpenDialog({ title: `Import ${kind === 'pdf' ? 'PDFs' : 'images'} from a folder`, properties: ['openDirectory'] });
+  if (picked.canceled || !picked.filePaths.length) return { cancelled: true };
+  const session = `dataset-import-${crypto.randomUUID()}`;
+  try {
+    const [grant] = await localPaths().grant(session, [picked.filePaths[0]]);
+    if (!grant?.grantId || grant.error) throw new Error(grant?.error || 'The folder could not be read.');
+    const inventory = await listFolder(grant.path, { recursive: Boolean(recursive), max_entries: 5000 });
+    if (inventory.truncated) throw new Error('The folder is too large to scan completely. Choose a smaller folder.');
+    const files = inventory.entries.filter((item) => item.kind === kind).map((item) => item.path);
+    const snapshot = await localPaths().snapshot(session, grant.grantId, { files });
+    if (files.length > 200) {
+      const choice = await dialog.showMessageBox({ type: 'question', buttons: ['Import', 'Cancel'], defaultId: 1, cancelId: 1,
+        message: `Import ${files.length} ${kind === 'pdf' ? 'PDFs' : 'images'}?`, detail: `${(snapshot.total_bytes / 1048576).toFixed(1)} MB from ${grant.path}` });
+      if (choice.response !== 0) return { cancelled: true };
+    }
+    return await localPaths().useSnapshot(session, snapshot.token, { store: true });
+  } catch (error) { return { error: error.message }; }
+  finally { await localPaths().revoke(session); }
+});
+for (const [channel, action] of Object.entries({
+  'agent:grant-paths': (session, groups) => localPaths().grant(session, groups),
+  'agent:check-folder': (session, candidate) => localPaths().check(session, candidate),
+  'agent:revoke-path': (session, id) => localPaths().revoke(session, id),
+  'agent:list-folder': (session, id, options) => localPaths().list(session, id, options),
+  'agent:read-path-file': (session, id, relative) => localPaths().read(session, id, relative),
+  'agent:batch-folder': (session, id, options) => localPaths().batch(session, id, options),
+  'agent:search-folder': (session, id, options) => localPaths().search(session, id, options),
+  'agent:snapshot-import': (session, id, options) => localPaths().snapshot(session, id, options),
+  'agent:use-import-snapshot': (session, token, options) => localPaths().useSnapshot(session, token, options),
+})) {
+  ipcMain.handle(channel, async (_event, ...args) => {
+    try { return await action(...args); }
+    catch (error) { return { error: error.message }; }
+  });
+}
+
+// A dropped directory is inserted as a quoted mention; it is not authorized before Send.
+ipcMain.handle('agent:classify-dropped', async (_event, paths) => {
+  const results = [];
+  for (const raw of (Array.isArray(paths) ? paths : []).slice(0, 20)) {
+    try {
+      const stat = await fs.stat(raw);
+      if (stat.isDirectory()) results.push({ kind: 'folder', path: raw });
+      else results.push(...await registerAgentAttachments([raw]));
+    } catch (_) { results.push({ name: path.basename(String(raw)), error: 'The file could not be read.' }); }
+  }
+  return results;
+});
+
 /**
  * ===== Python backend =====
  * Dev: repo backend/.venv (Scripts/python.exe on Windows, bin/python on macOS/Linux).
@@ -327,7 +385,7 @@ function mapAgentMessageForStorage(msg) {
     if (msg.answer != null) out.answer = String(msg.answer);
     if (msg.outcome != null) out.outcome = String(msg.outcome);
   }
-  const attachments = out.role === 'user' ? normalizeStoredAttachments(msg.attachments) : [];
+  const attachments = out.role === 'user' || out.role === 'tool' ? normalizeStoredAttachments(msg.attachments) : [];
   if (attachments.length) out.attachments = attachments;
   return out;
 }
