@@ -105,10 +105,13 @@ proteins, pathways, experimental data, species, and data snapshots. Online sourc
 genomic intervals, or sequences as indicated by the form. Some sources require an API key.
 Study and structure imports provide metadata and download links. gnomAD variant IDs use GRCh38 coordinates.</p>
 <p>Data snapshots are available in the desktop app. The web app offers online database APIs.
-For a desktop data snapshot, choose its file, click <strong>Load columns</strong>, select columns, and
-set the maximum rows. To filter, choose a column and enter exact values, one per line.
-Search column names in wide tables. Large pickle files require a full download and sufficient
-server memory unless a prepared Parquet copy is available.</p>
+For a desktop data snapshot, choose its file and click <strong>Download</strong>. Choose columns
+once it is ready. Existing downloads are reused. Imports keep up to the first 5,000 rows and show
+a notice if additional rows were omitted. The same truncation note is appended to the created
+Dataset description. Search column names in wide tables.
+The <strong>Downloaded</strong> button changes to <strong>Remove download</strong> on hover or keyboard focus. Source files are shared across
+projects. Deletions in the file manager are detected automatically; imported project tables remain
+available. Large pickle files require sufficient local memory unless a prepared Parquet copy is available.</p>
 <p>Select the Dataset node to open it, then verify the import before building the pipeline. Confirm that one row
 corresponds to the intended unit of analysis, identifiers are unique, text has not been truncated, and
 file columns contain the expected files. Check missing values, duplicate records, worksheet selection,

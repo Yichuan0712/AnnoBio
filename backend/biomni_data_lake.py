@@ -1,29 +1,25 @@
 """Bounded table imports from Biomni's exact, pinned public data-lake manifest.
 
-Parquet uses HTTP byte ranges. Text tables/ontologies stream until the requested row limit.
-Pickle files are cached on demand and read with a constructor allowlist, never pickle.load.
+Downloads are explicit and shared across projects. Readers only use complete local files.
+Pickle files are read with a constructor allowlist, never pickle.load.
 """
 from __future__ import annotations
 
 import csv
-from concurrent.futures import ThreadPoolExecutor
 import io
-import json
-import os
-from pathlib import Path
 import pickle
 import threading
 
-import httpx
 
 from database_importers import _cell
 from database_availability import require_data_lake
 
-MANIFEST = json.loads((Path(__file__).parent / "biomni_manifest.json").read_text(encoding="utf-8"))
-FILES = MANIFEST["data_lake"]
-BASE = "https://biomni-release.s3.amazonaws.com/data_lake/"
+from biomni_downloads import (
+    BASE, FILES, MANIFEST, RangeFile, _DOWNLOAD_LOCK, dataset_lock,
+    dataset_status, download_dataset, require_local_dataset,
+)
+
 PROVENANCE = {"__source_dataset": "Source Dataset", "__source_url": "Source URL"}
-_DOWNLOAD_LOCK = threading.Lock()
 _PICKLE_READ_LOCK = threading.Lock()
 _SCHEMAS = {}
 csv.field_size_limit(16 * 1024 * 1024)
@@ -67,79 +63,8 @@ def resolve_dataset(source, options):
     return filename
 
 
-class RangeFile(io.RawIOBase):
-    """Seekable read-only S3 object; never treats an ignored Range request as the requested bytes."""
-    def __init__(self, client, filename):
-        super().__init__()
-        self.client, self.url, self.position = client, BASE + filename, 0
-        self.size = FILES[filename]["bytes"]
-        self.cache = {}
-
-    def readable(self): return True
-    def seekable(self): return True
-    def tell(self): return self.position
-
-    def seek(self, offset, whence=0):
-        target = offset if whence == 0 else self.position + offset if whence == 1 else self.size + offset
-        if target < 0:
-            raise ValueError("Negative seek")
-        self.position = target
-        return target
-
-    def read(self, size=-1):
-        if self.position >= self.size:
-            return b""
-        size = self.size - self.position if size < 0 else min(size, self.size - self.position)
-        if not size:
-            return b""
-        start, end = self.position, self.position + size - 1
-        key = (start, end)
-        if key not in self.cache:
-            with self.client.stream('GET', self.url, headers={"Range": f"bytes={start}-{end}"}) as response:
-                response.raise_for_status()
-                content_range = response.headers.get('content-range', '')
-                if response.status_code != 206 or content_range != f'bytes {start}-{end}/{self.size}':
-                    raise ValueError("The dataset server did not honor the requested byte range.")
-                etag = response.headers.get('etag', '').strip('"')
-                if etag and etag != FILES[self.url.rsplit('/', 1)[-1]]['etag']:
-                    raise ValueError('The upstream dataset changed. Update the pinned dataset manifest before importing.')
-                chunks, received = [], 0
-                for chunk in response.iter_bytes(1024 * 1024):
-                    received += len(chunk)
-                    if received > size:
-                        raise ValueError('The dataset server exceeded the requested byte range.')
-                    chunks.append(chunk)
-                if received != size:
-                    raise ValueError('The dataset server returned an incomplete byte range.')
-                self.cache[key] = b''.join(chunks)
-            # Keep footer metadata, not an unbounded cache of data row groups.
-            if sum(len(v) for v in self.cache.values()) > 8 * 1024 * 1024:
-                data = self.cache[key]
-                self.cache = {key: data}
-        data = self.cache[key]
-        self.position += size
-        return data
 
 
-class IteratorReader(io.RawIOBase):
-    def __init__(self, chunks):
-        self.chunks, self.pending = iter(chunks), b""
-    def readable(self): return True
-    def readinto(self, buffer):
-        data = self.read(len(buffer))
-        buffer[:len(data)] = data
-        return len(data)
-    def read(self, size=-1):
-        if size == 0:
-            return b""
-        if size < 0:
-            data, self.pending = self.pending + b"".join(self.chunks), b""
-            return data
-        while len(self.pending) < size:
-            try: self.pending += next(self.chunks)
-            except StopIteration: break
-        data, self.pending = self.pending[:size], self.pending[size:]
-        return data
 
 
 class RestrictedDatasetUnpickler(pickle.Unpickler):
@@ -170,45 +95,7 @@ class RestrictedDatasetUnpickler(pickle.Unpickler):
 
 
 def _pickle_path(client, filename, heartbeat):
-    # User-configured local files can avoid downloads. Filenames always come from the manifest.
-    local_dir = os.environ.get("ANNOBIO_BIOMNI_DATA_DIR")
-    if local_dir:
-        local = Path(local_dir) / filename
-        if local.is_file():
-            return local
-    cache = Path(os.environ.get("ANNOBIO_BIOMNI_CACHE_DIR") or (Path(__file__).parent / "data" / "biomni-cache"))
-    cache.mkdir(parents=True, exist_ok=True)
-    target = cache / filename
-    while not _DOWNLOAD_LOCK.acquire(timeout=1):
-        if heartbeat: heartbeat()
-    try:
-        if target.is_file() and target.stat().st_size == FILES[filename]["bytes"]:
-            return target
-        partial = cache / (filename + ".part")
-        try:
-            # Bounded ranges avoid proxies buffering a multi-gigabyte response before sending it.
-            chunk_size = 8 * 1024 * 1024
-            def download(offset):
-                remote = RangeFile(client, filename)
-                remote.seek(offset)
-                return offset, remote.read(min(chunk_size, remote.size - offset))
-            with partial.open('wb') as destination, ThreadPoolExecutor(max_workers=4) as pool:
-                for batch_start in range(0, FILES[filename]['bytes'], chunk_size * 4):
-                    if heartbeat: heartbeat()
-                    offsets = range(batch_start, min(batch_start + chunk_size * 4, FILES[filename]['bytes']), chunk_size)
-                    for offset, chunk in pool.map(download, offsets):
-                        destination.seek(offset)
-                        destination.write(chunk)
-                        if heartbeat: heartbeat()
-            if partial.stat().st_size != FILES[filename]["bytes"]:
-                raise ValueError("Incomplete dataset download; retry to download it again.")
-            partial.replace(target)
-        except BaseException:
-            partial.unlink(missing_ok=True)
-            raise
-        return target
-    finally:
-        _DOWNLOAD_LOCK.release()
+    return download_dataset(client, filename, heartbeat)
 
 
 def _object_rows(data):
@@ -236,42 +123,27 @@ def _object_rows(data):
 
 def iter_dataset_rows(client, filename, heartbeat=None):
     require_data_lake()
-    if filename not in FILES:
-        raise ValueError('Choose a file from the pinned dataset manifest.')
-    local_dir = os.environ.get("ANNOBIO_BIOMNI_DATA_DIR")
-    local = Path(local_dir) / filename if local_dir else None
-    prepared = None
-    if filename.endswith('.pkl'):
-        cache = Path(os.environ.get('ANNOBIO_BIOMNI_CACHE_DIR') or (Path(__file__).parent / 'data' / 'biomni-cache'))
-        candidates = ([local.with_name(filename + '.parquet')] if local else []) + [cache / 'prepared' / (filename + '.parquet')]
-        prepared = next((candidate for candidate in candidates if candidate.is_file()), None)
-    if filename.endswith(".parquet") or prepared:
-        import pyarrow.parquet as pq
-        handle = str(prepared) if prepared else str(local) if local and local.is_file() else RangeFile(client, filename)
-        table = pq.ParquetFile(handle)
-        for batch in table.iter_batches(batch_size=256):
-            if heartbeat: heartbeat()
-            yield from batch.to_pylist()
-        return
-    if filename.endswith(".pkl"):
-        path = _pickle_path(client, filename, heartbeat)
-        while not _PICKLE_READ_LOCK.acquire(timeout=1):
-            if heartbeat: heartbeat()
-        try:
-            with path.open("rb") as stream:
-                data = RestrictedDatasetUnpickler(stream).load()
-            if heartbeat: heartbeat()
-            yield from _object_rows(data)
-        finally:
-            _PICKLE_READ_LOCK.release()
-        return
-    if local and local.is_file():
-        with local.open("rb") as stream:
-            yield from _text_rows(filename, stream)
-        return
-    with client.stream("GET", BASE + filename) as response:
-        response.raise_for_status()
-        yield from _text_rows(filename, IteratorReader(response.iter_bytes()))
+    with dataset_lock(filename, heartbeat):
+        path = require_local_dataset(filename)
+        if path.suffix == '.parquet':
+            import pyarrow.parquet as pq
+            with pq.ParquetFile(path) as table:
+                for batch in table.iter_batches(batch_size=256):
+                    if heartbeat: heartbeat()
+                    yield from batch.to_pylist()
+        elif filename.endswith('.pkl'):
+            while not _PICKLE_READ_LOCK.acquire(timeout=1):
+                if heartbeat: heartbeat()
+            try:
+                with path.open('rb') as stream:
+                    data = RestrictedDatasetUnpickler(stream).load()
+                if heartbeat: heartbeat()
+                yield from _object_rows(data)
+            finally:
+                _PICKLE_READ_LOCK.release()
+        else:
+            with path.open('rb') as stream:
+                yield from _text_rows(filename, stream)
 
 
 def _text_rows(filename, stream):
@@ -318,10 +190,14 @@ def _text_rows(filename, stream):
 def describe_snapshot_fields(source, options, client, heartbeat=None):
     require_data_lake()
     filename = resolve_dataset(source, options)
-    local_dir = os.environ.get("ANNOBIO_BIOMNI_DATA_DIR", "")
-    cache_key = (filename, local_dir)
+    status = dataset_status(filename)
+    require_local_dataset(filename)
+    cache_key = (filename, status['fingerprint'])
     if cache_key in _SCHEMAS:
         return _SCHEMAS[cache_key]
+    # Discard columns learned from an older/deleted copy of the same file.
+    for key in list(_SCHEMAS):
+        if key[0] == filename: _SCHEMAS.pop(key, None)
     rows = iter_dataset_rows(client, filename, heartbeat)
     discovered = {}
     try:
@@ -342,21 +218,25 @@ def describe_snapshot_fields(source, options, client, heartbeat=None):
         raise ValueError("Dataset columns collide with reserved provenance fields.")
     fields.update(PROVENANCE)
     result = {"fields": fields, "default_fields": [*list(discovered)[:10], *PROVENANCE], "dataset": filename,
-            "bytes": FILES[filename]["bytes"], "filter_columns": list(discovered)}
+            "bytes": FILES[filename]["bytes"], "filter_columns": list(discovered), "fingerprint": status["fingerprint"]}
     _SCHEMAS[cache_key] = result
     return result
 
 
-def fetch_snapshot_records(source, ids, fields, options, client, on_batch=None):
+SNAPSHOT_ROW_LIMIT = 5000
+
+
+def fetch_snapshot_records(source, ids, fields, options, client, on_batch=None, on_metadata=None):
     filename = resolve_dataset(source, options)
-    limit = int(options.get("limit", 100))
-    if not 1 <= limit <= 2000:
-        raise ValueError("Choose a row limit from 1 to 2,000.")
+    limit = int(options.get("limit", SNAPSHOT_ROW_LIMIT))
+    if not 1 <= limit <= SNAPSHOT_ROW_LIMIT:
+        raise ValueError(f"Choose a row limit from 1 to {SNAPSHOT_ROW_LIMIT:,}.")
     column = str(options.get("filter_column") or "")
     wanted = {str(value).strip() for value in ids if str(value).strip()}
     if wanted and not column:
         raise ValueError("Choose a filter column when entering filter values.")
     result, matched, scanned = [], set(), 0
+    truncated = False
     def heartbeat():
         if on_batch: on_batch([], [], len(matched) if wanted else len(result), len(wanted) or limit)
     rows = iter_dataset_rows(client, filename, heartbeat)
@@ -369,13 +249,15 @@ def fetch_snapshot_records(source, ids, fields, options, client, on_batch=None):
             if wanted and value not in wanted:
                 if scanned % 1000 == 0: heartbeat()
                 continue
+            # Read one extra matching row to distinguish exactly-at-limit from truncation.
+            if len(result) >= limit:
+                truncated = True
+                break
             if wanted: matched.add(value)
             enriched = {**record, "__source_dataset": filename, "__source_url": BASE + filename}
             row = {field: _cell(enriched.get(field)) for field in fields}
             result.append(row)
             if on_batch: on_batch([row], [], len(matched) if wanted else len(result), len(wanted) or limit)
-            if len(result) >= limit:
-                break
         else:
             if on_batch and wanted:
                 on_batch([], sorted(wanted - matched), len(wanted), len(wanted))
@@ -383,6 +265,8 @@ def fetch_snapshot_records(source, ids, fields, options, client, on_batch=None):
         rows.close()
     if on_batch and not wanted:
         on_batch([], [], len(result), len(result))
+    if on_metadata:
+        on_metadata({'truncated': truncated, 'row_limit': limit})
     return result
 
 

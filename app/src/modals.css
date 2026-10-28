@@ -8687,6 +8687,21 @@ button.btn.btn-danger:hover:not(:disabled) {
   width: 100%;
 }
 
+.reference-import-configuration {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.reference-import-configuration[hidden],
+.reference-download-progress[hidden] { display: none; }
+.reference-download-btn--downloaded { display: inline-grid; }
+.reference-download-btn--downloaded > span { grid-area: 1 / 1; }
+.reference-download-btn--downloaded .reference-download-action { visibility: hidden; }
+.reference-download-btn--downloaded:is(:hover, :focus-visible):not(:disabled) .reference-download-label { visibility: hidden; }
+.reference-download-btn--downloaded:is(:hover, :focus-visible):not(:disabled) .reference-download-action { visibility: visible; }
+.reference-download-progress { width: 100%; }
+
 /* ——— Process node detail modal（尺寸与 Run detail 一致） ——— */
 .modal-panel--process {
   width: 88%;

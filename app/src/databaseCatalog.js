@@ -53,7 +53,7 @@ export const REFERENCE_DATABASES = [
     'Import experiment metadata and released file download links. Assay files are not downloaded automatically.'),
   ...biomniDatabases.map((item) => ({
     ...database(item.source, item.label, item.category, item.description, item.idLabel, item.placeholder,
-      item.kind === 'snapshot' ? 'Choose a dataset file, load its columns, then import rows. You can filter by values in a selected column.'
+      item.kind === 'snapshot' ? 'Choose a dataset file and download it, then select columns and import rows. Downloaded files are shared across projects.'
         : item.source === 'blast' ? 'Search NCBI with a DNA or protein sequence. Long-running searches retain their request ID and result link. Import RID:job-ID later to retrieve results.' : ''),
     kind: item.kind, oneTitlePerLine: item.kind === 'snapshot',
   })),

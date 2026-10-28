@@ -1035,9 +1035,12 @@ export function openAddDatasetModal(workflowCanvasApi) {
   const referenceImports = mountReferenceImports(overlay, {
     apiBase: API_BASE,
     onReset: resetStagedContent,
-    onRows(headers, rows) {
+    onRows(headers, rows, { truncated = false } = {}) {
       fileImported = true;
-      parsedDatasetContent = { headers, rows };
+      parsedDatasetContent = {
+        headers, rows,
+        importNotice: truncated ? `Import note: Only the first ${rows.length.toLocaleString('en-US')} rows of the source dataset were imported. Remaining rows were not imported.` : '',
+      };
       renderPreviewTable(headers, rows.slice(0, MAX_PREVIEW_ROWS), rows.length);
     },
     showError,
@@ -1308,7 +1311,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
       new CustomEvent('workflow:add-dataset-node', {
         detail: {
           name,
-          notes,
+          notes: [notes, parsedDatasetContent.importNotice].filter(Boolean).join('\n\n'),
           headers,
           rows,
           columnTypes: parsedDatasetContent.columnTypes,

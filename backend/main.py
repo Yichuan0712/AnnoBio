@@ -2852,8 +2852,12 @@ def _do_reference_import_work(job_id: str, source: str, req: ReferenceImportRequ
             if job_id in _reference_cancelled or is_abandoned:
                 raise _ReferenceStopSignal()
 
+        def on_metadata(metadata):
+            with _reference_jobs_lock:
+                _reference_jobs[job_id].update(metadata)
+
         try:
-            fetch_records(source, req.ids, fields, on_batch=on_batch, options=req.options)
+            fetch_records(source, req.ids, fields, on_batch=on_batch, options=req.options, on_metadata=on_metadata)
         except _ReferenceStopSignal:
             with _reference_jobs_lock:
                 _reference_jobs[job_id]["status"] = "cancelled" if job_id in _reference_cancelled else "done"
@@ -2899,10 +2903,10 @@ def _register_reference_import_routes(source: str, label: str) -> None:
                 _reference_last_activity[job_id] = time.time()
             snapshot = {**job, "rows": list(job.get("rows") or []), "not_found": list(job.get("not_found") or [])}
         if snapshot.get("status") == "running":
-            return JSONResponse(status_code=202, content={key: snapshot.get(key) for key in ("status", "completed", "total", "headers", "rows")})
+            return JSONResponse(status_code=202, content={key: snapshot.get(key) for key in ("status", "completed", "total", "headers", "rows", "phase", "downloaded_bytes", "download_total_bytes")})
         if snapshot.get("error"):
             return {"status": "done", "error": snapshot["error"], "headers": [], "rows": []}
-        return {key: snapshot.get(key) for key in ("status", "completed", "total", "headers", "rows", "not_found", "schema")}
+        return {key: snapshot.get(key) for key in ("status", "completed", "total", "headers", "rows", "not_found", "schema", "download", "truncated", "row_limit")}
 
     def cancel(job_id: str):
         with _reference_jobs_lock:
@@ -2938,36 +2942,45 @@ def reference_import_sources():
     return describe_importers()
 
 
-@app.post("/api/reference/import/sources/{source}/schema")
-def reference_import_schema(source: str, body: dict[str, Any] = Body(default_factory=dict)):
+def _start_snapshot_job(source: str, body: dict[str, Any], *, download=False):
     from database_availability import data_lake_enabled
     if not data_lake_enabled():
         raise HTTPException(status_code=404, detail="Downloadable dataset imports are disabled on this server.")
     from biomni_data_lake import GROUPS, describe_snapshot_fields, resolve_dataset
+    from biomni_downloads import dataset_status, download_dataset
     from reference_import import _client
     from fastapi.responses import JSONResponse
     if source not in GROUPS:
         raise HTTPException(status_code=404, detail="Unknown snapshot source")
     try:
-        resolve_dataset(source, body)
+        filename = resolve_dataset(source, body)
     except Exception as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     job_id = str(uuid.uuid4())
     with _reference_jobs_lock:
-        _reference_jobs[job_id] = {"status": "running", "completed": 0, "total": 0, "rows": [], "headers": []}
+        _reference_jobs[job_id] = {"status": "running", "completed": 0, "total": 0, "rows": [], "headers": [],
+                                   "phase": "downloading" if download else "preparing"}
         _reference_last_activity[job_id] = time.time()
 
     def work():
         def heartbeat():
             if job_id in _reference_cancelled or time.time() - _reference_last_activity.get(job_id, 0) > RUN_ABANDON_TIMEOUT_SEC:
                 raise _ReferenceStopSignal()
+        def progress(completed, total):
+            heartbeat()
+            with _reference_jobs_lock:
+                _reference_jobs[job_id].update(downloaded_bytes=completed, download_total_bytes=total)
         try:
             heartbeat()
             with _client() as client:
+                if download:
+                    download_dataset(client, filename, heartbeat, progress)
+                with _reference_jobs_lock:
+                    _reference_jobs[job_id]['phase'] = 'preparing'
                 schema = describe_snapshot_fields(source, body, client, heartbeat)
             heartbeat()
             with _reference_jobs_lock:
-                _reference_jobs[job_id].update(status="done", schema=schema)
+                _reference_jobs[job_id].update(status="done", schema=schema, download=dataset_status(filename))
         except _ReferenceStopSignal:
             with _reference_jobs_lock:
                 _reference_jobs[job_id]["status"] = "cancelled"
@@ -2977,6 +2990,50 @@ def reference_import_schema(source: str, body: dict[str, Any] = Body(default_fac
 
     threading.Thread(target=work, daemon=True).start()
     return JSONResponse(status_code=202, content={"job_id": job_id})
+
+
+@app.post("/api/reference/import/sources/{source}/schema")
+def reference_import_schema(source: str, body: dict[str, Any] = Body(default_factory=dict)):
+    return _start_snapshot_job(source, body)
+
+
+@app.post("/api/reference/import/sources/{source}/download")
+def reference_import_download(source: str, body: dict[str, Any] = Body(default_factory=dict)):
+    return _start_snapshot_job(source, body, download=True)
+
+
+@app.get("/api/reference/import/downloads")
+def reference_import_downloads(source: str | None = None):
+    from database_availability import data_lake_enabled
+    if not data_lake_enabled():
+        raise HTTPException(status_code=404, detail="Dataset downloads are available in the desktop app.")
+    from biomni_data_lake import GROUPS
+    from biomni_downloads import cache_directory, dataset_status
+    if source is not None and source not in GROUPS:
+        raise HTTPException(status_code=404, detail="Unknown snapshot source")
+    files = [{**dataset_status(name), 'source': key, 'label': group['label']}
+             for key, group in GROUPS.items() if source is None or source == key for name in group['files']]
+    return {'directory': str(cache_directory()), 'files': files}
+
+
+@app.delete("/api/reference/import/downloads/{filename}")
+def reference_import_delete_download(filename: str):
+    from database_availability import data_lake_enabled
+    if not data_lake_enabled():
+        raise HTTPException(status_code=404, detail="Dataset downloads are available in the desktop app.")
+    from biomni_downloads import delete_download
+    from biomni_data_lake import _SCHEMAS
+    try:
+        result = delete_download(filename)
+        for key in list(_SCHEMAS):
+            if key[0] == filename: _SCHEMAS.pop(key, None)
+        return result
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except OSError as error:
+        raise HTTPException(status_code=409, detail="The file could not be removed. Close other apps using it and try again.") from error
 
 
 @app.get("/api/reference/import/coverage")

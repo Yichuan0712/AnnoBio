@@ -59,6 +59,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   showPickPythonDialog: () => ipcRenderer.invoke('dialog:pick-python'),
   writeFile: (filePath, data, encoding) => ipcRenderer.invoke('fs:write-file', filePath, data, encoding),
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
+  openDatasetDownloadsFolder: () => ipcRenderer.invoke('datasets:open-downloads-folder'),
   getBackendLog: () => ipcRenderer.invoke('backend-log:get'),
   reportRendererError: (entry) => ipcRenderer.invoke('backend-log:renderer-error', entry),
   /** Calls `callback(lines)` with each batch of new backend output; returns an unsubscribe function. */

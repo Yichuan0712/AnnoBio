@@ -10,7 +10,7 @@ from itertools import chain, islice
 import os
 from pathlib import Path
 
-from biomni_data_lake import FILES, iter_dataset_rows
+from biomni_data_lake import FILES, iter_dataset_rows, download_dataset
 from database_importers import _cell
 from reference_import import _client
 
@@ -25,6 +25,7 @@ def prepare(filename, destination):
     count = 0
     try:
         with _client() as client:
+            download_dataset(client, filename)
             rows = iter_dataset_rows(client, filename)
             first = next(rows)
             schema = pa.schema([(str(key), pa.string()) for key in first])

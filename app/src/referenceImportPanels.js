@@ -1,5 +1,6 @@
 import { availableReferenceDatabases } from './databaseCatalog.js';
 import { allowedExternalUrl, attachExternalBrowserLink } from './externalLinks.js';
+import { mountSnapshotDownload, SNAPSHOT_ROW_LIMIT } from './datasetDownloads.js';
 
 /**
  * Database-specific import forms share the backend job runner and column registry.
@@ -31,8 +32,9 @@ export function referenceImportPanelsHtml() {
         <h3 class="dataset-import-title">Import from ${escapeHtml(tab.label)}</h3>
         <p class="dataset-sheet-hint">${escapeHtml(tab.hint)}</p>
         <div class="reference-import-options"></div>
-        <label class="dataset-meta-label" for="${tab.source}-ids">${escapeHtml(tab.idLabel)}</label>
-        <textarea id="${tab.source}-ids" class="dataset-meta-input dataset-meta-textarea reference-import-ids" rows="6" placeholder="${escapeHtml(tab.placeholder).replaceAll('\n', '&#10;')}"></textarea>
+        <div class="reference-import-configuration" ${tab.kind === 'snapshot' ? 'hidden' : ''}>
+        ${tab.kind === 'snapshot' ? '' : `<label class="dataset-meta-label" for="${tab.source}-ids">${escapeHtml(tab.idLabel)}</label>
+        <textarea id="${tab.source}-ids" class="dataset-meta-input dataset-meta-textarea reference-import-ids" rows="6" placeholder="${escapeHtml(tab.placeholder).replaceAll('\n', '&#10;')}"></textarea>`}
         <div class="reference-import-fields">
           <div class="dataset-meta-label">Columns to import</div>
           <div class="reference-import-checkboxes"><span class="dataset-filename">Loading columns…</span></div>
@@ -40,6 +42,7 @@ export function referenceImportPanelsHtml() {
         <div class="dataset-import-actions">
           <button type="button" class="btn btn-secondary reference-import-fetch-btn">Fetch from ${escapeHtml(tab.label)}</button>
           <span class="dataset-filename reference-import-fetch-status" aria-live="polite"></span>
+        </div>
         </div>
       </div>
     </div>`).join('');
@@ -53,6 +56,8 @@ export function referenceImportPanelsHtml() {
  */
 export function mountReferenceImports(overlay, { apiBase, onRows, onReset = () => {}, showError, hideError, setRunning }) {
   const jobs = new Map();
+  const snapshots = new Map();
+  let closed = false;
   const schemas = new Map();
   const selections = new Map();
   const panelOf = (source) => overlay.querySelector(`[data-source-panel="${source}"]`);
@@ -86,11 +91,23 @@ export function mountReferenceImports(overlay, { apiBase, onRows, onReset = () =
     draw();
   };
   const readOptions = (panel) => Object.fromEntries([...panel.querySelectorAll('[data-reference-option]')].map((input) => [input.dataset.referenceOption, input.value]));
-  const formatBytes = (bytes) => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(2)} GB` : `${(bytes / 1e6).toFixed(2)} MB`;
+  const refreshDownloads = () => {
+    if (closed || document.hidden) return;
+    snapshots.forEach((snapshot) => { void snapshot.refresh(); });
+  };
+  const hasSnapshots = REFERENCE_IMPORT_TABS.some((tab) => tab.kind === 'snapshot');
+  const timer = hasSnapshots ? setInterval(refreshDownloads, 5000) : null;
+  const observer = hasSnapshots ? new MutationObserver(refreshDownloads) : null;
+  observer?.observe(overlay.querySelector('.modal-panel--dataset'), { attributes: true, attributeFilter: ['data-dataset-source'] });
+  if (hasSnapshots) {
+    window.addEventListener('focus', refreshDownloads);
+    document.addEventListener('visibilitychange', refreshDownloads);
+  }
 
   fetch(`${apiBase}/api/reference/import/sources`)
     .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
     .then((sources) => {
+      if (closed) return;
       for (const tab of REFERENCE_IMPORT_TABS) {
         const info = sources[tab.source];
         const panel = panelOf(tab.source);
@@ -98,6 +115,7 @@ export function mountReferenceImports(overlay, { apiBase, onRows, onReset = () =
         if (!box) continue;
         if (!info) {
           box.textContent = 'This source is unavailable on the connected backend. Update the backend to use it.';
+          if (tab.kind === 'snapshot') panel.querySelector('.reference-import-options').textContent = box.textContent;
           panel.querySelector('.reference-import-fetch-btn').disabled = true;
           continue;
         }
@@ -114,66 +132,38 @@ export function mountReferenceImports(overlay, { apiBase, onRows, onReset = () =
           renderFields(panel, info);
           continue;
         }
-        options.innerHTML = `<label class="dataset-meta-label">Dataset file<select class="dataset-meta-input" data-reference-option="dataset">${info.datasets.map((file) => `<option value="${escapeHtml(file.name)}">${escapeHtml(file.name)} (${formatBytes(file.bytes)})</option>`).join('')}</select></label>
-          <p class="dataset-sheet-hint reference-dataset-description"></p>
-          <button type="button" class="btn btn-secondary reference-load-columns">Load columns</button>
-          <label class="dataset-meta-label">Maximum rows<input class="dataset-meta-input" type="number" min="1" max="2000" value="100" data-reference-option="limit" /></label>
-          <label class="dataset-meta-label">Filter column (optional)<select class="dataset-meta-input" data-reference-option="filter_column"><option value="">No filter</option></select></label>`;
-        const select = options.querySelector('[data-reference-option="dataset"]');
-        const load = options.querySelector('.reference-load-columns');
-        const updateFile = (event) => {
-          cancel(tab.source);
-          schemas.delete(tab.source);
-          if (event) onReset();
-          const file = info.datasets.find((item) => item.name === select.value);
-          options.querySelector('.reference-dataset-description').textContent = `${file.description} ${file.name.endsWith('.pkl') ? 'This format requires a full download and enough server memory to read the file. It is cached after the first download.' : 'Rows are read on demand.'}`;
-          box.textContent = 'Load columns for the selected file.';
-          panel.querySelector('.reference-import-fetch-btn').disabled = true;
-          options.querySelector('[data-reference-option="filter_column"]').innerHTML = '<option value="">No filter</option>';
-          setStatus(tab.source, '');
-        };
-        select.addEventListener('change', updateFile);
-        load.addEventListener('click', async () => {
-          hideError();
-          cancel(tab.source);
-          onReset();
-          const pending = { jobId: null, timer: null, schema: true };
-          jobs.set(tab.source, pending);
-          load.disabled = true;
-          setStatus(tab.source, 'Reading dataset columns…');
-          try {
-            const response = await fetch(`${apiBase}/api/reference/import/sources/${tab.source}/schema`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dataset: select.value }) });
-            const data = await response.json();
-            if (jobs.get(tab.source) !== pending) {
-              if (data.job_id) fetch(`${apiBase}/api/${tab.source}/import/cancel/${data.job_id}`, { method: 'POST' }).catch(() => {});
-              return;
-            }
-            if (!response.ok) throw new Error(data.detail || 'Could not read columns.');
-            pending.jobId = data.job_id;
-            void poll(tab, data.job_id);
-          } catch (error) {
-            if (jobs.get(tab.source) !== pending) return;
-            finish(tab.source, false);
-            showError(error.message);
-            setStatus(tab.source, '');
-          }
-        });
-        updateFile();
+        snapshots.set(tab.source, mountSnapshotDownload(panel, info, {
+          apiBase, setRunning, showError, hideError,
+          isImportRunning: () => jobs.has(tab.source),
+          onInvalidate() {
+            schemas.delete(tab.source);
+            selections.delete(tab.source);
+            cancelImport(tab.source);
+            if (panel.classList.contains('dataset-source-panel--active')) onReset();
+          },
+          onSchema(schema) {
+            schemas.set(tab.source, schema);
+            renderFields(panel, schema);
+          },
+        }));
+        void snapshots.get(tab.source).refresh();
       }
     })
     .catch((error) => {
+      if (closed) return;
       overlay.querySelectorAll('.reference-import-checkboxes').forEach((box) => {
         box.innerHTML = `<span class="dataset-filename">Could not load columns: ${escapeHtml(error?.message || error)}</span>`;
       });
+      for (const tab of REFERENCE_IMPORT_TABS.filter((item) => item.kind === 'snapshot')) {
+        panelOf(tab.source).querySelector('.reference-import-options').textContent = `Could not load dataset information: ${error?.message || error}`;
+      }
     });
 
   function finish(source, running) {
     jobs.delete(source);
     setRunning(running);
     const panel = panelOf(source);
-    panel.querySelector('.reference-import-fetch-btn').disabled = running || (panel.querySelector('.reference-load-columns') && !schemas.has(source));
-    const load = panel.querySelector('.reference-load-columns');
-    if (load) load.disabled = running;
+    panel.querySelector('.reference-import-fetch-btn').disabled = running || (snapshots.has(source) && !schemas.has(source));
   }
 
   async function poll(tab, jobId) {
@@ -189,17 +179,9 @@ export function mountReferenceImports(overlay, { apiBase, onRows, onReset = () =
         jobs.get(source).timer = setTimeout(() => poll(tab, jobId), POLL_INTERVAL_MS);
         return;
       }
-      if (data.schema && data.status !== 'cancelled') {
-        schemas.set(source, data.schema);
-        const panel = panelOf(source);
-        renderFields(panel, data.schema);
-        panel.querySelector('[data-reference-option="filter_column"]').innerHTML = '<option value="">No filter</option>' + data.schema.filter_columns.map((key) => `<option value="${escapeHtml(key)}">${escapeHtml(key)}</option>`).join('');
-        finish(source, false);
-        setStatus(source, 'Columns loaded. Choose columns and fetch rows.');
-        return;
-      }
-      finish(source, false);
+
       if (data.error) {
+        finish(source, false);
         showError(`${tab.label} import failed: ${data.error}`);
         setStatus(source, '');
         return;
@@ -209,12 +191,22 @@ export function mountReferenceImports(overlay, { apiBase, onRows, onReset = () =
       const total = data.total ?? rows.length;
       const idWord = (count) => `${tab.idNoun}${count === 1 ? '' : 's'}`;
       if (rows.length === 0) {
+        finish(source, false);
         setStatus(source, data.status === 'cancelled' ? 'Cancelled.' : `0/${total} ${idWord(total)} fetched`);
         if (data.status !== 'cancelled' && notFound.length > 0) showError(`None of the ${notFound.length} ${idWord(notFound.length)} were found on ${tab.label}.`);
         return;
       }
-      onRows(data.headers || [], rows);
-      setStatus(source, `${rows.length}/${plural(total, tab.noun)} fetched${data.status === 'cancelled' ? ' (cancelled early)' : ''}`);
+      if (snapshots.has(source) && !await snapshots.get(source).checkReady()) {
+        if (jobs.get(source)?.jobId === jobId) { finish(source, false); setStatus(source, ''); }
+        return;
+      }
+      if (jobs.get(source)?.jobId !== jobId) return;
+      if (closed || !panelOf(source).classList.contains('dataset-source-panel--active')) return;
+      finish(source, false);
+      onRows(data.headers || [], rows, { truncated: tab.kind === 'snapshot' && data.truncated === true });
+      setStatus(source, data.truncated
+        ? `Imported the first ${rows.length.toLocaleString('en-US')} rows. The remaining rows were not imported.`
+        : `${rows.length}/${plural(total, tab.noun)} fetched${data.status === 'cancelled' ? ' (cancelled early)' : ''}`);
       if (notFound.length > 0) {
         showError(`${notFound.length} ${idWord(notFound.length)} not found on ${tab.label} and skipped: ${notFound.join(', ')}`);
       }
@@ -231,12 +223,17 @@ export function mountReferenceImports(overlay, { apiBase, onRows, onReset = () =
     const button = panel?.querySelector('.reference-import-fetch-btn');
     button?.addEventListener('click', async () => {
       hideError();
+      if (snapshots.has(tab.source)) {
+        button.disabled = true;
+        if (!await snapshots.get(tab.source).checkReady()) return;
+        button.disabled = false;
+      }
       const fields = [...(selections.get(tab.source) || [])];
       if (!fields.length) {
         showError(`Pick at least one column to import from ${tab.label}.`);
         return;
       }
-      const ids = parseReferenceIds(panel.querySelector('.reference-import-ids').value, tab);
+      const ids = tab.kind === 'snapshot' ? [] : parseReferenceIds(panel.querySelector('.reference-import-ids').value, tab);
       if (!ids.length && tab.kind !== 'snapshot') {
         showError(`Paste at least one ${tab.idNoun}.`);
         return;
@@ -251,7 +248,7 @@ export function mountReferenceImports(overlay, { apiBase, onRows, onReset = () =
         const res = await fetch(`${apiBase}/api/${tab.source}/import`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ids, fields, options: readOptions(panel) }),
+          body: JSON.stringify({ ids, fields, options: tab.kind === 'snapshot' ? { ...readOptions(panel), limit: SNAPSHOT_ROW_LIMIT } : readOptions(panel) }),
         });
         const data = await res.json().catch(() => ({}));
         if (jobs.get(tab.source) !== pending) {
@@ -276,7 +273,7 @@ export function mountReferenceImports(overlay, { apiBase, onRows, onReset = () =
     });
   }
 
-  function cancel(source) {
+  function cancelImport(source) {
     const job = jobs.get(source);
     if (!job) return;
     clearTimeout(job.timer);
@@ -284,9 +281,21 @@ export function mountReferenceImports(overlay, { apiBase, onRows, onReset = () =
     finish(source, false);
   }
 
+  function cancel(source) {
+    cancelImport(source);
+    snapshots.get(source)?.cancel();
+  }
   return {
     cancel,
-    cancelAll() { [...jobs.keys()].forEach(cancel); },
+    cancelAll() {
+      closed = true;
+      clearInterval(timer);
+      observer?.disconnect();
+      window.removeEventListener('focus', refreshDownloads);
+      document.removeEventListener('visibilitychange', refreshDownloads);
+      [...jobs.keys()].forEach(cancelImport);
+      snapshots.forEach((snapshot) => snapshot.destroy());
+    },
     resetStatus() {
       REFERENCE_IMPORT_TABS.forEach((tab) => setStatus(tab.source, ''));
     },

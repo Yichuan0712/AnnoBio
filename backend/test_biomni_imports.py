@@ -182,7 +182,7 @@ class BiomniTableTest(unittest.TestCase):
         self.assertEqual(rows, [{'id': '1'}])
         with self.assertRaisesRegex(ValueError, 'filter column'):
             lake.fetch_snapshot_records('lake_evebio', ['caffeine'], ['id'], {'dataset': name}, self.client)
-        for value in (0, 2001):
+        for value in (0, 5001):
             with self.assertRaises(ValueError):
                 lake.fetch_snapshot_records('lake_evebio', [], ['id'], {'dataset': name, 'limit': value}, self.client)
 
@@ -208,6 +208,7 @@ class BiomniTableTest(unittest.TestCase):
             start, end = map(int, request.headers['range'].removeprefix('bytes=').split('-'))
             return httpx.Response(206, content=payload[start:end+1], headers={'Content-Range': f'bytes {start}-{end}/{len(payload)}', 'ETag': '"fixture"'})
         with mock.patch.dict(lake.FILES, {name: metadata}), httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            lake.download_dataset(client, name)
             self.assertEqual(next(lake.iter_dataset_rows(client, name))['gene'], 'TP53')
         with httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, content=payload))) as client:
             with self.assertRaisesRegex(ValueError, 'byte range'):
@@ -249,6 +250,7 @@ class BiomniTableTest(unittest.TestCase):
             requests.append(request)
             return httpx.Response(206, content=payload, headers={'Content-Range': f'bytes 0-{len(payload)-1}/{len(payload)}', 'ETag': '"fixture"'})
         with mock.patch.dict(lake.FILES, {name: {'bytes': len(payload), 'etag': 'fixture'}}), httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            lake.download_dataset(client, name)
             self.assertEqual(next(lake.iter_dataset_rows(client, name)), {'row': 0, 'value': 'CCC'})
             self.assertEqual(next(lake.iter_dataset_rows(client, name)), {'row': 0, 'value': 'CCC'})
         self.assertEqual(len(requests), 1)

@@ -326,6 +326,7 @@ def fetch_records(
     fields: list[str],
     on_batch: Callable[[list[dict[str, str]], list[str], int, int], None] | None = None,
     options: dict[str, Any] | None = None,
+    on_metadata: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[dict[str, str]]:
     """
     Fetch `fields` for `ids` from `source`, in the requested order and without duplicates. Ids that are
@@ -338,7 +339,7 @@ def fetch_records(
         require_data_lake()
         from biomni_data_lake import fetch_snapshot_records
         with _client() as client:
-            return fetch_snapshot_records(source, ids, fields, options or {}, client, on_batch)
+            return fetch_snapshot_records(source, ids, fields, options or {}, client, on_batch, on_metadata)
     keyed = [(token, importer["key"](token)) for token in ids if str(token).strip()]
     keys = list(dict.fromkeys(key for _, key in keyed if key))[:MAX_IDS]
     invalid = list(dict.fromkeys(token.strip() for token, key in keyed if not key))

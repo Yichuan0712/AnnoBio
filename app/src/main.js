@@ -346,6 +346,10 @@ function getBackendCwd() {
   return path.join(getRepoRoot(), 'backend');
 }
 
+function getDatasetDownloadsDirectory() {
+  return path.resolve(process.env.ANNOBIO_BIOMNI_CACHE_DIR || path.join(getBackendCwd(), 'data', 'biomni-cache'));
+}
+
 function getAgentSessionsDir() {
   return path.join(getBackendCwd(), 'data', 'agent_sessions');
 }
@@ -508,6 +512,7 @@ function startPythonBackendInner() {
     env: {
       ...process.env,
       PROMPT_STUDIO_ASSET_TOKEN: assetToken,
+      ANNOBIO_BIOMNI_CACHE_DIR: getDatasetDownloadsDirectory(),
       PYTHONUNBUFFERED: '1',
       PYTHONUTF8: '1',
       PYTHONIOENCODING: 'utf-8',
@@ -757,6 +762,13 @@ ipcMain.handle('shell:open-external', async (_e, url) => {
   if (!allowed) return { error: 'This external link is not supported.' };
   await shell.openExternal(allowed);
   return { ok: true };
+});
+
+ipcMain.handle('datasets:open-downloads-folder', async () => {
+  const directory = getDatasetDownloadsDirectory();
+  await fs.mkdir(directory, { recursive: true });
+  const error = await shell.openPath(directory);
+  return error ? { error } : { ok: true };
 });
 
 ipcMain.handle('window:minimize', (event) => {
