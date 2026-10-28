@@ -295,7 +295,7 @@ const FOLDER_TOOLS = [
     attachment_id: FOLDER_ID, pattern: { type: 'string' }, path: { type: 'string' },
     max_files: { type: 'integer', minimum: 1, maximum: 30 }, max_chars_per_file: { type: 'integer', minimum: 1, maximum: 12000 }, cursor: { type: 'string' },
   }, ['attachment_id', 'pattern']),
-  tool(REQUEST_FOLDER_ACCESS_TOOL, 'Ask permission to read a local folder the user has not provided. Shows Allow / Deny; never grants access until Allow. User-written paths are already authorized on Send; use their folder ids directly. No access to disk roots, home root or system folders.', {
+  tool(REQUEST_FOLDER_ACCESS_TOOL, 'Ask permission to read a local folder the user has not provided. Shows Allow / Deny; never grants access until Allow. User-written paths are already authorized on Send; use their folder ids directly. Do not request a parent folder to work around an unsupported file, read error, size limit or revoked access; explain the file error instead. No access to disk roots, home root or system folders.', {
     path: { type: 'string' }, reason: { type: 'string' },
   }, ['path', 'reason']),
 ];

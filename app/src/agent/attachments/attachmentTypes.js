@@ -7,7 +7,7 @@
 const MB = 1024 * 1024;
 
 const EXTENSIONS = {
-  table: ['csv', 'tsv', 'xlsx', 'xls', 'json', 'jsonl', 'ndjson'],
+  table: ['csv', 'tsv', 'xlsx', 'xls', 'xlsm', 'json', 'jsonl', 'ndjson'],
   image: ['png', 'jpg', 'jpeg', 'webp'],
   pdf: ['pdf'],
   text: [
@@ -109,6 +109,7 @@ export function normalizeStoredAttachments(list) {
       kind: item.kind === 'folder' ? 'folder' : attachmentKind(item.name) || String(item.kind || ''),
       size: Number(item.size) || 0,
       ...(item.grantId ? { grantId: String(item.grantId) } : {}),
+      ...(['file', 'folder'].includes(item.pathType) ? { pathType: item.pathType } : {}),
       ...(item.relativePath ? { relativePath: String(item.relativePath) } : {}),
       ...(item.revoked ? { revoked: true } : {}),
       ...(item.error ? { error: String(item.error) } : {}),

@@ -1,7 +1,7 @@
 /**
  * "Add a new dataset" modal: two steps.
  * Step 1: Name & description.
- * Step 2: choose a data source -- upload CSV/TSV/XLSX, import from PubMed, ClinicalTrials.gov,
+ * Step 2: choose a data source -- upload CSV/TSV/Excel, import from PubMed, ClinicalTrials.gov,
  * bioRxiv/medRxiv or ChEMBL -- then preview.
  */
 
@@ -170,7 +170,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
                     <h3 class="dataset-import-title">Upload a table</h3>
                     <p class="dataset-sheet-hint">Import rows from CSV, TSV, Excel, JSON or JSONL on your computer. Each column becomes a text column you can retype as Image afterward.</p>
                     <div class="dataset-import-actions">
-                      <input type="file" id="dataset-file-input" accept=".csv,.tsv,.xlsx,.xls,.json,.jsonl,.ndjson,text/csv,text/tab-separated-values,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" hidden />
+                      <input type="file" id="dataset-file-input" accept=".csv,.tsv,.xlsx,.xls,.xlsm,.json,.jsonl,.ndjson,text/csv,text/tab-separated-values,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/vnd.ms-excel.sheet.macroEnabled.12" hidden />
                       <button type="button" class="btn btn-secondary dataset-import-btn">Choose table file</button>
                       <span class="dataset-filename" aria-live="polite"></span>
                     </div>
@@ -401,7 +401,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
 
   function setFileInfo(file, format, numColumns, numRows, headers) {
     if (!fileInfoEl) return;
-    const delimiter = format === 'TSV' ? 'Tab' : (format === 'XLSX' ? '—' : 'Comma');
+    const delimiter = format === 'TSV' ? 'Tab' : format === 'CSV' ? 'Comma' : '—';
     const headersLabel = (headers || []).map((h) => escapeHtml(String(h))).join(', ');
     fileInfoEl.className = 'dataset-file-info dataset-file-info--filled';
     fileInfoEl.innerHTML = `
@@ -471,7 +471,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
     const { headers, rows: allRows } = parsed;
     fileImported = true;
     parsedDatasetContent = { headers, rows: allRows };
-    setFileInfo(file, 'XLSX', headers.length, allRows.length, headers);
+    setFileInfo(file, file.name.split('.').pop().toUpperCase(), headers.length, allRows.length, headers);
     const previewRows = allRows.slice(0, MAX_PREVIEW_ROWS);
     renderPreviewTable(headers, previewRows, allRows.length);
   }
@@ -1126,7 +1126,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
     const name = file.name.toLowerCase();
     const isCsv = name.endsWith('.csv');
     const isTsv = name.endsWith('.tsv');
-    const isXlsx = name.endsWith('.xlsx') || name.endsWith('.xls');
+    const isXlsx = /\.(?:xlsx|xls|xlsm)$/.test(name);
     const isJson = /\.(?:json|jsonl|ndjson)$/.test(name);
     if (!isCsv && !isTsv && !isXlsx && !isJson) {
       fileImported = false;
@@ -1172,8 +1172,8 @@ export function openAddDatasetModal(workflowCanvasApi) {
           fileImported = false;
           parsedDatasetContent = null;
           xlsxWorkbook = null;
-          setFileInfoPlaceholder('Failed to parse XLSX.');
-          previewEl.textContent = 'Failed to parse XLSX.';
+          setFileInfoPlaceholder('Failed to parse Excel workbook.');
+          previewEl.textContent = 'Failed to parse Excel workbook.';
           previewEl.classList.add('prompt-preview--empty');
         }
       };

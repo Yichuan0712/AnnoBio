@@ -293,11 +293,17 @@ export function createFolderAccessStore(storagePath, { home = os.homedir(), impo
             if (await tooBroad(real)) { results.push({ name: candidate, path: candidate, error: 'Not readable: too broad — name a subfolder' }); break; }
             const stat = await fs.stat(real);
             if (!stat.isDirectory() && !stat.isFile()) throw new Error('Only regular files and folders can be authorized.');
-            if (stat.isFile()) await targetKindCheck(real, stat);
+            if (stat.isFile()) {
+              try { await targetKindCheck(real, stat); }
+              catch (error) {
+                results.push({ name: path.basename(real), path: real, pathType: 'file', kind: attachmentKind(real) || 'unsupported', error: error.message });
+                break;
+              }
+            }
             const record = { id: randomUUID(), conversationId: conversation, path: real, type: stat.isDirectory() ? 'folder' : 'file', grantedAt: Date.now() };
             (await load()).grants.push(record);
             await save();
-            results.push({ grantId: record.id, path: real, name: path.basename(real), kind: stat.isDirectory() ? 'folder' : attachmentKind(real) || 'text', size: stat.size });
+            results.push({ grantId: record.id, path: real, pathType: record.type, name: path.basename(real), kind: stat.isDirectory() ? 'folder' : attachmentKind(real) || 'text', size: stat.size });
             break;
           } catch (error) {
             if (error.code === 'ENOENT' || error.code === 'ENOTDIR') continue;

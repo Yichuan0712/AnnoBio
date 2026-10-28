@@ -840,7 +840,8 @@ export function mountAgentChatSession({
     let fileNumber = nextAttachmentNumber(conversation);
     let folderNumber = nextAttachmentNumber(conversation, 'f');
     for (const result of results) {
-      existing.push({ ...result, kind: result.kind || 'folder', id: result.kind === 'folder' || result.error ? `f${folderNumber++}` : `a${fileNumber++}` });
+      const kind = result.kind || (result.pathType === 'file' ? 'unsupported' : 'folder');
+      existing.push({ ...result, kind, id: kind === 'folder' ? `f${folderNumber++}` : `a${fileNumber++}` });
     }
     notifyConversationUpdated(conversation);
     scheduleRender(conversation);
@@ -1286,13 +1287,11 @@ export function mountAgentChatSession({
     if (request?.kind !== 'folder') return;
     await runTurn(conversation, {
       baseline: messages.length, restoreText,
-      prelude: async ({ turn }) => {
+      prelude: async ({ turn, runtime }) => {
         let result = { status: 'denied', ...(feedback ? { feedback } : {}) };
         if (allow) {
-          const granted = await window.electronAPI.grantAgentPaths(conversation.id, [{ candidates: [request.preview.path], exact: true }]);
-          const item = Array.isArray(granted) ? granted[0] : null;
-          if (!item?.grantId || item.error) result = { status: 'failed', error: item?.error || granted?.error || 'The folder is no longer available.' };
-          else result = { status: 'allowed', attachment: { ...item, id: `f${nextAttachmentNumber(conversation, 'f')}` } };
+          result = await runtime.grantFolderAccess(request.request, request.preview.path);
+          if (result.status === 'allowed') result.attachment.id = `f${nextAttachmentNumber(conversation, 'f')}`;
         }
         resolveFolderAccess(messages, request, result);
         if (!allow && feedback) await authorizeReplyPaths(conversation, feedback);

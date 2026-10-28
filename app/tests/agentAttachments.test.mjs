@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as XLSX from 'xlsx';
 import { parseDelimitedText, parseWorkbookSheet, readWorkbook } from '../src/datasetFileParsing.js';
-import { attachmentKind, attachmentProblem, looksLikeText, normalizeStoredAttachments } from '../src/agent/attachments/attachmentTypes.js';
-import { attachmentsMessageText, readAttachmentWindow } from '../src/agent/attachments/attachmentContent.js';
+import { attachmentDialogFilters, attachmentKind, attachmentProblem, looksLikeText, normalizeStoredAttachments } from '../src/agent/attachments/attachmentTypes.js';
+import { attachmentsMessageText, parseTableAttachment, readAttachmentWindow } from '../src/agent/attachments/attachmentContent.js';
 import { toApiMessages } from '../src/agent/agentLoop.js';
 import { fitHistory } from '../src/agent/historyBudget.js';
 import { AGENT_TOOL_DEFINITIONS, agentToolDefinitions } from '../src/agent/tools/agentTools.js';
@@ -110,6 +110,23 @@ test('a workbook attachment names its sheets and reads the one asked for', async
   const second = await readAttachmentWindow(attachment, { sheet: 'Second' }, deps);
   assert.equal(second.total_rows, 2);
   assert.match((await readAttachmentWindow(attachment, { sheet: 'Nope' }, deps)).error, /No sheet named "Nope"/);
+});
+
+test('XLSM attachments parse real workbook sheets without loading the embedded VBA project', async () => {
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['ID', 'Label'], [1, 'AKT1']]), 'First');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Value'], [42]]), 'Second');
+  workbook.vbaraw = Buffer.from('Synthetic VBA project payload');
+  const bytes = new Uint8Array(XLSX.write(workbook, { type: 'array', bookType: 'xlsm' }));
+  assert.ok(XLSX.read(bytes, { type: 'array', bookVBA: true }).vbaraw, 'fixture contains an embedded VBA payload');
+  assert.equal(readWorkbook(bytes).vbaraw, undefined);
+  assert.equal(attachmentKind('0801.XLSM'), 'table');
+  assert.ok(attachmentDialogFilters().find((filter) => filter.name === 'Tables').extensions.includes('xlsm'));
+  const item = { id: 'a1', name: '0801.xlsm', path: 'C:/0801.xlsm', kind: attachmentKind('0801.xlsm') };
+  const preview = await readAttachmentWindow(item, {}, depsFor({ 'C:/0801.xlsm': bytes }));
+  assert.deepEqual(preview.sheets, ['First', 'Second']);
+  assert.deepEqual(preview.rows[0], { row: 1, ID: '1', Label: 'AKT1' });
+  assert.deepEqual(parseTableAttachment(item.name, bytes, 'Second').rows, [['42']]);
 });
 
 test('text, PDF and image attachments, and a file that is gone', async () => {

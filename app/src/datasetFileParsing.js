@@ -1,5 +1,5 @@
 /**
- * Reads the tables Create Dataset accepts (.csv, .tsv, .xlsx, .xls) into {headers, rows}. The Agent's
+ * Reads the tables Create Dataset accepts (CSV/TSV/Excel/JSON/JSONL) into {headers, rows}. The Agent's
  * chat attachments use the same rules, so a table it imports matches one the user would import
  * (docs/design/AGENT_ATTACHMENTS_PLAN.md).
  */
@@ -105,7 +105,8 @@ export function parseDelimitedText(text, { tsv = false } = {}) {
 }
 
 export function readWorkbook(bytes) {
-  return XLSX.read(bytes, { type: 'array' });
+  // Read sheet data only, including macro-enabled workbooks; never load VBA projects.
+  return XLSX.read(bytes, { type: 'array', bookVBA: false });
 }
 
 /**

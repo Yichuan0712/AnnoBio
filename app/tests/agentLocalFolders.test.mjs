@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import * as XLSX from 'xlsx';
 import { fileURLToPath } from 'node:url';
 import { createFolderAccessStore, fileImportance, globMatcher, isTooBroad, listFolder, resolveInside } from '../src/agent/attachments/folderAccess.js';
 import { findPathCandidates } from '../src/agent/attachments/pathMentions.js';
@@ -10,7 +11,7 @@ import { parseJsonRecords } from '../src/datasetFileParsing.js';
 import { readAttachmentWindow } from '../src/agent/attachments/attachmentContent.js';
 import { agentToolDefinitions } from '../src/agent/tools/agentTools.js';
 import { findPendingInteraction, resolveFolderAccess, runAgentLoop, toApiMessages } from '../src/agent/agentLoop.js';
-import { createLocalFolderRuntime } from '../src/agent/attachments/localFolderRuntime.js';
+import { createLocalFolderRuntime, folderAccessRequestError } from '../src/agent/attachments/localFolderRuntime.js';
 import { applyProposal, previewProposal } from '../src/agent/operations/proposals.js';
 import { buildWorkspaceSummary } from '../src/agent/context/workspaceSummary.js';
 
@@ -310,4 +311,85 @@ test('user-typed paths attached to question answers reach the model as previews'
   const sent = toApiMessages(messages);
   assert.match(sent[0].content, /"attachment":"f1"/);
   assert.equal(sent[0].role, 'tool');
+});
+
+test('a local XLSM file can be granted, previewed and imported without requesting its folder', async (t) => {
+  const { root, store } = await fixture(t);
+  const fullPath = path.join(root, '0801.xlsm');
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['ID', 'Label'], ['1', 'AKT1']]), 'Data');
+  await fs.writeFile(fullPath, XLSX.write(workbook, { type: 'buffer', bookType: 'xlsm' }));
+  const [granted] = await store.grant('chat-one', [{ candidates: [fullPath], exact: true }]);
+  assert.equal(granted.kind, 'table');
+  assert.equal(granted.pathType, 'file');
+  const item = { ...granted, id: 'a1' };
+  const runtime = createLocalFolderRuntime({ id: 'chat-one', messages: [{ role: 'user', attachments: [item] }] }, (id) => id === 'a1' ? item : null, {
+    readAgentPathFile: (...args) => store.read(...args),
+    snapshotAgentImport: (...args) => store.snapshot(...args),
+    useAgentImportSnapshot: (...args) => store.useSnapshot(...args),
+    checkAgentFolder: () => { throw new Error('Must not request folder access'); },
+  });
+  const preview = await runtime.readAttachment({ attachment_id: 'a1' });
+  assert.equal(preview.sheet, 'Data');
+  assert.deepEqual(preview.columns, ['ID', 'Label']);
+  const imported = await runtime.resolvePathImports({ attachments: ['a1'] });
+  assert.deepEqual(imported.table.rows, [['1', 'AKT1']]);
+  await assert.rejects(runtime.readAttachment({ attachment_id: fullPath }), /attachment id from a preview/);
+});
+
+test('unsupported paths retain file metadata instead of becoming folder attachments', async (t) => {
+  const { root, store } = await fixture(t);
+  const fullPath = path.join(root, 'unsupported.bin');
+  await fs.writeFile(fullPath, Buffer.from([0, 1, 2, 0]));
+  const [failed] = await store.grant('chat-one', [fullPath]);
+  assert.equal(failed.kind, 'unsupported');
+  assert.equal(failed.pathType, 'file');
+  assert.equal(failed.name, 'unsupported.bin');
+  assert.equal(failed.grantId, undefined);
+  assert.equal(normalizeStoredAttachments([{ ...failed, id: 'a1' }])[0].pathType, 'file');
+});
+
+test('file errors cannot produce broader folder cards or grant from old pending cards', async (t) => {
+  const { root, store } = await fixture(t);
+  const fullPath = path.join(root, '0801.xlsm');
+  let grants = 0;
+  const conversation = { id: 'chat-one', messages: [{ role: 'user', attachments: [
+    { id: 'f1', name: fullPath, path: fullPath, kind: 'folder', error: 'This file type cannot be attached.' },
+  ] }] };
+  const runtime = createLocalFolderRuntime(conversation, () => null, {
+    checkAgentFolder: (...args) => store.check(...args),
+    grantAgentPaths: () => { grants += 1; throw new Error('Must not grant broader access'); },
+  });
+  const request = { path: root, reason: 'The workbook could not be read' };
+  const preview = await runtime.previewFolderAccess(request);
+  assert.equal(preview.ok, false);
+  assert.match(preview.error, /Do not request a parent folder/);
+  const applied = await runtime.grantFolderAccess(request, root);
+  assert.equal(applied.status, 'failed');
+  assert.equal(grants, 0);
+  // Permission to inspect an unrelated project directory still uses the normal card.
+  const unrelated = path.join(root, 'different-project');
+  await fs.mkdir(unrelated);
+  assert.equal((await runtime.previewFolderAccess({ path: unrelated, reason: 'Inspect another project' })).ok, true);
+});
+
+test('parent-folder checks cover failed previews and revoked files with Windows path boundaries', () => {
+  for (const failure of [{ error: 'Unsupported' }, { revoked: true }, { preview: '{"error":"Corrupt workbook"}' }]) {
+    const conversation = { messages: [{ role: 'user', attachments: [{ path: 'C:\\Users\\me\\Documents\\0801.xlsm', kind: 'table', pathType: 'file', ...failure }] }] };
+    assert.match(folderAccessRequestError(conversation, 'c:/users/ME/documents/'), /parent folder/);
+    assert.equal(folderAccessRequestError(conversation, 'C:/Users/me/Documents2'), '');
+    assert.equal(folderAccessRequestError(conversation, 'C:/Users/me/Documents/other'), '');
+  }
+});
+
+test('folder approval rechecks the canonical location before granting legitimate access', async () => {
+  const granted = [];
+  const runtime = createLocalFolderRuntime({ id: 'chat-one', messages: [] }, () => null, {
+    checkAgentFolder: async () => ({ path: 'C:/project', name: 'project' }),
+    grantAgentPaths: async (...args) => { granted.push(args); return [{ grantId: 'g1', path: 'C:/project', kind: 'folder' }]; },
+  });
+  assert.equal((await runtime.grantFolderAccess({ path: 'C:/project' }, 'C:/old-location')).status, 'failed');
+  assert.equal(granted.length, 0);
+  assert.equal((await runtime.grantFolderAccess({ path: 'C:/project' }, 'C:/project')).status, 'allowed');
+  assert.equal(granted.length, 1);
 });

@@ -7,10 +7,35 @@ const checked = (result) => {
   return result;
 };
 
+function pathKey(value) {
+  const normalized = String(value || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  return /^(?:[a-z]:|\/\/)/i.test(normalized) ? normalized.toLowerCase() : normalized;
+}
+
+/** A format/read error is not a permission problem and cannot justify reading a parent folder. */
+export function folderAccessRequestError(conversation, folderPath) {
+  const folder = pathKey(folderPath);
+  if (!folder) return '';
+  for (const message of conversation?.messages || []) {
+    if (!['user', 'tool'].includes(message.role)) continue;
+    for (const item of message.attachments || []) {
+      let readError;
+      try { readError = JSON.parse(item.preview || '{}').error; } catch (_) {}
+      const failed = item.error || item.revoked || readError;
+      // Older rejected paths were mistakenly saved as folder chips, including failed .xlsm files.
+      const file = item.pathType === 'file' || item.kind !== 'folder' || (item.error && /\.[^./\\]+$/.test(item.path || ''));
+      if (failed && file && pathKey(item.path).startsWith(`${folder}/`)) {
+        return 'Do not request a parent folder to work around a file type, read, size or revoked-access error. The user provided a specific file. Read that exact file using its attachment id if available; otherwise explain the file error and ask for a supported copy. The user must explicitly provide the folder path if they want broader access.';
+      }
+    }
+  }
+  return '';
+}
+
 export function createLocalFolderRuntime(conversation, findAttachment, api = window.electronAPI) {
   function attachment(id, folder = false) {
     const found = findAttachment(id);
-    if (!found || found.revoked || found.error) throw new Error(`No readable attachment ${id} in this conversation.`);
+    if (!found || found.revoked || found.error) throw new Error(`No readable attachment ${id} in this conversation. Use an attachment id from a preview, not an absolute path. A file error cannot be fixed by requesting its parent folder.`);
     if (folder && (!found.grantId || found.kind !== 'folder')) throw new Error('Use an authorized folder id, such as f1.');
     return found;
   }
@@ -25,6 +50,15 @@ export function createLocalFolderRuntime(conversation, findAttachment, api = win
     const file = checked(await api.readAgentPathFile(conversation.id, item.grantId, args.path || ''));
     return { ...await readAttachmentWindow({ ...item, name: file.name, kind: file.kind }, args,
       { ...desktopAttachmentDeps, readBytes: async () => new Uint8Array(file.data) }), files_read: file.files_read, file_limit: file.file_limit };
+  }
+  async function previewFolderAccess(request) {
+    try {
+      const result = checked(await api.checkAgentFolder(conversation.id, String(request.path || '')));
+      const problem = folderAccessRequestError(conversation, result.path);
+      if (problem) return { ok: false, error: problem };
+      return { ok: true, path: result.path, items: [{ kind: 'add', type: 'folder', title: `Read ${result.name}`,
+        lines: [result.path, String(request.reason || ''), 'Read-only access for this conversation and its subfolders. File contents are sent to your configured model provider. At most 100 local files can be read.'], nodeIds: [] }] };
+    } catch (error) { return { ok: false, error: error.message }; }
   }
   return {
     readAttachment,
@@ -61,12 +95,16 @@ export function createLocalFolderRuntime(conversation, findAttachment, api = win
         next_cursor: note ? null : position < (Number(args.cursor) || 0) + batch.files.length ? String(position) : batch.next_cursor,
         ...(note ? { note } : {}) };
     },
-    async previewFolderAccess(request) {
-      try {
-        const result = checked(await api.checkAgentFolder(conversation.id, String(request.path || '')));
-        return { ok: true, path: result.path, items: [{ kind: 'add', type: 'folder', title: `Read ${result.name}`,
-          lines: [result.path, String(request.reason || ''), 'Read-only access for this conversation and its subfolders. File contents are sent to your configured model provider. At most 100 local files can be read.'], nodeIds: [] }] };
-      } catch (error) { return { ok: false, error: error.message }; }
+    previewFolderAccess,
+    async grantFolderAccess(request, approvedPath) {
+      // Revalidate old pending cards as well as new ones; never grant from a stale preview alone.
+      const preview = await previewFolderAccess(request);
+      if (!preview.ok) return { status: 'failed', error: preview.error };
+      if (pathKey(preview.path) !== pathKey(approvedPath)) return { status: 'failed', error: 'The folder location changed. Request a new access card.' };
+      const results = await api.grantAgentPaths(conversation.id, [{ candidates: [preview.path], exact: true }]);
+      const item = Array.isArray(results) ? results[0] : null;
+      if (!item?.grantId || item.error) return { status: 'failed', error: item?.error || results?.error || 'The folder is no longer available.' };
+      return { status: 'allowed', attachment: { ...item } };
     },
     async resolveFolderImport(op, { token, store = false } = {}) {
       const folder = attachment(op.folder, true);
