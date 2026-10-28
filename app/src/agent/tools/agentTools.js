@@ -9,6 +9,7 @@ import { nodeTitle, readNodeRows, traceRunRow } from '../canvas/workflowNodeInsp
 import { loadSources } from '../operations/proposals.js';
 import { previewTableRows } from '../execution/runJobs.js';
 import { runProcessCode } from '../../processRunClient.js';
+import { FILTER_OPERATORS, snapshotSchema, sourceJob, sourceOptions } from '../operations/sourceImports.js';
 import { processTrialInputs } from '../canvas/processTrialInputs.js';
 
 const MAX_TOOL_RESULT_CHARS = 24000;
@@ -49,7 +50,7 @@ const NODE_ID = { type: 'string', description: 'Exact node id from the workspace
 const START_ROW = { type: 'integer', minimum: 1, description: '1-based first row. Default 1.' };
 const MAX_ROWS = { type: 'integer', minimum: 1, maximum: 50, description: 'Rows to return, at most 50. Default 5.' };
 
-const PROPOSE_CHANGES_OPS = ['add_dataset', 'duplicate_dataset', 'move_image', 'import_dataset', 'add_sampler', 'sample_dataset', 'add_process', 'duplicate_process', 'add_prompt', 'add_prompt_version', 'add_run', 'add_score', 'save_run_results', 'save_process_output', 'save_score_results', 'apply_review', 'update', 'connect', 'disconnect', 'select_history', 'delete_history', 'remove'];
+const PROPOSE_CHANGES_OPS = ['add_dataset', 'duplicate_dataset', 'move_image', 'download_dataset', 'import_dataset', 'add_sampler', 'sample_dataset', 'add_process', 'duplicate_process', 'add_prompt', 'add_prompt_version', 'add_run', 'add_score', 'save_run_results', 'save_process_output', 'save_score_results', 'apply_review', 'update', 'connect', 'disconnect', 'select_history', 'delete_history', 'remove'];
 
 // Only where the chat takes attachments (the desktop app, docs/design/AGENT_ATTACHMENTS_PLAN.md).
 const IMPORT_ATTACHMENT_OPERATION = '- import_attachment: ref, attachments (ids from the attachment previews, such as ["a1"]), OR folder (authorized folder id f1) + either files (relative paths) or pattern (glob), name?, note?, sheet? (a workbook sheet; default the first). One table attachment, including JSON/JSONL, becomes a text Dataset; a batch of image attachments, or of PDF attachments, becomes a Dataset with a Filename column and an Image (or PDF) column, one row per file, and the files are copied into the project when the proposal is applied. Document, text and code attachments are read-only; read their text and use add_dataset for structured records. Tables, images and PDFs cannot be mixed in one operation. Folder imports freeze the previewed file list and require a new proposal if it changes; at most 500 files / 512 MB.\n';
@@ -66,7 +67,8 @@ Operations ("op" plus the fields listed):
 - add_dataset: ref, name, note?, columns (names, or {name, type: text | image | pdf}), rows (lists of cells, or objects keyed by column). Image/PDF cells reuse existing uploaded asset cells from read_rows; null is an empty cell. It cannot upload new local files or invent asset IDs.
 - duplicate_dataset: ref, dataset, name?, note?, as_version? (default false). Copies the complete table including image/PDF cells. as_version links a new editable version and keeps row identities; an ordinary duplicate is standalone. Neither consumes another Sample pull.
 - move_image: dataset, from_row, from_column, to_row, to_column, image? (1-based image within the source cell, default 1). Moves that image to the end of the target image cell in the same Dataset, removing it from the source, like dragging an image in the table. Row numbers are 1-based; both columns must be image columns and the Dataset must be editable.
-- import_dataset: ref, source (pubmed | clinicaltrials | chembl | preprint | ${REFERENCE_DATABASES.filter((s) => s.kind !== 'snapshot').map((s) => s.source).join(' | ')} | wikipedia), ids, fields (from search_source's importable_fields), name, note?. Records are fetched when applied. Ids: europepmc PMIDs, PMCIDs or PPR ids; openalex W ids or DOIs; uniprot accessions; wikipedia article titles.
+- download_dataset: source and dataset (exact filename from inspect_source, desktop snapshots only). Downloads the shared source file only when the user applies this proposal; does not create a canvas node. Inspect its columns after the download completes before proposing an import.
+- import_dataset: ref, source (pubmed | clinicaltrials | chembl | preprint | ${REFERENCE_DATABASES.filter((s) => s.kind !== 'snapshot').map((s) => s.source).join(' | ')} | wikipedia, or a desktop snapshot source from inspect_source), ids (omit for snapshots), fields (exact keys from inspect_source or search_source), name, note?, options?. Snapshot options: dataset (exact filename), limit (1-5000, default 5000), filters. Other sources accept their inspected connection options and filters when row_filters=true. filters is an array of up to 10 AND conditions: {column, op: equals | not_equals | contains | in | gt | gte | lt | lte | is_empty | not_empty, value?, values? (for in), case_sensitive? (default false)}. Filtering happens before the snapshot row cap. Credentials must be configured outside the conversation. The proposal shows filters; applied nodes preserve source file, filters and any truncation in their descriptions. Records are fetched only when applied. PubMed, ClinicalTrials.gov, ChEMBL and preprint use native search-query filters, not options.filters.
 ${attachments ? IMPORT_ATTACHMENT_OPERATION : ''}- add_sampler: ref (the Sample), dataset_ref? (the sampled Dataset), source (dataset), sampling? (random | random_with_replacement | rows), size + size_unit (rows | percent) for random, rows ("1 3 5-10") for rows, name?, dataset_name?, create_dataset? (default true). With create_dataset false, only adds a configurable Sample node; defaults are random without replacement, 100 percent. Once it has an output Dataset its settings lock.
 - sample_dataset: ref (new Dataset), sampler (an existing Sample), name?, note?. Draws again using its saved settings. Random without replacement consumes unused source rows across pulls and fails when a full pull no longer fits; specified rows and replacement sampling are repeatable. inspect_node reports settingsLocked, outputs and finite progress (completed, total, remaining).
 - add_process: ref, name?, primary_input? (a dataset, run or process: df in the code), primary_branch (only for a process with several branches), code? defining process(df, ...); every other input (a dataset or a step output) is a parameter after df named after its df_<alias> (inspect_node on a process lists them under availableInputs; see the process-code guide). Without primary_input, creates an unconnected Process whose code can be edited before connecting its Data input; default code returns df. Not run until the user runs it.
@@ -106,6 +108,24 @@ ${attachments ? IMPORT_ATTACHMENT_OPERATION : ''}- add_sampler: ref (the Sample)
 }
 
 export const AGENT_TOOL_DEFINITIONS = [
+  tool(
+    'inspect_source',
+    'Discover available database sources (omit source; optionally query by name). With source, inspect its identifier format, connection options, row_filters capability, fields and samples. Desktop snapshots list exact filenames, sizes and real local download status. Select dataset to inspect local columns and up to 10 sample rows, optionally filtered. This never downloads a missing file: propose download_dataset first. column_query searches wide schemas; returned samples are bounded previews, not total match counts. Online samples require explicit ids, not keyword guessing; use search_source to find IDs when searchable. Hosted deployments expose online sources only.',
+    {
+      source: { type: 'string', description: 'Exact source key from the catalog; omit to list sources.' },
+      query: { type: 'string', description: 'Catalog source-name search, only when source is omitted.' },
+      dataset: { type: 'string', description: 'Exact snapshot filename from the source catalog.' },
+      column_query: { type: 'string', description: 'Case-insensitive substring to locate columns in wide schemas.' },
+      fields: { type: 'array', items: { type: 'string' }, maxItems: 12, description: 'Columns in the sample; default first 8 fields.' },
+      ids: { type: 'array', items: { type: 'string' }, maxItems: 20, description: 'Online record IDs for a small sample.' },
+      sample_rows: { type: 'integer', minimum: 0, maximum: 10, description: 'Preview rows, default 5; 0 returns columns only.' },
+      options: { type: 'object', additionalProperties: true, description: 'Non-secret source connection options, such as assembly or program, from the inspected catalog.' },
+      filters: { type: 'array', maxItems: 10, items: { type: 'object', properties: {
+        column: { type: 'string' }, op: { type: 'string', enum: FILTER_OPERATORS },
+        value: { type: ['string', 'number', 'boolean', 'null'] }, values: { type: 'array', maxItems: 100, items: { type: ['string', 'number', 'boolean', 'null'] } }, case_sensitive: { type: 'boolean' },
+      }, required: ['column', 'op'], additionalProperties: false } },
+    },
+  ),
   tool(
     'get_workspace',
     'Rebuild the workspace summary (pipelines and every node with its status). Use it when the canvas may have changed during the conversation, for example after a run finished.',
@@ -248,7 +268,7 @@ Jobs ("kind" plus):
 
 // With no project open (the desktop app, docs/design/AGENT_NO_PROJECT_PLAN.md) there is no canvas
 // to read, change or run, so only these are offered, plus create_project.
-const NO_PROJECT_TOOL_NAMES = new Set(['list_models', 'read_guide', 'search_source', ASK_USER_TOOL, 'read_attachment']);
+const NO_PROJECT_TOOL_NAMES = new Set(['list_models', 'read_guide', 'search_source', 'inspect_source', ASK_USER_TOOL, 'read_attachment']);
 
 // Not in AGENT_TOOL_DEFINITIONS: it is only for when no project is open, and leaving it out keeps the
 // tools sent with a project open unchanged.
@@ -380,6 +400,42 @@ async function searchSource(args) {
   return { ...body, importable_fields: importableFields };
 }
 
+async function inspectSource(args) {
+  const sources = await loadSources({ refresh: true });
+  if (!args.source) {
+    const query = String(args.query || '').toLowerCase();
+    return { sources: Object.entries(sources).filter(([key, source]) => `${key} ${source.label} ${source.category || ''}`.toLowerCase().includes(query)).map(([key, source]) => ({ source: key, label: source.label, kind: source.kind || 'online', searchable: source.searchable, row_filters: source.row_filters, ...(source.datasets ? { files: source.datasets.length } : {}) })) };
+  }
+  let info = sources[args.source];
+  if (!info) return { error: 'This source is not available on the connected backend. Use inspect_source without source to list available sources.' };
+  if (info.kind === 'snapshot') {
+    const status = await getJson(`/api/reference/import/downloads?source=${encodeURIComponent(args.source)}`);
+    if (!args.dataset) return { source: args.source, label: info.label, kind: info.kind, datasets: status.files.map(({ name, bytes, status }) => ({ name, bytes, status })), note: 'Choose dataset; missing files require an approved download_dataset proposal before columns can be inspected.' };
+    if (!info.datasets.some((file) => file.name === args.dataset)) return { error: 'Choose an exact filename listed for this source.' };
+    const schema = await snapshotSchema(args.source, args.dataset);
+    if (schema.needs_download) return { source: args.source, ...schema, next_step: 'Propose download_dataset, then inspect_source again once applied.' };
+    info = { ...info, ...schema };
+  }
+  const query = String(args.column_query || '').toLowerCase();
+  const entries = Object.entries(info.fields).filter(([key, label]) => `${key} ${label}`.toLowerCase().includes(query));
+  const result = { source: args.source, label: info.label, kind: info.kind || 'online', identifier_format: info.id,
+    searchable: info.searchable, row_filters: info.row_filters, connection_options: info.option_fields || [],
+    ...(args.dataset ? { dataset: args.dataset, fingerprint: info.fingerprint } : {}),
+    importable_fields: Object.fromEntries(entries.slice(0, 60)), matching_columns: entries.length,
+    note: 'Use exact field keys; column_query finds more columns. Preview rows do not indicate the total number of matching records.' };
+  const count = Math.min(10, Math.max(0, args.sample_rows ?? 5));
+  if (!count || (info.kind !== 'snapshot' && !args.ids?.length)) return result;
+  const fields = args.fields?.length ? args.fields : entries.slice(0, 8).map(([key]) => key);
+  if (!fields.length || fields.length > 12 || fields.some((field) => !Object.hasOwn(info.fields, field))) return { ...result, error: 'Choose up to 12 exact fields from the schema.' };
+  const options = sourceOptions(info, { ...(args.options || {}), ...(args.dataset ? { dataset: args.dataset, limit: count } : {}), ...(args.filters ? { filters: args.filters } : {}) });
+  const data = await sourceJob(args.source, `/api/${args.source}/import`, { ids: args.ids || [], fields, options });
+  const cellLimit = Math.min(400, Math.floor(14000 / (count * fields.length)));
+  const sample = (data.rows || []).slice(0, count);
+  return { ...result, sample_headers: data.headers, samples: sample.map((row) => row.map((value) => String(value ?? '').slice(0, cellLimit))),
+    cell_text_truncated: sample.some((row) => row.some((value) => String(value ?? '').length > cellLimit)),
+    more_rows: data.truncated === true || (data.rows || []).length > count };
+}
+
 /** try_process: run code on the inputs a Process reading primary_input would get (df truncated) and report the branches. */
 async function tryProcess(args, runtime) {
   const code = String(args.code || '');
@@ -433,6 +489,7 @@ export function describeToolCall(name, args, runtime) {
     case 'list_models': return `Searched models${args.query ? ` for "${args.query}"` : ''}`;
     case 'read_guide': return `Read the ${args.topic} guide`;
     case 'search_source': return `Searched ${args.source} for "${args.query}"`;
+    case 'inspect_source': return args.source ? `Inspected ${args.source}${args.dataset ? ` / ${args.dataset}` : ''}` : 'Listed available database sources';
     case 'try_process': return `Tried process code on ${titleOf(runtime, args.process_node_id || args.primary_input)}`;
     case 'read_attachment': return `Read attachment ${runtime.attachmentName?.(args.attachment_id) || args.attachment_id}`;
     default: return name;
@@ -491,6 +548,8 @@ async function runTool(name, args, runtime) {
     }
     case 'search_source':
       return searchSource(args);
+    case 'inspect_source':
+      return inspectSource(args);
     case 'try_process':
       return tryProcess(args, runtime);
     case 'read_attachment':

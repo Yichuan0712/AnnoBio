@@ -1,5 +1,32 @@
 # Dataset editing and sampling
 
+## Import database records through the Agent
+
+Use `inspect_source` without a source to discover what the connected backend offers. Online
+sources expose identifier formats, fields, connection options and `row_filters` support. Use
+native `search_source` queries for PubMed, ClinicalTrials.gov and ChEMBL; find preprints in Europe
+PMC. Other sources may support only ID/region/sequence imports. Do not invent keyword search
+support. Credentials must be configured outside the conversation.
+
+Desktop snapshots list exact filenames, sizes and current local status. If missing, propose
+`download_dataset` with `source` and `dataset`. Approval downloads the shared file without creating
+a canvas node. Then inspect local columns and samples. `column_query` finds columns in wide schemas.
+Samples are not total match counts. Hosted deployments omit snapshots and reject their routes.
+
+Propose `import_dataset` with selected `fields`, `name`, `note` and source-specific `options`.
+Snapshot imports use `options.dataset`, no IDs, and up to 5,000 rows by default. For sources with
+`row_filters=true`, `options.filters` is an array of at most ten AND conditions:
+`{column, op, value?, values?, case_sensitive?}`. Operators: `equals`, `not_equals`, `contains`,
+`in` (uses `values`), `gt`, `gte`, `lt`, `lte`, `is_empty`, `not_empty`. Text comparisons are
+case-insensitive by default. Numeric comparisons exclude missing/non-numeric cells. Filtering
+applies before the snapshot row cap; filter-only columns need not be imported.
+
+Example filter after inspecting a real source: `[{"column":"gene","op":"contains","value":"BRCA"},
+{"column":"score","op":"gte","value":0.8}]`. Replace these illustrative column names with inspected
+ones. The proposal shows conditions. Approval fetches records and creates the Dataset automatically.
+Its description preserves the user's note and records the source file, filters and any truncation.
+Use a Process for transformations beyond these predicates.
+
 Dataset columns are Text, Image or PDF. Image/PDF cells may hold several files. `read_rows` returns
 their existing asset cells (`kind`, `assetIds`, `names`) and a parallel `rowIds` list for Dataset rows.
 Reuse those cells when proposing edits; do not turn them into strings or invent file IDs.

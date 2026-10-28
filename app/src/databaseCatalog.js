@@ -113,7 +113,7 @@ export function databasePickerHtml() {
       </div>
       <div class="dataset-database-list">
         ${databases.map((item) => `<button type="button" class="dataset-database-card" data-database-source="${item.source}">
-          <strong>${escapeHtml(item.label)}</strong><span class="dataset-database-category">${escapeHtml(item.category)}</span>
+          <strong>${escapeHtml(item.label)}</strong><span class="dataset-database-category" data-category="${escapeHtml(item.category)}">${escapeHtml(item.category)}</span>
           <span class="dataset-database-description">${escapeHtml(item.description)}</span>
         </button>`).join('')}
       </div>

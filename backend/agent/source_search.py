@@ -18,6 +18,7 @@ from chembl_client import CHEMBL_FIELDS, _get_with_retry as _chembl_get
 from clinicaltrials_client import CT_FIELDS, STUDIES_URL, _get_with_retry as _ct_get, _parse_study
 from preprint_client import PREPRINT_FIELDS
 from reference_import import REFERENCE_IMPORTERS
+from database_availability import source_enabled
 from pubmed_client import PUBMED_FIELDS, _get_with_retry as _pubmed_get, _ncbi_params, efetch_batch
 
 PUBMED_ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
@@ -41,10 +42,14 @@ class SourceSearchError(ValueError):
 
 
 def describe_sources() -> dict[str, Any]:
-    return {
-        key: {"label": s["label"], "id": s["id"], "fields": s["fields"], "searchable": s["searchable"], "option_fields": s.get("option_fields", [])}
+    sources = {
+        key: {"label": s["label"], "id": s["id"], "fields": s["fields"], "searchable": s["searchable"], "option_fields": s.get("option_fields", []), 'row_filters': key in REFERENCE_IMPORTERS}
         for key, s in SOURCES.items()
     }
+    sources.update({key: {name: s[name] for name in ('label', 'id', 'fields', 'kind', 'datasets', 'category', 'default_fields')}
+                    | {'searchable': False, 'option_fields': [], 'row_filters': True}
+                    for key, s in REFERENCE_IMPORTERS.items() if s.get('kind') == 'snapshot' and source_enabled(s)})
+    return sources
 
 
 def _search_pubmed(query: str, limit: int, api_key: str, email: str) -> dict[str, Any]:

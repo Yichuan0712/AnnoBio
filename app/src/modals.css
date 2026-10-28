@@ -4244,7 +4244,8 @@
   vertical-align: baseline;
 }
 
-/* Base pill shared by Click-to-verify and Verifying states */
+/* Shared borderless pill shape for Review statuses and database categories. */
+.dataset-database-category,
 .review-suggestion-verify-pill,
 .review-suggestion-verifying-pill,
 .review-suggestion-verified-pill,
@@ -8543,7 +8544,28 @@ button.btn.btn-danger:hover:not(:disabled) {
 .dataset-database-card:hover { background: var(--hover); border-color: var(--accent); }
 .dataset-database-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .dataset-database-card[hidden] { display: none; }
-.dataset-database-category { color: var(--accent); font-size: 11px; }
+/* Review pill shape above; each database category has a stable color. */
+.dataset-database-category {
+  --category-hue: 215;
+  --category-saturation: 65%;
+  margin-left: 0;
+  color: hsl(var(--category-hue) var(--category-saturation) 32%);
+  background: hsl(var(--category-hue) var(--category-saturation) 48% / 0.18);
+}
+.dataset-database-category[data-category="Literature"] { --category-hue: 218; }
+.dataset-database-category[data-category="Clinical research"] { --category-hue: 172; }
+.dataset-database-category[data-category="Compounds and drugs"] { --category-hue: 30; }
+.dataset-database-category[data-category="Genes and variants"] { --category-hue: 272; }
+.dataset-database-category[data-category="Proteins and structures"] { --category-hue: 195; }
+.dataset-database-category[data-category="Pathways and associations"] { --category-hue: 335; }
+.dataset-database-category[data-category="Experimental data"] { --category-hue: 145; }
+.dataset-database-category[data-category="Species and phenotypes"] { --category-hue: 80; }
+.dataset-database-category[data-category="Sequences"] { --category-hue: 245; }
+.dataset-database-category[data-category="Data snapshots"] { --category-hue: 210; --category-saturation: 18%; }
+html.dark .dataset-database-category {
+  color: hsl(var(--category-hue) var(--category-saturation) 74%);
+  background: hsl(var(--category-hue) var(--category-saturation) 58% / 0.28);
+}
 .dataset-database-description { color: var(--text-muted); font-size: 12px; line-height: 1.5; }
 
 .pubmed-import-ids {
@@ -8693,14 +8715,13 @@ button.btn.btn-danger:hover:not(:disabled) {
   gap: 10px;
 }
 
-.reference-import-configuration[hidden],
-.reference-download-progress[hidden] { display: none; }
+.reference-import-configuration[hidden] { display: none; }
 .reference-download-btn--downloaded { display: inline-grid; }
 .reference-download-btn--downloaded > span { grid-area: 1 / 1; }
 .reference-download-btn--downloaded .reference-download-action { visibility: hidden; }
 .reference-download-btn--downloaded:is(:hover, :focus-visible):not(:disabled) .reference-download-label { visibility: hidden; }
 .reference-download-btn--downloaded:is(:hover, :focus-visible):not(:disabled) .reference-download-action { visibility: visible; }
-.reference-download-progress { width: 100%; }
+.reference-download-status:empty { display: none; }
 
 /* ——— Process node detail modal（尺寸与 Run detail 一致） ——— */
 .modal-panel--process {

@@ -27,6 +27,7 @@ import { nodeTitle, processOutputsOf, runResultsOf } from '../canvas/workflowNod
 import { contentLocks } from '../../contentLocks.js';
 import { isTaskLocked } from '../../runTaskLocks.js';
 import { validateAgentScoreTree } from './scoreRules.js';
+import { importDescription, sourceOptions } from './sourceImports.js';
 
 export class ChangeSetError extends Error {
   constructor(message, index = null) {
@@ -618,13 +619,23 @@ export function planChangeSet(state, operations, ctx) {
         lines: [`${rows.length} rows; columns: ${headers.join(', ')}`] };
     },
 
+    download_dataset(op) {
+      const source = ctx.sources?.[clean(op.source)];
+      const file = source?.kind === 'snapshot' && source.datasets.find((item) => item.name === op.dataset);
+      if (!file) fail('Choose a downloadable source and its exact dataset filename from inspect_source.');
+      return { kind: 'add', type: 'dataset', title: `Download "${file.name}"`, nodeIds: [],
+        lines: [`${source.label}; ${(file.bytes / 1e6).toFixed(2)} MB.`, 'Save the shared local source file. Existing complete downloads are reused. No Dataset node is created by this download.'] };
+    },
+
     import_dataset(op, index) {
       const sourceKey = clean(op.source);
-      const source = ctx.sources?.[sourceKey];
+      const source = ctx.sources?.[`${sourceKey}:${op.options?.dataset}`] || ctx.sources?.[sourceKey];
       if (!source) fail(`source must be one of: ${Object.keys(ctx.sources || {}).join(', ')}.`);
       const ids = (Array.isArray(op.ids) ? op.ids : []).map(clean).filter(Boolean);
-      if (!ids.length) fail(`ids must list the ${source.id}s to import.`);
-      if (ids.length > 5000) fail('At most 5000 records can be imported at once.');
+      if (source.kind === 'snapshot' && ids.length) fail('Snapshot imports use options.filters instead of ids.');
+      if (!ids.length && source.kind !== 'snapshot') fail(`ids must list the ${source.id}s to import.`);
+      if (source.kind !== 'snapshot' && ids.length > 2000) fail('At most 2000 record IDs can be imported at once.');
+      const options = sourceOptions(source, op.options);
       const fields = (Array.isArray(op.fields) ? op.fields : []).map(clean).filter(Boolean);
       const unknown = fields.filter((f) => !source.fields[f]);
       if (!fields.length || unknown.length) {
@@ -639,12 +650,16 @@ export function planChangeSet(state, operations, ctx) {
         nodeId: generateNodeId(),
         ...placeNear(null),
         name,
-        note: String(op.note ?? `Imported from ${source.label}.`),
+        note: importDescription(op.note, source, options, fetched),
         datasetContent: normalizeDatasetContent({ headers, rows }),
         nodeOrigin: 'agent',
       });
       registerRef(op, node.nodeId);
-      const lines = [`${ids.length} ${source.id}${ids.length === 1 ? '' : 's'} from ${source.label}; columns: ${headers.join(', ')}`];
+      const lines = [source.kind === 'snapshot' ? `${options.dataset}; up to ${options.limit.toLocaleString('en-US')} matching rows; columns: ${headers.join(', ')}` : `${ids.length} ${source.id}${ids.length === 1 ? '' : 's'} from ${source.label}; columns: ${headers.join(', ')}`];
+      if (options.filters?.length) lines.push(`Filters (AND): ${JSON.stringify(options.filters)}`);
+      const connection = Object.fromEntries(Object.entries(options).filter(([key]) => !['filters', 'dataset', 'limit'].includes(key)));
+      if (Object.keys(connection).length) lines.push(`Source options: ${JSON.stringify(connection)}`);
+      if (fetched?.truncated) lines.push('The import was truncated; the Dataset description records this.');
       if (fetched?.notFound?.length) lines.push(`${fetched.notFound.length} not found: ${fetched.notFound.slice(0, 10).join(', ')}`);
       if (!fetched) lines.push('Records are fetched when the proposal is applied.');
       return { kind: 'add', type: 'dataset', title: `Import "${name}"`, nodeIds: [node.nodeId], lines };

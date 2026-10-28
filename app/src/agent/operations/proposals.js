@@ -7,6 +7,7 @@
 import { BACKEND_API_BASE } from '../../backendConfig.js';
 import { testedModels } from '../../modelPicker.js';
 import { planChangeSet } from './changeSet.js';
+import { sourceJob, sourceOptions, sourcesForImports } from './sourceImports.js';
 
 /** Keep the full canvas API: History operations need more than table-editing methods. */
 export function createProposalRuntime(workspace) {
@@ -15,9 +16,6 @@ export function createProposalRuntime(workspace) {
     applyProposal: (proposal, options) => applyProposal(proposal, workspace, options),
   };
 }
-
-const IMPORT_POLL_MS = 1200;
-const IMPORT_MAX_WAIT_MS = 5 * 60 * 1000;
 
 let sourcesPromise = null;
 
@@ -87,7 +85,8 @@ async function attachmentsFor(operations, workspace, { store = false, onStatus, 
 const pickableModels = (workspace) => new Map(testedModels([...(workspace.credentialsById?.values() || [])]).map((c) => [c.id, c]));
 
 /** Importable sources and their fields, from GET /api/agent/sources (cached per session). */
-export function loadSources() {
+export function loadSources({ refresh = false } = {}) {
+  if (refresh) sourcesPromise = null;
   if (!sourcesPromise) {
     sourcesPromise = fetch(`${BACKEND_API_BASE}/api/agent/sources`)
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error('Could not load import sources.'))))
@@ -99,34 +98,11 @@ export function loadSources() {
   return sourcesPromise;
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => { setTimeout(resolve, ms); });
-}
-
 /** Rows for one import, through the same background job the Add Dataset dialog uses. */
-async function fetchSourceRows(source, ids, fields, signal) {
-  const start = await fetch(`${BACKEND_API_BASE}/api/${source}/import`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ids, fields }),
-    signal,
-  });
-  const started = await start.json().catch(() => ({}));
-  if (!start.ok || !started.job_id) throw new Error(started.detail || `Could not start the ${source} import.`);
-  const startedAt = Date.now();
-  for (;;) {
-    if (Date.now() - startedAt > (source === 'blast' ? 15 * 60 * 1000 : IMPORT_MAX_WAIT_MS)) throw new Error(`The ${source} import timed out.`);
-    const res = await fetch(`${BACKEND_API_BASE}/api/${source}/import/result/${started.job_id}`, { signal });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok && res.status !== 202) throw new Error(data.detail || `The ${source} import failed.`);
-    if (data.status === 'running') {
-      await sleep(IMPORT_POLL_MS);
-      continue;
-    }
-    if (data.error) throw new Error(String(data.error));
-    if (!Array.isArray(data.rows) || data.rows.length === 0) throw new Error(`The ${source} import found none of the requested records.`);
-    return { headers: data.headers || [], rows: data.rows, notFound: data.not_found || [] };
-  }
+async function fetchSourceRows(source, ids, fields, options, { signal, onStatus } = {}) {
+  const data = await sourceJob(source, `/api/${source}/import`, { ids: ids || [], fields, options }, { signal, onStatus });
+  if (!Array.isArray(data.rows) || !data.rows.length) throw new Error(`The ${source} import returned no rows matching the requested records and filters.`);
+  return { headers: data.headers || [], rows: data.rows, notFound: data.not_found || [], truncated: data.truncated === true };
 }
 
 /**
@@ -150,7 +126,7 @@ export async function previewProposal(proposal, workspace) {
       return { ok: true, items: [{ kind: 'update', type: 'history', title: 'Select saved node history',
         nodeIds: plan.changedNodeIds, lines: [`Restore inputs on ${plan.changedNodeIds.length} nodes.`, `Affected pipeline nodes: ${plan.affectedNodeIds.length}.`], diffs: [] }], warnings: [] };
     }
-    const sources = await loadSources();
+    const sources = await sourcesForImports(await loadSources({ refresh: true }), proposal?.operations);
     const contentLocks = await workspace.getContentLocks?.();
     const evaluationPrompts = await evaluationPromptsFor(proposal?.operations, workspace);
     const scoreTables = await scoreTablesFor(proposal?.operations, workspace);
@@ -192,12 +168,21 @@ export async function applyProposal(proposal, workspace, { signal, onStatus, imp
     const plan = await workspace.applyHistoryDeletion(operations[0].record_id);
     return { status: 'applied', changes: [`Deleted ${plan.records.length} history records`], affectedNodeIds: [...new Set(plan.records.map((record) => record.nodeId))] };
   }
-  const sources = await loadSources();
+  const sources = await sourcesForImports(await loadSources({ refresh: true }), operations, { signal });
+  // Validate source choices and filters again before any approved transfer starts.
+  const sourceOperations = operations.filter((op) => ['download_dataset', 'import_dataset'].includes(op?.op));
+  if (sourceOperations.length) planChangeSet(workspace.getCanvasState(), sourceOperations, { sources, extractInputFields: workspace.extractInputFields });
   const imported = new Map();
   for (const [index, op] of operations.entries()) {
+    if (op?.op === 'download_dataset') {
+      onStatus?.(`Downloading ${op.dataset}...`);
+      await sourceJob(op.source, `/api/reference/import/sources/${op.source}/download`, { dataset: op.dataset }, { signal, onStatus, download: true });
+      continue;
+    }
     if (op?.op !== 'import_dataset') continue;
     onStatus?.(`Importing from ${sources[op.source]?.label || op.source}...`);
-    imported.set(index, await fetchSourceRows(op.source, op.ids, op.fields, signal));
+    const info = sources[`${op.source}:${op.options?.dataset}`] || sources[op.source];
+    imported.set(index, await fetchSourceRows(op.source, op.ids, op.fields, sourceOptions(info, op.options), { signal, onStatus }));
   }
   const contentLocks = await workspace.getContentLocks?.();
   const evaluationPrompts = await evaluationPromptsFor(operations, workspace);
@@ -213,7 +198,7 @@ export async function applyProposal(proposal, workspace, { signal, onStatus, imp
     scoreTables,
     attachments,
   });
-  workspace.applyCanvasState(plan.state, { highlightNodeIds: plan.nodeIds });
+  if (operations.some((op) => op.op !== 'download_dataset')) workspace.applyCanvasState(plan.state, { highlightNodeIds: plan.nodeIds });
   const byId = new Map(plan.state.nodes.map((n) => [n.nodeId, n]));
   return {
     status: 'applied',

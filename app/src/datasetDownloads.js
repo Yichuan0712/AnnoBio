@@ -24,11 +24,9 @@ export function mountSnapshotDownload(panel, info, { apiBase, onInvalidate, onSc
   options.innerHTML = `<label class="dataset-meta-label">Dataset file<select class="dataset-meta-input" data-reference-option="dataset">${info.datasets.map((file) => `<option value="${escapeHtml(file.name)}">${escapeHtml(file.name)} (${formatDownloadBytes(file.bytes)})</option>`).join('')}</select></label>
     <p class="dataset-sheet-hint reference-dataset-description"></p>
     <div class="dataset-import-actions"><button type="button" class="btn btn-secondary reference-download-btn" disabled>Download</button></div>
-    <progress class="reference-download-progress" aria-label="Dataset download progress" max="100" value="0" hidden></progress>
     <span class="dataset-filename reference-download-status" aria-live="polite">Checking download...</span>`;
   const select = options.querySelector('select');
   const downloadButton = options.querySelector('.reference-download-btn');
-  const progress = options.querySelector('progress');
   const status = options.querySelector('.reference-download-status');
   let schema = null;
   let fileState = null;
@@ -63,7 +61,6 @@ export function mountSnapshotDownload(panel, info, { apiBase, onInvalidate, onSc
       downloadButton.removeAttribute('aria-label');
       downloadButton.removeAttribute('title');
     }
-    progress.hidden = !job;
     fetchButton.disabled = running || importing || !schema;
   };
   function cancel() {
@@ -92,10 +89,10 @@ export function mountSnapshotDownload(panel, info, { apiBase, onInvalidate, onSc
       fileState = next;
       if (schema && (next?.status !== 'downloaded' || schema.fingerprint !== next.fingerprint)) invalidate();
       if (next?.status === 'downloaded') {
-        status.textContent = `Downloaded · ${formatDownloadBytes(next.bytes)}`;
+        status.textContent = '';
         if (!schema && failedFingerprint !== next.fingerprint) void start(false);
       } else {
-        status.textContent = next?.status === 'downloading' ? 'Downloading in another window...' : next?.status === 'incomplete' ? 'Download is incomplete. Click Download to retry.' : `Not downloaded · ${formatDownloadBytes(currentFile().bytes)}`;
+        status.textContent = next?.status === 'downloading' ? 'Downloading in another window...' : next?.status === 'incomplete' ? 'Download is incomplete. Click Download to retry.' : '';
       }
       syncButtons();
     } catch (error) {
@@ -112,10 +109,8 @@ export function mountSnapshotDownload(panel, info, { apiBase, onInvalidate, onSc
           const total = data.download_total_bytes || currentFile().bytes;
           const completed = data.downloaded_bytes || 0;
           const percent = Math.min(100, Math.round(completed / total * 100));
-          progress.value = percent;
           status.textContent = `Downloading ${percent}% · ${formatDownloadBytes(completed)} / ${formatDownloadBytes(total)}`;
         } else {
-          progress.value = 100;
           status.textContent = 'Preparing dataset...';
         }
         pending.timer = setTimeout(() => poll(pending), 1200);
@@ -133,7 +128,7 @@ export function mountSnapshotDownload(panel, info, { apiBase, onInvalidate, onSc
       job = null;
       failedFingerprint = null;
       setRunning(false);
-      status.textContent = `Downloaded · ${formatDownloadBytes(next.bytes)}`;
+      status.textContent = '';
       syncButtons();
     } catch (error) {
       if (job !== pending) return;
@@ -153,7 +148,6 @@ export function mountSnapshotDownload(panel, info, { apiBase, onInvalidate, onSc
     const pending = { id: null, timer: null, download };
     job = pending;
     setRunning(true);
-    progress.value = 0;
     status.textContent = download ? 'Starting download...' : 'Preparing dataset...';
     syncButtons();
     try {

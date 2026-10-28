@@ -340,6 +340,10 @@ def fetch_records(
         from biomni_data_lake import fetch_snapshot_records
         with _client() as client:
             return fetch_snapshot_records(source, ids, fields, options or {}, client, on_batch, on_metadata)
+    from record_filters import compile_filters
+    filters = (options or {}).get('filters')
+    matches_filters = compile_filters(filters, importer['fields'])
+    fetch_fields = list(dict.fromkeys([*fields, *(rule['column'] for rule in filters or [])]))
     keyed = [(token, importer["key"](token)) for token in ids if str(token).strip()]
     keys = list(dict.fromkeys(key for _, key in keyed if key))[:MAX_IDS]
     invalid = list(dict.fromkeys(token.strip() for token, key in keyed if not key))
@@ -356,10 +360,10 @@ def fetch_records(
                 batch_options = {**(options or {})}
                 if on_batch:
                     batch_options['_heartbeat'] = lambda: on_batch([], [], processed, total)
-                found = importer["batch_options"](client, batch, fields, batch_options)
+                found = importer["batch_options"](client, batch, fetch_fields, batch_options)
             else:
-                found = importer["batch"](client, batch, fields)
-            rows = [{f: found[key].get(f, "") for f in fields} for key in batch if key in found]
+                found = importer["batch"](client, batch, fetch_fields)
+            rows = [{f: found[key].get(f, "") for f in fields} for key in batch if key in found and matches_filters(found[key])]
             out.extend(rows)
             processed += len(batch)
             if on_batch:

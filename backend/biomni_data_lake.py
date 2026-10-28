@@ -228,6 +228,9 @@ SNAPSHOT_ROW_LIMIT = 5000
 
 def fetch_snapshot_records(source, ids, fields, options, client, on_batch=None, on_metadata=None):
     filename = resolve_dataset(source, options)
+    from record_filters import compile_filters
+    schema = describe_snapshot_fields(source, options, client) if options.get('filters') else {'fields': fields}
+    matches_filters = compile_filters(options.get('filters'), schema['fields'])
     limit = int(options.get("limit", SNAPSHOT_ROW_LIMIT))
     if not 1 <= limit <= SNAPSHOT_ROW_LIMIT:
         raise ValueError(f"Choose a row limit from 1 to {SNAPSHOT_ROW_LIMIT:,}.")
@@ -246,7 +249,8 @@ def fetch_snapshot_records(source, ids, fields, options, client, on_batch=None, 
             if column and column not in record:
                 raise ValueError("The selected filter column does not exist in this dataset.")
             value = _cell(record.get(column)) if column else ""
-            if wanted and value not in wanted:
+            enriched = {**record, "__source_dataset": filename, "__source_url": BASE + filename}
+            if (wanted and value not in wanted) or not matches_filters(enriched):
                 if scanned % 1000 == 0: heartbeat()
                 continue
             # Read one extra matching row to distinguish exactly-at-limit from truncation.
@@ -254,7 +258,6 @@ def fetch_snapshot_records(source, ids, fields, options, client, on_batch=None, 
                 truncated = True
                 break
             if wanted: matched.add(value)
-            enriched = {**record, "__source_dataset": filename, "__source_url": BASE + filename}
             row = {field: _cell(enriched.get(field)) for field in fields}
             result.append(row)
             if on_batch: on_batch([row], [], len(matched) if wanted else len(result), len(wanted) or limit)
