@@ -14,6 +14,7 @@ import { createBackendLog } from './backendLog.js';
 import { createFolderAccessStore, listFolder } from './agent/attachments/folderAccess.js';
 import { APP_NAME, WINDOWS_APP_ID, windowsTaskbarDetails } from './appIdentity.js';
 import { IMAGE_FILE_EXTENSIONS } from './fileTypes.js';
+import { allowedExternalUrl } from './externalLinks.js';
 
 if (process.platform === 'win32') app.setAppUserModelId(WINDOWS_APP_ID);
 
@@ -751,9 +752,11 @@ ipcMain.handle('backend-log:renderer-error', (_event, entry) => {
   if (entry && typeof entry === 'object') backendLog?.rendererError(entry);
 });
 
-ipcMain.handle('shell:open-external', (_e, url) => {
-  if (typeof url !== 'string' || !url.startsWith('https://openrouter.ai/')) return;
-  shell.openExternal(url);
+ipcMain.handle('shell:open-external', async (_e, url) => {
+  const allowed = allowedExternalUrl(url);
+  if (!allowed) return { error: 'This external link is not supported.' };
+  await shell.openExternal(allowed);
+  return { ok: true };
 });
 
 ipcMain.handle('window:minimize', (event) => {

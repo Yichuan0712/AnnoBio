@@ -1,4 +1,5 @@
 import { availableReferenceDatabases } from './databaseCatalog.js';
+import { allowedExternalUrl, attachExternalBrowserLink } from './externalLinks.js';
 
 /**
  * Database-specific import forms share the backend job runner and column registry.
@@ -104,7 +105,11 @@ export function mountReferenceImports(overlay, { apiBase, onRows, onReset = () =
         options.innerHTML = (info.option_fields || []).map((field) => `<label class="dataset-meta-label">${escapeHtml(field.label)}
           ${field.type === 'select' ? `<select class="dataset-meta-input" data-reference-option="${escapeHtml(field.key)}">${field.choices.map((choice) => `<option value="${escapeHtml(choice.value)}" ${choice.value === field.default ? 'selected' : ''}>${escapeHtml(choice.label)}</option>`).join('')}</select>`
             : `<input class="dataset-meta-input" type="password" autocomplete="off" data-reference-option="${escapeHtml(field.key)}" placeholder="${field.required ? 'Enter a key, or use the key configured on the server' : 'Optional'}" />`}</label>`).join('');
-        if (info.help_url) options.insertAdjacentHTML('beforeend', `<p class="dataset-sheet-hint"><a href="${escapeHtml(info.help_url)}" target="_blank" rel="noopener noreferrer">API access and credentials</a></p>`);
+        const helpUrl = allowedExternalUrl(info.help_url);
+        if (helpUrl) {
+          options.insertAdjacentHTML('beforeend', `<p class="dataset-sheet-hint"><a href="${escapeHtml(helpUrl)}" target="_blank" rel="noopener noreferrer">API access and credentials</a></p>`);
+          attachExternalBrowserLink(options.querySelector('a'), showError);
+        }
         if (info.kind !== 'snapshot') {
           renderFields(panel, info);
           continue;
