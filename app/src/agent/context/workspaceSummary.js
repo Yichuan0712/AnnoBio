@@ -211,11 +211,14 @@ function modelLines(options) {
  *   before a project is open) has no canvas to describe, only the models.
  */
 export async function buildWorkspaceSummary(canvasState, options = {}) {
+  const localProject = options.projectPath && options.projectOpen !== false
+    ? [`Project file: ${options.projectPath} (folder: ${String(options.projectPath).replace(/[/\\][^/\\]*$/, '')}). Reading a path the user has not written needs their permission (request_folder_access).`]
+    : [];
   const nodes = options.projectOpen === false ? [] : Array.isArray(canvasState?.nodes) ? canvasState.nodes : [];
   const models = modelLines(options);
   if (!nodes.length) {
     const opening = options.projectOpen === false ? 'No project is open.' : 'The canvas is empty.';
-    return [opening, ...(models.length ? ['', ...models] : [])].join('\n');
+    return [opening, ...localProject, ...(models.length ? ['', ...models] : [])].join('\n');
   }
   const lookup = buildNodeLookup(canvasState);
   const inspectOptions = {
@@ -254,5 +257,5 @@ export async function buildWorkspaceSummary(canvasState, options = {}) {
     ? `Selected on the canvas: ${selected.map(ref).join(', ')}`
     : 'Nothing is selected on the canvas.');
   if (models.length) lines.push('', ...models);
-  return lines.join('\n');
+  return [...lines, ...localProject].join('\n');
 }

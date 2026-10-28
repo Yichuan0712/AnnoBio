@@ -3421,6 +3421,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       isCurrent: () => generation === agentMountGeneration,
       workspace: {
         hasProject: () => Boolean(getCurrentProjectPath()),
+        getCurrentProjectPath,
         createProject: (request) => (agentProjectCreator
           ? agentProjectCreator(request)
           : Promise.resolve({ status: 'failed', error: 'Creating a project is not available here.' })),
