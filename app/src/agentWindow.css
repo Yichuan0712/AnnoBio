@@ -787,3 +787,6 @@ html.dark .agent-window__loading-stop:hover {
   border: 1px solid var(--border);
   border-radius: var(--control-radius, 3px);
 }
+.agent-window__attachment.is-unreadable {
+  opacity: 0.55;
+}

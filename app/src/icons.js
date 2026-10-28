@@ -51,6 +51,8 @@ function svgIcon({ paths = [], circles = [], lines = [], rects = [], polylines =
   return svg;
 }
 
+export const iconFolder = (size) => svgIcon({ size, paths: ['M20 20H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2Z'] });
+
 export const iconText = (size) => svgIcon({
   size,
   lines: [[4, 6, 20, 6], [4, 12, 20, 12], [4, 18, 15, 18]],
