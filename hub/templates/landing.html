@@ -8,86 +8,452 @@
 <style>
 {{SHARED_CSS}}
 
+  :root {
+    --landing-paper: var(--bg);
+    --landing-ink: var(--text);
+    --landing-green: var(--accent);
+    --landing-line: var(--grid-color);
+  }
+
+  body.landing-body {
+    color: var(--landing-ink);
+    background: var(--bg);
+  }
+  body.landing-body nav.top {
+    background: var(--bg-bar);
+    border-color: var(--border);
+  }
+
+  .landing-main {
+    position: relative;
+    overflow: hidden;
+    border-bottom: 1px solid var(--border);
+    background-color: var(--bg);
+    background-image:
+      linear-gradient(var(--grid-color) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+
   .hero {
     position: relative;
-    min-height: calc(100vh - 60px);
-    display: flex;
-    flex-direction: column;
+    max-width: 1280px;
+    min-height: 690px;
+    margin: 0 auto;
+    padding: 92px 42px 70px;
+    display: grid;
+    grid-template-columns: minmax(0, 0.82fr) minmax(500px, 1.18fr);
+    gap: 48px;
     align-items: center;
-    justify-content: center;
-    text-align: center;
-    padding: 48px 24px;
-    overflow: hidden;
   }
-  .hero::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: radial-gradient(ellipse 620px 320px at 50% 30%, rgba(37, 99, 235, 0.09), transparent 70%);
-    pointer-events: none;
+  .hero-copy { position: relative; z-index: 1; }
+  .hero-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    margin: 0 0 24px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--landing-green);
   }
-  .hero > * { position: relative; }
-  h1 {
-    font-size: 40px;
-    line-height: 1.15;
-    letter-spacing: -0.02em;
-    margin: 0 0 16px;
+  .hero h1 {
+    max-width: 690px;
+    margin: 0 0 24px;
+    font-size: clamp(54px, 6.2vw, 86px);
+    font-weight: 650;
+    line-height: 0.98;
+    letter-spacing: -0.045em;
     text-wrap: balance;
   }
-  h1 .hero-tagline {
-    font-weight: 400;
-    font-size: 0.6em;
-    letter-spacing: -0.01em;
-    color: var(--text);
+  .hero h1 em {
+    color: var(--landing-green);
+    font-style: normal;
+    font-weight: inherit;
   }
   .hero p.lead {
-    font-size: 16.5px;
-    line-height: 1.6;
+    max-width: 590px;
+    margin: 0 0 30px;
     color: var(--text-muted);
-    max-width: 520px;
-    margin: 0 0 32px;
-    text-wrap: balance;
+    font-size: 17px;
+    line-height: 1.68;
   }
-  .hero-ctas { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .hero-ctas {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+  }
+  .landing-body .hero-ctas .btn {
+    min-height: 48px;
+    padding: 12px 22px;
+    border-radius: var(--control-radius);
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .landing-body .hero-ctas .btn-primary {
+    color: var(--accent);
+    background: rgba(37, 99, 235, 0.22);
+    border-color: var(--accent);
+  }
+  .landing-body .hero-ctas .btn-primary:hover {
+    color: var(--accent);
+    background: var(--hover);
+    border-color: var(--accent);
+  }
+  .landing-body .hero-ctas .btn-secondary {
+    background: var(--bg-bar);
+    border-color: var(--border);
+  }
+  .hero-platforms {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 12.5px;
+    letter-spacing: 0.025em;
+  }
+
+  .hero-product {
+    position: relative;
+    z-index: 1;
+    min-width: 0;
+  }
+  .product-window {
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: var(--control-radius);
+    background: #e8eaee;
+    box-shadow: 0 28px 70px rgba(0, 0, 0, 0.13);
+  }
+  .product-window img {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+  .product-slide {
+    display: none;
+    position: relative;
+    margin: 0;
+  }
+  .product-slide.is-active {
+    display: block;
+    animation: product-slide-in 0.45s ease both;
+  }
+  @keyframes product-slide-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  .product-slide figcaption {
+    position: relative;
+    z-index: 1;
+    width: auto;
+    margin: 0;
+    padding: 14px 16px 16px;
+    border: 1px solid var(--border);
+    border-radius: 0 0 var(--control-radius) var(--control-radius);
+    background: var(--bg-bar);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.14);
+    cursor: pointer;
+  }
+  .product-slide figcaption:hover { border-color: var(--accent); }
+  .product-slide figcaption:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .product-slide-label {
+    display: block;
+    margin-bottom: 5px;
+    color: var(--landing-green);
+    font-size: 10px;
+    font-weight: 750;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+  .product-slide strong {
+    display: block;
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.35;
+  }
+
+  .workflow-section {
+    position: relative;
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 70px 42px 80px;
+  }
+  .workflow-heading {
+    margin-bottom: 34px;
+  }
+  .workflow-heading h2 {
+    max-width: 920px;
+    margin: 0;
+    font-size: clamp(34px, 4vw, 48px);
+    font-weight: 650;
+    line-height: 1.08;
+    letter-spacing: -0.035em;
+  }
+  .workflow-heading p {
+    max-width: 760px;
+    margin: 16px 0 0;
+    color: var(--text-muted);
+    font-size: 15.5px;
+    line-height: 1.7;
+  }
+  .workflow-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+  .workflow-step {
+    min-height: 220px;
+    padding: 24px 22px 28px;
+    border: 1px solid var(--border);
+    background: var(--bg-bar);
+  }
+  .step-number {
+    display: block;
+    margin-bottom: 45px;
+    color: var(--landing-green);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px;
+  }
+  .workflow-step h3 {
+    margin: 0 0 10px;
+    font-size: 22px;
+    font-weight: 600;
+  }
+  .workflow-step p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 13.5px;
+    line-height: 1.55;
+  }
+
+  .final-cta {
+    padding: 72px 24px 78px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-bar);
+    text-align: center;
+  }
+  .final-cta h2 {
+    max-width: 760px;
+    margin: 0 auto 12px;
+    font-size: clamp(32px, 4vw, 48px);
+    line-height: 1.08;
+    letter-spacing: -0.035em;
+  }
+  .final-cta p {
+    max-width: 650px;
+    margin: 0 auto 26px;
+    color: var(--text-muted);
+    font-size: 15.5px;
+    line-height: 1.65;
+  }
+  .final-cta-actions { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; }
+
+  .landing-body footer.site-footer {
+    background: var(--landing-paper);
+  }
+
+  @media (max-width: 980px) {
+    .hero {
+      grid-template-columns: 1fr;
+      gap: 54px;
+      padding-top: 72px;
+    }
+    .hero-copy { max-width: 760px; }
+    .hero-product { max-width: 760px; }
+    .workflow-grid { grid-template-columns: repeat(2, 1fr); }
+  }
 
   @media (max-width: 640px) {
-    h1 { font-size: 30px; }
+    .hero { min-height: 0; padding: 58px 20px 62px; }
+    .hero h1 { font-size: 48px; }
+    .workflow-section { padding: 86px 20px 64px; }
+    .workflow-grid { grid-template-columns: 1fr; }
+    .workflow-step,
+    .workflow-step:nth-child(2) { min-height: 0; }
+    .step-number { margin-bottom: 24px; }
   }
 
   @media (prefers-reduced-motion: no-preference) {
     @keyframes hero-fade-up {
-      from { opacity: 0; transform: translateY(14px); }
+      from { opacity: 0; transform: translateY(18px); }
       to { opacity: 1; transform: translateY(0); }
     }
-    .hero h1, .hero p.lead, .hero-ctas {
+    .hero-eyebrow, .hero h1, .hero p.lead, .hero-ctas, .hero-platforms, .hero-product {
       opacity: 0;
-      animation: hero-fade-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      animation: hero-fade-up 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     }
-    .hero h1 { animation-delay: 0.05s; }
-    .hero p.lead { animation-delay: 0.18s; }
-    .hero-ctas { animation-delay: 0.31s; }
+    .hero-eyebrow { animation-delay: 0.02s; }
+    .hero h1 { animation-delay: 0.09s; }
+    .hero p.lead { animation-delay: 0.2s; }
+    .hero-ctas, .hero-platforms { animation-delay: 0.3s; }
+    .hero-product { animation-delay: 0.18s; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .product-slide.is-active { animation: none; }
   }
 </style>
 </head>
-<body>
+<body class="landing-body">
 
 {{NAV}}
 
-<section class="hero canvas-grid">
-  <h1>AnnoBio <span class="hero-tagline">LLM pipelines for biomedical annotation</span></h1>
-  <p class="lead">
-    Classify documents, extract entities and fields, curate literature into structured records,
-    and much more. Use it in your browser, or on Windows and macOS with the desktop app.
-  </p>
-  <div class="hero-ctas">
-    <a class="btn btn-primary btn-lg" href="{{PRIMARY_CTA_HREF}}">{{PRIMARY_CTA_LABEL}}</a>
-    <a class="btn btn-secondary btn-lg" href="/download">Download for desktop</a>
-  </div>
-</section>
+<main class="landing-main">
+  <section class="hero">
+    <div class="hero-copy">
+      <p class="hero-eyebrow">LLM workflows for biomedical research</p>
+      <h1>Build reproducible <em>biomedical annotation pipelines.</em></h1>
+      <p class="lead">
+        Extract, classify, normalize, and evaluate biomedical records in one inspectable workspace.
+        Keep source evidence, Process code, reference annotations, execution history, and Prompt
+        versions connected throughout the study.
+      </p>
+      <div class="hero-ctas">
+        <a class="btn btn-primary btn-lg" href="{{PRIMARY_CTA_HREF}}">{{PRIMARY_CTA_LABEL}}</a>
+        <a class="btn btn-secondary btn-lg" href="/guide">See how it works</a>
+      </div>
+      <p class="hero-platforms">Browser workspace · Windows · macOS</p>
+    </div>
+
+    <div class="hero-product" aria-label="AnnoBio interface examples">
+      <div class="product-window">
+        <figure class="product-slide is-active" data-product-slide="0">
+          <img src="/guide/images/home-pipeline.png" alt="AnnoBio for Windows showing a biomedical literature Dataset branching into relation extraction, study classification, and provenance processing before merging into a review table">
+          <figcaption role="button" tabindex="0" data-product-next aria-label="Show next interface example">
+            <span class="product-slide-label">Reproducible workflow design</span>
+            <strong>Build explicit pipelines that branch, transform, and recombine research data.</strong>
+          </figcaption>
+        </figure>
+        <figure class="product-slide" data-product-slide="1">
+          <img src="/guide/images/dataset-table.png" alt="AnnoBio Dataset window showing stable paper identifiers, titles, and abstract text">
+          <figcaption role="button" tabindex="0" data-product-next aria-label="Show next interface example">
+            <span class="product-slide-label">Research data with provenance</span>
+            <strong>Inspect records, identifiers, and source content before any model run.</strong>
+          </figcaption>
+        </figure>
+        <figure class="product-slide" data-product-slide="2">
+          <img src="/guide/images/add-prompt-modal.png" alt="AnnoBio Prompt window defining instructions, input placeholders, and a structured output schema">
+          <figcaption role="button" tabindex="0" data-product-next aria-label="Show next interface example">
+            <span class="product-slide-label">Structured annotation protocol</span>
+            <strong>Define reusable instructions, input mappings, output fields, and evidence requirements.</strong>
+          </figcaption>
+        </figure>
+        <figure class="product-slide" data-product-slide="3">
+          <img src="/guide/images/review-method-picker.png" alt="AnnoBio Evaluate window comparing extracted gene and disease associations with curated reference annotations">
+          <figcaption role="button" tabindex="0" data-product-next aria-label="Show next interface example">
+            <span class="product-slide-label">Transparent evaluation</span>
+            <strong>Compare structured outputs with curated references and inspect every mismatch.</strong>
+          </figcaption>
+        </figure>
+        <figure class="product-slide" data-product-slide="4">
+          <img src="/guide/images/agent-assistant.png" alt="AnnoBio Agent Assistant proposing a Prompt and Generate workflow from a natural language request">
+          <figcaption role="button" tabindex="0" data-product-next aria-label="Show next interface example">
+            <span class="product-slide-label">Natural language collaboration</span>
+            <strong>Ask the Agent to build, explain, and revise the workflow while you retain control.</strong>
+          </figcaption>
+        </figure>
+        <figure class="product-slide" data-product-slide="5">
+          <img src="/guide/images/optimize-suggestion.png" alt="AnnoBio Prompt optimization window showing a targeted revision derived from evaluation failures">
+          <figcaption role="button" tabindex="0" data-product-next aria-label="Show next interface example">
+            <span class="product-slide-label">Prompt optimization</span>
+            <strong>Diagnose failures, review targeted changes, and preserve each Prompt version.</strong>
+          </figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section class="workflow-section" aria-labelledby="workflow-title">
+    <div class="workflow-heading">
+      <h2 id="workflow-title">One workspace for the complete biomedical annotation workflow.</h2>
+      <p>Bring research records into explicit pipelines, evaluate their outputs, improve Prompts with
+      human oversight, and carry the resulting workflow into a reproducible Python project.</p>
+    </div>
+    <div class="workflow-grid">
+      <article class="workflow-step">
+        <span class="step-number">01 / PIPELINE</span>
+        <h3>Build portable, reproducible pipelines</h3>
+        <p>Combine Datasets with Generate steps, Process code, branches, and merges. Preserve execution history, save portable projects, and export selected routes as runnable Python projects.</p>
+      </article>
+      <article class="workflow-step">
+        <span class="step-number">02 / AGENT</span>
+        <h3>Build through conversation</h3>
+        <p>Describe the scientific task in natural language. The Agent proposes Prompts, mappings, nodes, and revisions for you to inspect and approve.</p>
+      </article>
+      <article class="workflow-step">
+        <span class="step-number">03 / CONNECT</span>
+        <h3>Connect biomedical evidence</h3>
+        <p>Search and import records from PubMed, ClinicalTrials.gov, ChEMBL, Europe PMC, OpenAlex, UniProt, bioRxiv, and medRxiv while preserving identifiers and source metadata.</p>
+      </article>
+      <article class="workflow-step">
+        <span class="step-number">04 / OPTIMIZE</span>
+        <h3>Optimize and version Prompts</h3>
+        <p>Use targeted editing, local search, reflective evolution, and few shot optimization. Automate revisions or keep a human in the loop to inspect and approve each new Prompt version.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="final-cta" aria-labelledby="final-cta-title">
+    <h2 id="final-cta-title">Use AnnoBio in the browser or on your desktop.</h2>
+    <p>Start in the online workspace with no installation, or use the desktop app for local project
+    files, attachments, and folder access.</p>
+    <div class="final-cta-actions">
+      <a class="btn btn-primary btn-lg" href="{{PRIMARY_CTA_HREF}}">Use AnnoBio online</a>
+      <a class="btn btn-secondary btn-lg" href="/download">Download desktop app</a>
+    </div>
+  </section>
+</main>
 
 <footer class="site-footer">
   &copy; 2026 <a href="https://digbio.github.io">Digital Biology Lab</a>'s AnnoBio
 </footer>
 
+<script>
+  (() => {
+    const slides = [...document.querySelectorAll('[data-product-slide]')];
+    const showcase = document.querySelector('.hero-product');
+    let index = 0;
+    let timer = null;
+    const activate = (index) => {
+      slides.forEach((slide, i) => {
+        slide.classList.toggle('is-active', i === index);
+        slide.setAttribute('aria-hidden', String(i !== index));
+      });
+    };
+    const advance = () => {
+      index = (index + 1) % slides.length;
+      activate(index);
+    };
+    const stop = () => {
+      if (timer) window.clearInterval(timer);
+      timer = null;
+    };
+    const start = () => {
+      stop();
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || slides.length < 2) return;
+      timer = window.setInterval(advance, 5200);
+    };
+    document.querySelectorAll('[data-product-next]').forEach((card) => {
+      const next = () => {
+        stop();
+        advance();
+        if (!showcase?.matches(':hover')) start();
+      };
+      card.addEventListener('click', next);
+      card.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        next();
+      });
+    });
+    activate(index);
+    start();
+    showcase?.addEventListener('mouseenter', stop);
+    showcase?.addEventListener('mouseleave', start);
+    showcase?.addEventListener('focusin', stop);
+    showcase?.addEventListener('focusout', start);
+    document.addEventListener('visibilitychange', () => document.hidden ? stop() : start());
+  })();
+</script>
 </body>
 </html>

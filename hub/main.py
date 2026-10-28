@@ -431,7 +431,7 @@ def about_page(request: Request):
       a.link { color: var(--accent); text-decoration: none; }
       a.link:hover { text-decoration: underline; }
     """
-    return HTMLResponse(render_page(title="About", user=user, active="/about", body=body, extra_css=extra_css, narrow=True))
+    return HTMLResponse(render_page(title="About", user=user, active="/about", body=body, extra_css=extra_css))
 
 
 # Screenshots referenced by GUIDE_CHAPTERS below, served from GUIDE_IMAGES_DIR at /guide/images/*

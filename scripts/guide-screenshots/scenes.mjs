@@ -265,6 +265,92 @@ export const scenes = [
     },
   },
   {
+    name: 'home-pipeline',
+    async run({ open, evaluate, wait, shot }) {
+      await open('?desktop=1&title=Evidence%20Synthesis%20Pipeline');
+      await evaluate(`
+        const f = window.fixture;
+        const relationFormat = {
+          returnShape: 'table',
+          fields: [
+            { key: 'gene', type: 'str', description: 'HGNC gene symbol.', examples: ['BRCA1'] },
+            { key: 'disease', type: 'str', description: 'Associated disease.', examples: ['breast cancer'] },
+            { key: 'evidence', type: 'str', description: 'Supporting quotation.', examples: [] },
+          ],
+        };
+        const studyFormat = {
+          returnShape: 'single',
+          fields: [
+            { key: 'study_design', type: 'str', description: 'Study design.', examples: ['cohort study'] },
+            { key: 'sample_size', type: 'float', description: 'Reported sample size.', examples: [412] },
+          ],
+        };
+        const relationPrompt = [
+          'Extract asserted gene and disease associations from {title} and {abstract}.',
+          'Return the HGNC symbol, disease, and supporting evidence.',
+        ].join('\\n');
+        const studyPrompt = [
+          'Classify the study design in {title} and {abstract}.',
+          'Return the study design and reported sample size.',
+        ].join('\\n');
+        const normalizeCode = [
+          'def process(df):',
+          '    out = df.copy()',
+          '    out["gene"] = out["gene"].str.upper()',
+          '    return out.drop_duplicates()',
+        ].join('\\n');
+        const metadataCode = [
+          'def process(df):',
+          '    return df[["Input: ID", "Output: study_design", "Output: sample_size"]]',
+        ].join('\\n');
+        const provenanceCode = [
+          'def process(df):',
+          '    return df[["ID", "Title"]].rename(columns={"ID": "paper"})',
+        ].join('\\n');
+        const mergeCode = [
+          'def process(df_relations, df_metadata, df_provenance):',
+          '    out = df_relations.merge(df_metadata, on="paper", how="left")',
+          '    return out.merge(df_provenance, on="paper", how="left")',
+        ].join('\\n');
+        await window.app.load({
+          schemaVersion: 3, version: 3, historyVersion: 1, zoomLevel: 0.78,
+          nodes: [
+            { type: 'dataset', nodeId: 'papers', name: 'Biomedical literature', note: '2,480 screened records', left: 50, top: 390, colorIndex: 1, datasetContent: f.dataset },
+
+            { type: 'prompt', nodeId: 'relation-prompt', name: 'Extract associations', note: 'Gene, disease, and evidence', left: 330, top: 45, colorIndex: 0, text: relationPrompt, outputFormat: relationFormat, inputTypes: {} },
+            { type: 'run', nodeId: 'relations', runName: 'Extract relations', left: 350, top: 220, runCredentialId: 'cred-demo', runInputToColumn: JSON.stringify({ title: 'Title', abstract: 'Abstract' }) },
+            { type: 'process', nodeId: 'normalize', name: 'Normalize entities', note: 'HGNC symbols and unique pairs', left: 690, top: 220, activeMode: 'df', dfCode: normalizeCode },
+
+            { type: 'prompt', nodeId: 'study-prompt', name: 'Classify study design', note: 'Design and cohort size', left: 330, top: 735, colorIndex: 2, text: studyPrompt, outputFormat: studyFormat, inputTypes: {} },
+            { type: 'run', nodeId: 'studies', runName: 'Classify studies', left: 350, top: 510, runCredentialId: 'cred-demo', runInputToColumn: JSON.stringify({ title: 'Title', abstract: 'Abstract' }) },
+            { type: 'process', nodeId: 'metadata', name: 'Select study metadata', note: 'Design and sample size', left: 690, top: 510, activeMode: 'df', dfCode: metadataCode },
+
+            { type: 'process', nodeId: 'provenance', name: 'Attach provenance', note: 'Paper ID and source title', left: 690, top: 755, activeMode: 'df', dfCode: provenanceCode },
+            { type: 'process', nodeId: 'merge', name: 'Merge annotations', note: 'One review table', left: 1060, top: 390, activeMode: 'df', dfCode: mergeCode },
+            { type: 'process', nodeId: 'quality', name: 'Quality control', note: 'Flag incomplete records', left: 1370, top: 390, activeMode: 'df', dfCode: 'def process(df):\\n    return df.dropna(subset=["gene", "disease", "evidence"])' },
+          ],
+          connections: [
+            { type: 'prompt-to-run', fromId: 'relation-prompt', toId: 'relations' },
+            { type: 'data', fromId: 'papers', fromPort: 'result', toId: 'relations' },
+            { type: 'data', fromId: 'relations', fromPort: 'result', toId: 'normalize', alias: 'df' },
+
+            { type: 'prompt-to-run', fromId: 'study-prompt', toId: 'studies' },
+            { type: 'data', fromId: 'papers', fromPort: 'result', toId: 'studies' },
+            { type: 'data', fromId: 'studies', fromPort: 'result', toId: 'metadata', alias: 'df' },
+
+            { type: 'data', fromId: 'papers', fromPort: 'result', toId: 'provenance', alias: 'df' },
+            { type: 'data', fromId: 'normalize', fromPort: 'result', toId: 'merge', alias: 'df_relations' },
+            { type: 'data', fromId: 'metadata', fromPort: 'result', toId: 'merge', alias: 'df_metadata' },
+            { type: 'data', fromId: 'provenance', fromPort: 'result', toId: 'merge', alias: 'df_provenance' },
+            { type: 'data', fromId: 'merge', fromPort: 'result', toId: 'quality', alias: 'df' },
+          ],
+        });
+        return true;`);
+      await wait(1200);
+      await shot('home-pipeline');
+    },
+  },
+  {
     name: 'agent-assistant',
     async run(ctx) {
       await ctx.open(AGENT_PANEL);

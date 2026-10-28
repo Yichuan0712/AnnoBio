@@ -103,7 +103,24 @@
     overflow-wrap: anywhere;
   }
   .docs-request { border-left: 3px solid var(--accent); font-size: 14px; }
-  .docs-flow { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 20px 0; }
+  .docs-recommendation {
+    margin: 18px 0 22px;
+    padding: 16px 18px;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    background: rgba(37, 99, 235, 0.06);
+  }
+  .docs-recommendation-label {
+    display: block;
+    margin-bottom: 7px;
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 750;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .docs-recommendation p:last-child { margin-bottom: 0; }
+  .docs-flow { display: flex; align-items: center; justify-content: center; gap: 14px; flex-wrap: wrap; margin: 20px 0; }
   .docs-flow span { padding: 12px 18px; border: 1px solid var(--border); background: var(--bg); font-size: 14px; text-align: center; }
   .docs-flow small { color: var(--text-muted); }
   .docs-flow b { color: var(--accent); }

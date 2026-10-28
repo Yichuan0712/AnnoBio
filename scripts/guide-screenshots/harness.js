@@ -257,6 +257,13 @@ window.fetch = async (url, opts = {}) => {
 // ---- Application shell ---------------------------------------------------------------------
 
 const params = new URLSearchParams(location.search);
+if (params.has('desktop')) {
+  window.electronAPI = {
+    platform: 'win32',
+    isWindowMaximized: async () => false,
+    onWindowMaximizedChanged: () => {},
+  };
+}
 localStorage.clear();
 localStorage.setItem('annobio.workspacePanels.v1', JSON.stringify({
   agent: params.has('agent'), pipeline: params.has('panel'), height: 300, width: 460, tab: params.get('panel') || 'pipeline',
