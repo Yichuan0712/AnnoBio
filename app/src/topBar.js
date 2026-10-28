@@ -154,8 +154,8 @@ function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, add
   const submenu = document.createElement('div');
   submenu.className = 'submenu';
   submenu.innerHTML = `
-    <button type="button" class="menu-option" data-mode="light">Light</button>
-    <button type="button" class="menu-option" data-mode="dark">Dark</button>
+    <button type="button" class="menu-option display-mode-option" data-mode="light">Light<span class="display-mode-check" aria-hidden="true">✓</span></button>
+    <button type="button" class="menu-option display-mode-option" data-mode="dark">Dark<span class="display-mode-check" aria-hidden="true">✓</span></button>
   `;
   submenu.querySelector('[data-mode="light"]').addEventListener('click', () => setTheme(THEME_LIGHT));
   submenu.querySelector('[data-mode="dark"]').addEventListener('click', () => setTheme(THEME_DARK));

@@ -512,3 +512,19 @@ html.top-bar-web {
   display: block;
 }
 
+.display-mode-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.display-mode-check {
+  visibility: hidden;
+}
+
+html:not(.dark) .display-mode-option[data-mode="light"] .display-mode-check,
+html.dark .display-mode-option[data-mode="dark"] .display-mode-check {
+  visibility: visible;
+}
+
