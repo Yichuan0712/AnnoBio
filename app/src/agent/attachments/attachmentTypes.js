@@ -7,13 +7,13 @@
 const MB = 1024 * 1024;
 
 const EXTENSIONS = {
-  table: ['csv', 'tsv', 'xlsx', 'xls'],
+  table: ['csv', 'tsv', 'xlsx', 'xls', 'json', 'jsonl', 'ndjson'],
   image: ['png', 'jpg', 'jpeg', 'webp'],
   pdf: ['pdf'],
   text: [
     // Text, markup and config
     'txt', 'text', 'md', 'markdown', 'mdx', 'rst', 'adoc', 'asciidoc', 'org', 'tex', 'bib', 'rtf', 'log', 'out', 'diff', 'patch',
-    'json', 'jsonc', 'json5', 'jsonl', 'ndjson', 'geojson', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf', 'config', 'properties',
+    'jsonc', 'json5', 'geojson', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf', 'config', 'properties',
     'xml', 'xsd', 'xsl', 'xslt', 'svg', 'html', 'htm', 'xhtml', 'css', 'scss', 'sass', 'less', 'styl',
     'gitignore', 'dockerignore', 'editorconfig', 'gitattributes', 'rprofile', 'renviron',
     // Biology and chemistry text formats
@@ -106,8 +106,12 @@ export function normalizeStoredAttachments(list) {
       id: String(item.id).trim(),
       name: String(item.name || ''),
       path: String(item.path || ''),
-      kind: attachmentKind(item.name) || String(item.kind || ''),
+      kind: item.kind === 'folder' ? 'folder' : attachmentKind(item.name) || String(item.kind || ''),
       size: Number(item.size) || 0,
+      ...(item.grantId ? { grantId: String(item.grantId) } : {}),
+      ...(item.relativePath ? { relativePath: String(item.relativePath) } : {}),
+      ...(item.revoked ? { revoked: true } : {}),
+      ...(item.error ? { error: String(item.error) } : {}),
       ...(item.preview != null ? { preview: String(item.preview) } : {}),
     }));
 }

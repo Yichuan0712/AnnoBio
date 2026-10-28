@@ -5,6 +5,39 @@
  */
 import * as XLSX from 'xlsx';
 
+/** JSON records and JSONL share the same lossless string-cell conversion as dataset imports. */
+export function parseJsonRecords(text, { lines = false } = {}) {
+  const source = String(text ?? '').replace(/^\uFEFF/, '');
+  let records;
+  const objectRow = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+  try {
+    if (lines) {
+      records = [];
+      for (const [index, line] of source.split(/\r\n|\n|\r/).entries()) {
+        if (!line.trim()) continue;
+        let value;
+        try { value = JSON.parse(line); } catch (_) { return { error: `Invalid JSON at line ${index + 1}.` }; }
+        if (!objectRow(value)) return { error: `Line ${index + 1} must contain an object.` };
+        records.push(value);
+      }
+    } else {
+      records = JSON.parse(source);
+      if (objectRow(records)) {
+        const arrays = Object.values(records).filter(Array.isArray);
+        if (arrays.length !== 1) return { error: 'JSON must be an array of objects, or an object with exactly one array field.' };
+        records = arrays[0];
+      }
+      if (!Array.isArray(records)) return { error: 'JSON must contain an array of objects.' };
+      const invalid = records.findIndex((row) => !objectRow(row));
+      if (invalid >= 0) return { error: `Record ${invalid + 1} must be an object.` };
+    }
+  } catch (_) { return { error: 'Invalid JSON. Use an array of objects.' }; }
+  const headers = [...new Set(records.flatMap(Object.keys))];
+  if (!headers.length) return { error: 'No columns found in JSON records.' };
+  const cell = (value) => value == null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+  return { headers, rows: records.map((row) => headers.map((key) => Object.hasOwn(row, key) ? cell(row[key]) : '')) };
+}
+
 /**
  * CSV records as RFC 4180 reads them: a quoted field may hold commas, line breaks and "" for a quote.
  * Unquoted fields are trimmed, and blank lines are skipped.

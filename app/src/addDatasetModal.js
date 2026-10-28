@@ -5,7 +5,7 @@
  * bioRxiv/medRxiv or ChEMBL -- then preview.
  */
 
-import { parseDelimitedText, parseWorkbookSheet, readWorkbook } from './datasetFileParsing.js';
+import { parseDelimitedText, parseJsonRecords, parseWorkbookSheet, readWorkbook } from './datasetFileParsing.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { showConfirm } from './alertModal.js';
 import { imageCell, pdfCell } from './datasetContent.js';
@@ -168,10 +168,10 @@ export function openAddDatasetModal(workflowCanvasApi) {
                 <div class="dataset-source-panel dataset-source-panel--active" data-source-panel="upload">
                   <div class="dataset-import">
                     <h3 class="dataset-import-title">Upload a table</h3>
-                    <p class="dataset-sheet-hint">Import rows from a spreadsheet file on your computer (CSV, TSV, or XLSX). Each column becomes a text column you can retype as Image afterward.</p>
+                    <p class="dataset-sheet-hint">Import rows from CSV, TSV, Excel, JSON or JSONL on your computer. Each column becomes a text column you can retype as Image afterward.</p>
                     <div class="dataset-import-actions">
-                      <input type="file" id="dataset-file-input" accept=".csv,.tsv,.xlsx,.xls,text/csv,text/tab-separated-values,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" hidden />
-                      <button type="button" class="btn btn-secondary dataset-import-btn">Choose CSV / TSV / XLSX file</button>
+                      <input type="file" id="dataset-file-input" accept=".csv,.tsv,.xlsx,.xls,.json,.jsonl,.ndjson,text/csv,text/tab-separated-values,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" hidden />
+                      <button type="button" class="btn btn-secondary dataset-import-btn">Choose table file</button>
                       <span class="dataset-filename" aria-live="polite"></span>
                     </div>
                     <div class="dataset-sheet-wrap" id="dataset-sheet-wrap" style="display:none">
@@ -189,6 +189,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
                     <div class="dataset-import-actions">
                       <input type="file" id="image-file-input" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" multiple hidden />
                       <button type="button" class="btn btn-secondary image-import-choose-btn">Choose images</button>
+                      ${window.electronAPI?.importDatasetFolder ? '<button type="button" class="btn btn-secondary" data-import-folder="image">Import a folder</button><label><input type="checkbox" data-folder-recursive="image" /> Include subfolders</label>' : ''}
                       <span class="dataset-filename image-import-filenames" aria-live="polite"></span>
                     </div>
                   </div>
@@ -200,6 +201,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
                     <div class="dataset-import-actions">
                       <input type="file" id="pdf-file-input" accept=".pdf,application/pdf" multiple hidden />
                       <button type="button" class="btn btn-secondary pdf-import-choose-btn">Choose PDFs</button>
+                      ${window.electronAPI?.importDatasetFolder ? '<button type="button" class="btn btn-secondary" data-import-folder="pdf">Import a folder</button><label><input type="checkbox" data-folder-recursive="pdf" /> Include subfolders</label>' : ''}
                       <span class="dataset-filename pdf-import-filenames" aria-live="polite"></span>
                     </div>
                   </div>
@@ -1000,6 +1002,8 @@ export function openAddDatasetModal(workflowCanvasApi) {
   function setPdfRunningUi(running) {
     pdfChooseBtn.disabled = running;
     addBtn.disabled = running;
+    const folderButton = overlay.querySelector('[data-import-folder="pdf"]');
+    if (folderButton) folderButton.disabled = running;
   }
 
   /** Registers each picked PDF as a project asset (not parsed) and builds a Filename + PDF
@@ -1048,6 +1052,30 @@ export function openAddDatasetModal(workflowCanvasApi) {
   function setImageRunningUi(running) {
     imageChooseBtn.disabled = running;
     addBtn.disabled = running;
+    const folderButton = overlay.querySelector('[data-import-folder="image"]');
+    if (folderButton) folderButton.disabled = running;
+  }
+
+  for (const button of overlay.querySelectorAll('[data-import-folder]')) {
+    button.addEventListener('click', async () => {
+      const kind = button.dataset.importFolder;
+      const setRunning = kind === 'pdf' ? setPdfRunningUi : setImageRunningUi;
+      hideError(); setRunning(true);
+      try {
+        const result = await window.electronAPI.importDatasetFolder(kind, overlay.querySelector(`[data-folder-recursive="${kind}"]`).checked);
+        if (result?.cancelled) return;
+        if (result?.error) throw new Error(result.error);
+        const column = kind === 'pdf' ? 'PDF' : 'Image';
+        const cell = kind === 'pdf' ? pdfCell : imageCell;
+        const headers = ['Filename', column];
+        const rows = result.assets.map((asset) => [asset.name, cell([asset.id], [asset.name])]);
+        fileImported = true;
+        parsedDatasetContent = { headers, rows, columnTypes: ['text', kind] };
+        (kind === 'pdf' ? pdfFilenamesEl : imageFilenamesEl).textContent = `${rows.length} files imported from folder`;
+        renderPreviewTable(headers, rows.slice(0, MAX_PREVIEW_ROWS), rows.length);
+      } catch (error) { showError(`Could not import folder: ${error.message}`); }
+      finally { setRunning(false); }
+    });
   }
 
   /** Registers each picked image as a project asset and builds a Filename + Image column
@@ -1099,13 +1127,14 @@ export function openAddDatasetModal(workflowCanvasApi) {
     const isCsv = name.endsWith('.csv');
     const isTsv = name.endsWith('.tsv');
     const isXlsx = name.endsWith('.xlsx') || name.endsWith('.xls');
-    if (!isCsv && !isTsv && !isXlsx) {
+    const isJson = /\.(?:json|jsonl|ndjson)$/.test(name);
+    if (!isCsv && !isTsv && !isXlsx && !isJson) {
       fileImported = false;
       parsedDatasetContent = null;
       xlsxWorkbook = null;
       if (sheetWrap) sheetWrap.style.display = 'none';
-      filenameEl.textContent = 'Please choose a .csv, .tsv or .xlsx file.';
-      setFileInfoPlaceholder('Please choose a .csv, .tsv or .xlsx file.');
+      filenameEl.textContent = 'Choose a CSV, TSV, Excel, JSON or JSONL file.';
+      setFileInfoPlaceholder('Choose a CSV, TSV, Excel, JSON or JSONL file.');
       previewEl.textContent = '';
       previewEl.classList.add('prompt-preview--empty');
       return;
@@ -1163,7 +1192,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
 
     const reader = new FileReader();
     reader.onload = () => {
-      const parsed = parseDelimitedText(reader.result, { tsv: isTsv });
+      const parsed = isJson ? parseJsonRecords(reader.result, { lines: !name.endsWith('.json') }) : parseDelimitedText(reader.result, { tsv: isTsv });
       if (parsed.error) {
         fileImported = false;
         parsedDatasetContent = null;
@@ -1175,7 +1204,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
       const { headers, rows: allRows } = parsed;
       fileImported = true;
       parsedDatasetContent = { headers, rows: allRows };
-      setFileInfo(file, isTsv ? 'TSV' : 'CSV', headers.length, allRows.length, headers);
+      setFileInfo(file, isJson ? (name.endsWith('.json') ? 'JSON' : 'JSONL') : isTsv ? 'TSV' : 'CSV', headers.length, allRows.length, headers);
       renderPreviewTable(headers, allRows.slice(0, MAX_PREVIEW_ROWS), allRows.length);
     };
     reader.onerror = () => {
