@@ -8525,7 +8525,6 @@ button.btn.btn-danger:hover:not(:disabled) {
   overflow-x: visible;
 }
 
-.dataset-database-navigation { margin-bottom: 12px; }
 .modal-panel--dataset[data-add-dataset-step="2"][data-dataset-source="database"] .dataset-add-main {
   flex: 1 1 0; border-right: none;
 }

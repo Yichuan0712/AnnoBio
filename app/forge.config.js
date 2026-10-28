@@ -29,15 +29,25 @@ function copyBackend(src, dest) {
   }
 }
 
-// macOS titles the menu from Electron.app's Info.plist during `npm start`.
-// The label in main.js cannot override that. Packaged builds get the name
-// from electron-builder instead, so this only touches the local dev binary.
+// macOS reads the dev app's menu name and Dock icon from Electron.app.
+// Packaged builds get both from electron-builder, so this only touches the
+// local dev binary. The runtime Dock icon is cleared on quit; without
+// replacing electron.icns the Dock flashes Electron's own icon.
 function useAnnoBioNameForDevElectron() {
   if (process.platform !== 'darwin') return;
-  const plistPath = path.join(__dirname, 'node_modules', 'electron', 'dist', 'Electron.app', 'Contents', 'Info.plist');
+  const appPath = path.join(__dirname, 'node_modules', 'electron', 'dist', 'Electron.app');
+  const plistPath = path.join(appPath, 'Contents', 'Info.plist');
   if (!fs.existsSync(plistPath)) return;
   for (const key of ['CFBundleName', 'CFBundleDisplayName']) {
     execFileSync('plutil', ['-replace', key, '-string', 'AnnoBio', plistPath]);
+  }
+  // com.github.Electron is shared by every dev Electron app, so the Dock keeps
+  // the Electron icon for that id and shows it again when the custom icon is cleared.
+  execFileSync('plutil', ['-replace', 'CFBundleIdentifier', '-string', 'com.digitalbiologylab.promptstudio.dev', plistPath]);
+  const iconSrc = path.join(__dirname, 'assets', 'icon.icns');
+  const iconDest = path.join(appPath, 'Contents', 'Resources', 'electron.icns');
+  if (fs.existsSync(iconSrc) && fs.existsSync(path.dirname(iconDest))) {
+    fs.copyFileSync(iconSrc, iconDest);
   }
 }
 

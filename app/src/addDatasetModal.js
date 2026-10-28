@@ -163,9 +163,6 @@ export function openAddDatasetModal(workflowCanvasApi) {
             </div>
             <div class="dataset-add-step2-scroll">
               <div class="dataset-add-step2-left">
-                <div class="dataset-database-navigation" hidden>
-                  <button type="button" class="btn btn-secondary" data-database-back>← Choose another database</button>
-                </div>
                 ${databasePickerHtml()}
                 <div class="dataset-source-panel dataset-source-panel--active" data-source-panel="upload">
                   <div class="dataset-import">
@@ -663,7 +660,6 @@ export function openAddDatasetModal(workflowCanvasApi) {
       p.classList.toggle('dataset-source-panel--active', on);
       p.hidden = !on;
     });
-    overlay.querySelector('.dataset-database-navigation').hidden = !isOtherDatabase(target);
     hideError();
     resetStagedContent();
     if (target === 'empty') {
@@ -677,7 +673,6 @@ export function openAddDatasetModal(workflowCanvasApi) {
     btn.addEventListener('click', () => switchDataSource(btn.dataset.source));
   });
   mountDatabasePicker(overlay, switchDataSource);
-  overlay.querySelector('[data-database-back]').addEventListener('click', () => switchDataSource('database'));
 
   async function pollPubmedJob(jobId) {
     try {
