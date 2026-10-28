@@ -150,7 +150,7 @@ class DatasetDownloadTest(unittest.TestCase):
         from fastapi.testclient import TestClient
         app = FastAPI()
         for route in main.app.routes:
-            if '/import' in route.path: app.router.routes.append(route)
+            if '/import' in getattr(route, 'path', ''): app.router.routes.append(route)
         client = TestClient(app)
         stream = io.BytesIO()
         pq.write_table(pa.table({'gene': [f'gene-{i}' for i in range(5001)]}), stream)
@@ -178,7 +178,7 @@ class DatasetDownloadTest(unittest.TestCase):
         from fastapi.testclient import TestClient
         app = FastAPI()
         for route in main.app.routes:
-            if '/import' in route.path: app.router.routes.append(route)
+            if '/import' in getattr(route, 'path', ''): app.router.routes.append(route)
         client = TestClient(app)
         factory = lambda: httpx.Client(transport=self.client._transport)
         with mock.patch.object(ri, '_client', factory):
