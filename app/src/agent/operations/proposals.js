@@ -52,14 +52,26 @@ async function scoreTablesFor(operations, workspace) {
  * them, for changeSet.js's import_attachment. A table is read each time (the file may have changed since
  * the proposal); `store` copies image and PDF files into the project, which only applying does.
  */
-async function attachmentsFor(operations, workspace, { store = false, onStatus } = {}) {
+async function attachmentsFor(operations, workspace, { store = false, onStatus, importSnapshots = {} } = {}) {
   const entries = new Map();
   for (const [index, op] of (operations || []).entries()) {
     if (op?.op !== 'import_attachment' || !workspace.findAttachment) continue;
+    if (op.folder) {
+      if (!workspace.resolveFolderImport) throw new Error('Local folder imports are available only in the desktop app.');
+      if (store && !importSnapshots[index]) throw new Error('The folder import needs a fresh preview.');
+      entries.set(index, await workspace.resolveFolderImport(op, { token: importSnapshots[index], store }));
+      continue;
+    }
     const ids = (Array.isArray(op.attachments) ? op.attachments : [op.attachments]).map((id) => String(id || '').trim()).filter(Boolean);
     const attachments = ids.map((id) => workspace.findAttachment(id)).filter(Boolean);
+    if (workspace.resolvePathImports && attachments.some((item) => item.grantId)) {
+      if (store && !importSnapshots[index]) throw new Error('The local file import needs a fresh preview.');
+      entries.set(index, await workspace.resolvePathImports(op, { token: importSnapshots[index], store }));
+      continue;
+    }
     const kinds = new Set(attachments.map((a) => a.kind));
     const entry = { attachments };
+    await workspace.validateAttachments?.(attachments);
     if (attachments.length === 1 && kinds.has('table')) {
       entry.table = await workspace.readAttachmentTable(attachments[0], op.sheet);
     } else if (store && attachments.length && attachments.length === ids.length && kinds.size === 1 && (kinds.has('image') || kinds.has('pdf'))) {
@@ -156,6 +168,7 @@ export async function previewProposal(proposal, workspace) {
       ok: true,
       items: plan.items.map(({ kind, type, title, lines, diffs, nodeIds }) => ({ kind, type, title, lines, diffs, nodeIds })),
       warnings: plan.warnings,
+      importSnapshots: Object.fromEntries([...attachments].filter(([, entry]) => entry.snapshotToken).map(([index, entry]) => [index, entry.snapshotToken])),
     };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
@@ -167,7 +180,7 @@ export async function previewProposal(proposal, workspace) {
  * @param {object} workspace as for previewProposal, plus applyCanvasState(state, {highlightNodeIds})
  * @returns {Promise<object>} the tool result the Agent sees
  */
-export async function applyProposal(proposal, workspace, { signal, onStatus } = {}) {
+export async function applyProposal(proposal, workspace, { signal, onStatus, importSnapshots } = {}) {
   const operations = Array.isArray(proposal?.operations) ? proposal.operations : [];
   if (operations.some((op) => op?.op === 'select_history')) {
     if (operations.length !== 1 || !operations[0].record_id) throw new Error('select_history must be the only operation and needs record_id.');
@@ -189,7 +202,7 @@ export async function applyProposal(proposal, workspace, { signal, onStatus } = 
   const contentLocks = await workspace.getContentLocks?.();
   const evaluationPrompts = await evaluationPromptsFor(operations, workspace);
   const scoreTables = await scoreTablesFor(operations, workspace);
-  const attachments = await attachmentsFor(operations, workspace, { store: true, onStatus });
+  const attachments = await attachmentsFor(operations, workspace, { store: true, onStatus, importSnapshots });
   const plan = planChangeSet(workspace.getCanvasState(), operations, {
     extractInputFields: workspace.extractInputFields,
     sources,

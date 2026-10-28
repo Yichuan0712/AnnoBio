@@ -654,15 +654,17 @@ export function planChangeSet(state, operations, ctx) {
     import_attachment(op, index) {
       const entry = ctx.attachments?.get(index);
       if (!entry) fail('Attachments can be imported only in the desktop app, from files the user attached in this conversation.');
-      const ids = (Array.isArray(op.attachments) ? op.attachments : [op.attachments]).map(clean).filter(Boolean);
+      const ids = op.folder ? entry.attachments.map((item) => item.id) : (Array.isArray(op.attachments) ? op.attachments : [op.attachments]).map(clean).filter(Boolean);
       if (!ids.length) fail('attachments must list attachment ids from the previews, such as ["a1"].');
       const missing = ids.filter((id) => !entry.attachments.some((a) => a.id === id));
       if (missing.length) fail(`No attachment ${missing.join(', ')} in this conversation. Use ids from the attachment previews.`);
       const found = ids.map((id) => entry.attachments.find((a) => a.id === id));
       const kinds = new Set(found.map((a) => a.kind));
       if (kinds.has('text')) fail('Text and code attachments cannot be imported as a Dataset; read them with read_attachment.');
+      if ([...kinds].some((kind) => !['table', 'image', 'pdf'].includes(kind))) fail('Import tables, images or PDFs; select files inside a folder.');
       if (kinds.size > 1) fail('Import one table, a batch of images or a batch of PDFs in one operation, not a mix.');
       const kind = found[0].kind;
+      if (found.length > 200) warnings.push(`Importing ${found.length} files; review the file count and total size before applying.`);
       let content;
       let lines;
       if (kind === 'table') {
