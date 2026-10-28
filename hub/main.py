@@ -24,6 +24,7 @@ import archive
 import containers
 import db
 import mailer
+from guide import GUIDE_GROUPS, build_chapters
 from proxy import proxy_request
 
 mimetypes.add_type("image/webp", ".webp")
@@ -441,13 +442,16 @@ GUIDE_IMAGES = {
     "add-prompt-modal": "add-prompt-modal.png",
     "add-dataset-modal": "add-dataset-modal.png",
     "canvas-connected": "canvas-connected.png",
-    "run-progress": "run-progress.png",
     "run-results": "run-results.png",
     "review-method-picker": "review-method-picker.png",
     "llm-settings": "llm-settings.png",
     "agent-assistant": "agent-assistant.png",
     "process-node": "process-node.png",
-    "process-context-menu": "process-context-menu.png",
+    "dataset-table": "dataset-table.png",
+    "pipeline-overview": "pipeline-overview.png",
+    "optimize-findings": "optimize-findings.png",
+    "optimize-suggestion": "optimize-suggestion.png",
+    "prompt-versions": "prompt-versions.png",
 }
 
 
@@ -457,223 +461,24 @@ def fig(slug: str, caption: str) -> str:
         return ""
     return (
         '<figure class="docs-figure">'
-        f'<img src="/guide/images/{filename}" alt="{caption}" loading="lazy">'
+        f'<a href="/guide/images/{filename}" target="_blank" rel="noopener" aria-label="Open screenshot: {escape(caption, quote=True)}">'
+        f'<img src="/guide/images/{filename}" alt="{escape(caption, quote=True)}" loading="lazy"></a>'
         f'<figcaption>{caption}</figcaption>'
         '</figure>'
     )
 
 
-REVIEW_METHODS_TABLE = """
-<div class="docs-table-wrap">
-<table>
-<tr><th>Method</th><th>Rewrites</th><th>Good for</th></tr>
-<tr><td><strong>Thompson Prompt Search</strong><br>(default)</td><td>Instructions</td><td>A quick first pass that reads the failing rows, explains the likely issue, and proposes a targeted edit.</td></tr>
-<tr><td><strong>GEPA</strong></td><td>Instructions</td><td>Harder tasks where a single edit isn't enough. Evolves several candidate prompts over multiple rounds and keeps the best.</td></tr>
-<tr><td><strong>MIPROv2</strong></td><td>Instructions + few-shot examples</td><td>When both the wording and a couple of worked examples would help.</td></tr>
-<tr><td><strong>COPRO</strong></td><td>Instructions only</td><td>Similar to MIPROv2 but skips few-shot examples, useful when example rows would eat too much of the context window.</td></tr>
-<tr><td><strong>BootstrapFewShotWithRandomSearch</strong></td><td>Few-shot examples only</td><td>When the instructions are already good and the model mainly needs to see examples of the right output.</td></tr>
-<tr><td><strong>SIMBA</strong></td><td>Instructions + few-shot examples</td><td>Self-reflective: the model critiques its own mistakes and turns them into rules and examples.</td></tr>
-<tr><td><strong>TextGrad</strong></td><td>Instructions</td><td>Treats the score as a loss signal and nudges the prompt's wording in the direction that would have improved it.</td></tr>
-</table>
-</div>
-"""
-
-GUIDE_CHAPTERS = [
-    ("overview", "Overview", lambda: f"""
-<p>AnnoBio is a canvas for building, running, and improving LLM prompts against real datasets. You write a
-prompt once, connect it to a dataset, run it across every row, and, if the output isn't good enough yet, let an
-automatic optimizer rewrite the prompt for you based on what went wrong.</p>
-<p>It's built for the kind of work that shows up in chemistry and medical research: pulling structured facts out of
-literature, screening compound descriptions, classifying trial text, anything where you'd otherwise be
-copy-pasting the same instructions into a chat window hundreds of times.</p>
-{fig("empty-canvas", "A new, empty project. The three icons in the top bar create everything you need: LLM settings, a prompt, or a dataset.")}
-<h3>What this guide covers</h3>
-<ul>
-<li>The core objects (project, prompt, dataset, Generate, Evaluate, Optimize) and how they fit together</li>
-<li>Creating a project and adding your first prompt and dataset</li>
-<li>Connecting nodes on the canvas and running a prompt across a dataset</li>
-<li>Scoring results and letting an optimizer rewrite the prompt automatically</li>
-<li>Running plain Python over a dataset when a step doesn't need a model at all</li>
-<li>Adding your own LLM credentials, and using the Agent Assistant to drive the canvas in plain language</li>
-</ul>
-"""),
-    ("key-concepts", "Key concepts", lambda: """
-<h3>Project</h3>
-<p>A <strong>project</strong> is the unit everything else lives in: its own canvas, with its own prompts,
-datasets, Generate steps, and evaluation history. Switching projects switches the whole canvas.</p>
-<h3>Prompt</h3>
-<p>A <strong>prompt</strong> is a reusable instruction template, written as one block of text with a
-placeholder for each input, plus an <strong>output schema</strong> describing the fields you want the model to return. You write it once and
-run it against as many dataset rows as you like.</p>
-<h3>Dataset</h3>
-<p>A <strong>dataset</strong> is a table of rows, each one an input to run the prompt against. Build one by hand,
-import a spreadsheet, or pull rows directly from PubMed, ClinicalTrials.gov, bioRxiv/medRxiv, or ChEMBL.</p>
-<h3>Generate</h3>
-<p>A <strong>Generate node</strong> sends the prompt, filled in with each dataset row, to your chosen model, and
-collects the results into a table, one row of output per row of input.</p>
-<h3>Evaluate / Optimize</h3>
-<p>A <strong>Evaluate node</strong> compares a Generate step's output against criteria you define. Once rows are scored, an
-optimization method can use that signal to rewrite the prompt and try again.</p>
-<h3>Process</h3>
-<p>A <strong>Process node</strong> runs your own Python function over a dataset instead of a model. No LLM
-involved. Useful for the parts of a pipeline that are plain data manipulation, not something worth spending a
-model call on.</p>
-<h3>Credential</h3>
-<p>A <strong>credential</strong> is an API key for a model provider. You bring your own; AnnoBio doesn't
-meter or bill LLM usage on your behalf.</p>
-"""),
-    ("website-overview", "Where to go", lambda: """
-<p>Use this table as a map: each row points to the guide section that covers it.</p>
-<div class="docs-table-wrap">
-<table>
-<tr><th>I want to&hellip;</th><th>Go to</th></tr>
-<tr><td>Start a new piece of work</td><td><a href="#create-a-project">Create a project</a></td></tr>
-<tr><td>Add an OpenAI / Anthropic / Gemini / other API key</td><td><a href="#add-your-model">Add your model</a></td></tr>
-<tr><td>Write reusable instructions for the model</td><td><a href="#write-a-prompt">Write a prompt</a></td></tr>
-<tr><td>Bring in rows to run the prompt against</td><td><a href="#build-a-dataset">Build a dataset</a></td></tr>
-<tr><td>Actually run the prompt and see output</td><td><a href="#connect-and-run">Connect nodes and run</a></td></tr>
-<tr><td>Grade output and improve the prompt automatically</td><td><a href="#review-and-optimize">Review and optimize a prompt</a></td></tr>
-<tr><td>Run plain Python instead of a model call</td><td><a href="#process-node">Transform data with Python</a></td></tr>
-<tr><td>Build the canvas by describing it in plain language</td><td><a href="#agent-assistant">Ask the Agent Assistant</a></td></tr>
-<tr><td>Copy or combine projects</td><td><a href="#managing-projects">Managing projects</a></td></tr>
-</table>
-</div>
-"""),
-    ("create-a-project", "Create a project", lambda: """
-<p>Click the project name in the top bar to open the project picker.</p>
-<ol>
-<li>Click <strong>New project</strong>, or pick an existing one from the list to reopen it.</li>
-<li>A new project opens on an empty canvas with a short guidance box until you add your first node.</li>
-</ol>
-<p>Everything you build afterward (prompts, datasets, runs, review history) is saved inside that project and
-reopens exactly as you left it.</p>
-"""),
-    ("add-your-model", "Add your model", lambda: f"""
-<p>Before writing a prompt, open <strong>LLM settings</strong> (the chip icon in the top bar) and add a credential:
-Generate, Optimize, and the Agent Assistant all need one to actually talk to a model. AnnoBio doesn't restrict
-which LLM you use, and doesn't meter or bill usage on your behalf; you bring your own API key, and it talks to
-that provider directly. There are two ways to add one:</p>
-<ul>
-<li><strong>Via LiteLLM</strong> (the default): type a <strong>Model ID</strong> in LiteLLM's naming convention,
-e.g. <code>gpt-5</code>, <code>anthropic/claude-sonnet-4-6</code>, or <code>gemini/gemini-2.0-flash</code>, paste
-that provider's API key, and you're done. LiteLLM alone covers well over a hundred providers this way. Point the
-optional <strong>Base URL</strong> field at a local or self-hosted endpoint (e.g. Ollama at
-<code>http://localhost:11434/v1</code>) to use a model that isn't hosted by anyone else at all.</li>
-<li><strong>Via OpenRouter</strong>: click <strong>Connect</strong> to sign in with an OpenRouter account, then
-pick any model from its catalog. One connection, no per-model key pasting.</li>
-</ul>
-{fig("llm-settings", "LLM settings, empty state: two ways to add a credential, a LiteLLM model ID or an OpenRouter account connection.")}
-<p>You can add more than one credential and set a different default for <strong>Generate</strong>,
-<strong>Optimize prompt</strong>, and the <strong>Agent Assistant</strong> independently, for example a cheaper model for
-everyday runs and a stronger one for optimization.</p>
-"""),
-    ("write-a-prompt", "Write a prompt", lambda: f"""
-<p>Click the document icon in the top bar to create a new prompt. The editor walks through three steps.</p>
-<h3>1. Name & description</h3>
-<p>A name and a short note on what the prompt is for. Purely for your own reference.</p>
-<h3>2. Prompt</h3>
-<p>The prompt body, written as one block of text. Write a placeholder in single curly braces, e.g.
-<code>{{excerpt}}</code>, anywhere you want a dataset column's value inserted; the panel beside it lists the
-inputs it finds. You'll map each placeholder to an actual column when you set up the Generate node (see
-<a href="#connect-and-run">Connect nodes and run</a>). To change a prompt later, open it and click its text.</p>
-<h3>3. Output schema</h3>
-<p>Define the fields you want back from the model, each with a name, an optional description, and example values,
-plus whether the model should return a <strong>single row</strong> or <strong>multiple rows</strong> per input.
-This is what turns a free-text model response into a structured results table instead of a wall of text you'd
-have to parse yourself. A live preview on the right shows the schema as you build it.</p>
-{fig("add-prompt-modal", "Step 3 of the prompt editor: the fields on the left, the prompt's inputs in the middle (here {excerpt}), and a preview of the output schema on the right.")}
-"""),
-    ("build-a-dataset", "Build a dataset", lambda: f"""
-<p>Click the database icon in the top bar to create a new dataset. Choose one of six ways to fill it in:</p>
-{fig("add-dataset-modal", "Creating a dataset: pick a source, then Create. Empty table starts you with a single blank column; rows and extra columns are added afterward in the dataset editor.")}
-<div class="docs-table-wrap">
-<table>
-<tr><th>Source</th><th>Use it when&hellip;</th></tr>
-<tr><td>Empty table</td><td>You want to type in a handful of rows by hand.</td></tr>
-<tr><td>Upload file</td><td>You already have a CSV, TSV, or Excel file.</td></tr>
-<tr><td>PubMed</td><td>You have a list of PMIDs and want their abstracts as rows.</td></tr>
-<tr><td>ClinicalTrials.gov</td><td>You have NCT numbers and want trial records as rows.</td></tr>
-<tr><td>bioRxiv / medRxiv</td><td>You have preprint DOIs and want their abstracts as rows.</td></tr>
-<tr><td>ChEMBL</td><td>You have ChEMBL IDs and want compound records as rows.</td></tr>
-</table>
-</div>
-<p>Picking <strong>Empty table</strong> and clicking Create gives you a dataset node with one blank column.
-Double-click it to open the dataset editor, where you rename columns, add more, and type in rows. However a
-dataset is built, the result is the same: a table of rows and columns you can feed into a Generate node.</p>
-"""),
-    ("connect-and-run", "Connect nodes and run", lambda: f"""
-<p>Drag a connection from your prompt node to a <strong>Generate node</strong> on the canvas.</p>
-{fig("canvas-connected", "Prompt and Dataset outputs connected to the Generate step's inputs.")}
-<p>Connect the Dataset output to the Generate step's data input on the canvas. Open Generate and use
-<strong>Map input columns to prompt inputs</strong> to match each <code>{{placeholder}}</code> to an input column.
-Choose a model beside <strong>Create Generate</strong> when creating the step from its Prompt, or use the
-default in <strong>Settings → Generate</strong>. Click <strong>Run</strong>.</p>
-<p>The right-click menu offers <strong>Run to here</strong>, which fills in missing upstream results, and
-<strong>Run this step</strong>, which requires its inputs to have current results. When upstream steps also
-need to run, a plan lists the steps and reused results before you start. Completed steps are reused;
-if everything is already current, the target step runs again. The <strong>Executions</strong> tab keeps the record.</p>
-<p>AnnoBio sends the filled-in prompt to your model once per row, in parallel up to your configured
-concurrency, and streams results back into a table as they complete.</p>
-{fig("run-progress", "A run in progress: completed rows appear in the results table as they finish.")}
-{fig("run-results", "A finished run: one output row per input row, with the fields defined in the prompt's output schema.")}
-<p>Click any result row to see the exact prompt that was sent and the model's raw response, useful when a
-row's output looks wrong and you want to know why.</p>
-"""),
-    ("review-and-optimize", "Review and optimize a prompt", lambda: f"""
-<p>Attach a <strong>Evaluate node</strong> to a finished run. Pick a <strong>ground truth dataset</strong> (rows with
-the answer you expect) and add one or more matching rules (for example, "Input # equals Ground truth #"). A row
-counts as a match only when every rule is satisfied; AnnoBio computes precision, recall, and F1 across the
-whole run automatically. Simple comparisons like this don't need code; switch to <strong>Match by code</strong>
-instead if matching needs logic a rule can't express (fuzzy matching, numeric tolerance, and so on).</p>
-<p>Once rows are scored, the review-method dropdown becomes available. Pick a method and click
-<strong>Optimize prompt</strong> to let it rewrite the prompt based on where it's going wrong.</p>
-{fig("review-method-picker", "A Evaluate node: ground truth dataset, a matching rule, computed precision/recall/F1, and the review-method dropdown.")}
-{REVIEW_METHODS_TABLE}
-<p>Not sure which to pick: start with the default (Thompson Prompt Search) for a quick pass. Reach for GEPA or
-MIPROv2 when a single edit isn't moving the score enough, and BootstrapFewShotWithRandomSearch when the
-instructions are already right but the model needs to see worked examples.</p>
-<p>Every optimization run keeps the previous version of the prompt, so you can compare before/after and roll back
-if a rewrite makes things worse.</p>
-"""),
-    ("process-node", "Transform data with Python", lambda: f"""
-<p>Not every step needs a model. Right-click a dataset node and choose <strong>Create Process</strong> to run
-your own Python function over it instead. No LLM, no API key, no cost, and it runs inside your own private
-container, not shared with anyone else.</p>
-{fig("process-context-menu", "Right-click a dataset node: Create Process creates a connected Process node.")}
-<p>Write <code>def process(df):</code> to transform the input pandas DataFrame. Connect its inputs on
-the canvas; additional named inputs correspond to parameters such as <code>df_reference</code>. Return one
-DataFrame, or a dictionary of named DataFrames for branches. This supports filtering, deduplication,
-sorting, joins and per-row calculations.</p>
-{fig("process-node", "A Process node: a Python DataFrame function, run for real against the connected dataset, with results in the same table format as a Generate node.")}
-<p>Click <strong>Run</strong> to execute it against the connected dataset and see results in the same table format
-as a Generate node. A Process node's output can also be exported back out as a new dataset, so you can chain it into a
-prompt afterward, for example filtering down to just the rows worth sending to a model.</p>
-"""),
-    ("agent-assistant", "Ask the Agent Assistant", lambda: f"""
-<p>The Agent Assistant is the sparkle button on the canvas. Describe what you want in plain language and it can add
-nodes, start runs, and apply review suggestions on your behalf. Useful for setting up a canvas quickly, or for
-importing a dataset without hunting through the dataset modal's tabs yourself.</p>
-{fig("agent-assistant", "Asking the Agent Assistant to import a dataset in plain language.")}
-<p>It uses whichever credential you've set as the default for the Agent Assistant in LLM settings (see
-<a href="#add-your-model">Add your model</a>).</p>
-"""),
-    ("managing-projects", "Managing projects", lambda: f"""
-<p>Open the project picker from the top bar to see every project you've created.</p>
-<ul>
-<li><strong>Duplicate</strong> makes an independent copy of a project (prompts, datasets, and run history
-included), so you can branch off without touching the original.</li>
-<li><strong>Merge into current project</strong> copies another project's nodes onto the canvas you currently have
-open, useful for combining a prompt you built in one project with a dataset from another.</li>
-</ul>
-"""),
-]
+# Keep the guide narrative separate from request handling.
+GUIDE_CHAPTERS = build_chapters(fig)
 
 
 @app.get("/guide")
 def guide_page(request: Request):
     user = current_user(request)
     toc_items = "".join(
-        f'<li><a href="#{chapter_id}">{title}</a></li>' for chapter_id, title, _ in GUIDE_CHAPTERS
+        (f'<li class="docs-toc-group">{GUIDE_GROUPS[chapter_id]}</li>' if chapter_id in GUIDE_GROUPS else "")
+        + f'<li><a href="#{chapter_id}">{title}</a></li>'
+        for chapter_id, title, _ in GUIDE_CHAPTERS
     )
     chapters_html = "".join(
         f'<section class="docs-chapter" id="{chapter_id}">'

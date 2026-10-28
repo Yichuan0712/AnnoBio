@@ -42,6 +42,16 @@
 
   .docs-toc { list-style: none; margin: 0; padding: 0; }
   .docs-toc li { margin: 0; }
+  .docs-toc li.docs-toc-group {
+    margin: 20px 0 6px;
+    padding: 0 10px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text);
+  }
+  .docs-toc li.docs-toc-group:first-child { margin-top: 0; }
   .docs-toc a {
     display: block;
     padding: 6px 10px;
@@ -82,6 +92,22 @@
     border-radius: 3px;
     padding: 1px 5px;
   }
+  .docs-example, .docs-request {
+    margin: 16px 0 20px;
+    padding: 16px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    font-size: 13px;
+    line-height: 1.65;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .docs-request { border-left: 3px solid var(--accent); font-size: 14px; }
+  .docs-flow { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 20px 0; }
+  .docs-flow span { padding: 12px 18px; border: 1px solid var(--border); background: var(--bg); font-size: 14px; text-align: center; }
+  .docs-flow small { color: var(--text-muted); }
+  .docs-flow b { color: var(--accent); }
+  .docs-capabilities td:first-child { min-width: 110px; font-weight: 600; }
 
   .docs-table-wrap { overflow-x: auto; margin: 0 0 18px; }
   .docs-article table { width: 100%; border-collapse: collapse; font-size: 13.5px; background: var(--bg); border: 1px solid var(--border); }
@@ -96,7 +122,8 @@
     border-radius: var(--control-radius, 3px);
     overflow: hidden;
   }
-  .docs-figure img { display: block; width: 100%; height: auto; }
+  .docs-figure img { display: block; max-width: 100%; width: auto; height: auto; margin: 0 auto; }
+  .docs-figure > a { display: block; cursor: zoom-in; }
   .docs-figure figcaption {
     padding: 8px 12px;
     font-size: 12.5px;
@@ -111,6 +138,12 @@
     .docs-sidebar { position: static; width: 100%; flex: none; max-height: none; }
     .docs-toc { display: flex; flex-wrap: wrap; gap: 4px; }
     .docs-toc a { padding: 5px 9px; }
+    .docs-toc li.docs-toc-group { flex-basis: 100%; padding-left: 9px; }
+  }
+  @media (max-width: 480px) {
+    .docs-outer { padding: 0 8px; margin-top: 16px; }
+    .docs-shell { padding: 18px 14px; }
+    .docs-article th, .docs-article td { padding: 8px; }
   }
 </style>
 </head>
@@ -128,7 +161,7 @@
     </aside>
     <main class="docs-main">
       <h1 class="docs-hero-title">User Guide</h1>
-      <p class="docs-hero-subtitle">A complete walkthrough of AnnoBio, from your first project to optimizing a prompt across a full dataset.</p>
+      <p class="docs-hero-subtitle">Build a biomedical annotation pipeline, evaluate and improve its prompts, and use the Agent Assistant to help with each task.</p>
 {{CHAPTERS}}
     </main>
   </div>
