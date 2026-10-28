@@ -143,7 +143,7 @@ function mapMessageForStorage(message) {
     if (message.answer != null) out.answer = String(message.answer);
     if (message.outcome != null) out.outcome = String(message.outcome);
   }
-  const attachments = out.role === 'user' ? normalizeStoredAttachments(message.attachments) : [];
+  const attachments = out.role === 'user' || out.role === 'tool' ? normalizeStoredAttachments(message.attachments) : [];
   if (attachments.length) out.attachments = attachments;
   return out;
 }
@@ -431,7 +431,7 @@ export async function openAgentWindowModal(options = {}) {
     expandedLabel: 'Hide agents panel',
     collapsedLabel: 'Show agents panel',
   });
-  chatListEl.addEventListener('click', (e) => {
+  chatListEl.addEventListener('click', async (e) => {
     const newChatBtn = e.target.closest('[data-action="new-chat"]');
     if (newChatBtn) {
       const newChat = createDraftChat();
@@ -444,6 +444,10 @@ export async function openAgentWindowModal(options = {}) {
     const deleteBtn = e.target.closest('[data-action="delete-chat"]');
     if (deleteBtn) {
       const chatId = deleteBtn.getAttribute('data-chat-id') || '';
+      if (window.electronAPI?.revokeAgentPath) {
+        const result = await window.electronAPI.revokeAgentPath(chatId);
+        if (result?.error) { console.error('Revoke local paths:', result.error); return; }
+      }
       chats = sortChatsByRecent(chats.filter((chat) => chat.id !== chatId));
       if (chats.length === 0) {
         const fallbackChat = createDraftChat();

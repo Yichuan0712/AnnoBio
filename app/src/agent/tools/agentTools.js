@@ -17,9 +17,10 @@ export const PROPOSE_CHANGES_TOOL = 'propose_changes';
 export const RUN_NODES_TOOL = 'run_nodes';
 export const PIPELINE_ACTION_TOOL = 'pipeline_action';
 export const CREATE_PROJECT_TOOL = 'create_project';
+export const REQUEST_FOLDER_ACCESS_TOOL = 'request_folder_access';
 
 /** Tools answered by the user rather than by code; calling one ends the loop until they respond. */
-export const USER_TOOLS = new Set([ASK_USER_TOOL, PROPOSE_CHANGES_TOOL, RUN_NODES_TOOL, PIPELINE_ACTION_TOOL, CREATE_PROJECT_TOOL]);
+export const USER_TOOLS = new Set([ASK_USER_TOOL, PROPOSE_CHANGES_TOOL, RUN_NODES_TOOL, PIPELINE_ACTION_TOOL, CREATE_PROJECT_TOOL, REQUEST_FOLDER_ACCESS_TOOL]);
 
 const GUIDE_TOPICS = [
   'pipeline-building',
@@ -29,6 +30,7 @@ const GUIDE_TOPICS = [
   'prompt-optimization',
   'export-and-share',
   'dataset-editing',
+  'reproduce-project',
 ];
 
 function tool(name, description, properties = {}, required = []) {
@@ -49,7 +51,7 @@ const MAX_ROWS = { type: 'integer', minimum: 1, maximum: 50, description: 'Rows 
 const PROPOSE_CHANGES_OPS = ['add_dataset', 'duplicate_dataset', 'move_image', 'import_dataset', 'add_sampler', 'sample_dataset', 'add_process', 'duplicate_process', 'add_prompt', 'add_prompt_version', 'add_run', 'add_score', 'save_run_results', 'save_process_output', 'save_score_results', 'apply_review', 'update', 'connect', 'disconnect', 'select_history', 'delete_history', 'remove'];
 
 // Only where the chat takes attachments (the desktop app, docs/design/AGENT_ATTACHMENTS_PLAN.md).
-const IMPORT_ATTACHMENT_OPERATION = '- import_attachment: ref, attachments (ids from the attachment previews, such as ["a1"]), name?, note?, sheet? (a workbook sheet; default the first). One table attachment becomes a text Dataset, parsed as Create Dataset parses it; a batch of image attachments, or of PDF attachments, becomes a Dataset with a Filename column and an Image (or PDF) column, one row per file, and the files are copied into the project when the proposal is applied. Text and code attachments cannot be imported; tables, images and PDFs cannot be mixed in one operation.\n';
+const IMPORT_ATTACHMENT_OPERATION = '- import_attachment: ref, attachments (ids from the attachment previews, such as ["a1"]), OR folder (authorized folder id f1) + either files (relative paths) or pattern (glob), name?, note?, sheet? (a workbook sheet; default the first). One table attachment, including JSON/JSONL, becomes a text Dataset; a batch of image attachments, or of PDF attachments, becomes a Dataset with a Filename column and an Image (or PDF) column, one row per file, and the files are copied into the project when the proposal is applied. Text and code attachments cannot be imported; tables, images and PDFs cannot be mixed in one operation. Folder imports freeze the previewed file list and require a new proposal if it changes; at most 500 files / 512 MB.\n';
 
 /** propose_changes, with import_attachment where the chat takes attachments. */
 function proposeChangesTool({ attachments = false } = {}) {
@@ -262,9 +264,11 @@ const CREATE_PROJECT_DEFINITION = tool(
 // Only where the chat takes attachments (the desktop app, docs/design/AGENT_ATTACHMENTS_PLAN.md).
 const READ_ATTACHMENT_DEFINITION = tool(
   'read_attachment',
-  'Read more of a file the user attached in this conversation, by its id from the attachment previews (a1, a2, ...): a window of table rows, PDF pages or text. Only attached files can be read; the result has the same shape as the preview.',
+  'Read a window of table rows, PDF pages or text from an attachment or authorized local path in this conversation. For a folder id (f1), supply a relative path. JSON source/config can be read with format text. Local path reads share the hard 100-distinct-file conversation budget; repeated windows of the same file do not spend another file.',
   {
     attachment_id: { type: 'string', description: 'Attachment id from a preview, such as a1.' },
+    path: { type: 'string', description: 'For a folder id f1: relative file path inside that authorized folder.' },
+    format: { type: 'string', enum: ['auto', 'text', 'table'], description: 'JSON: text reads the original config/source, table reads records. Default auto.' },
     start_row: START_ROW,
     max_rows: { type: 'integer', minimum: 1, maximum: 50, description: 'Table rows to return, at most 50. Default 20.' },
     sheet: { type: 'string', description: 'Workbook sheet to read; default the first. The preview lists the sheets.' },
@@ -278,6 +282,24 @@ const READ_ATTACHMENT_DEFINITION = tool(
 
 const PROPOSE_CHANGES_WITH_ATTACHMENTS = proposeChangesTool({ attachments: true });
 
+const FOLDER_ID = { type: 'string', description: 'Authorized folder id from this conversation, such as f1.' };
+const FOLDER_TOOLS = [
+  tool('list_folder', 'List an authorized local folder without reading file contents. At most 500 entries, 6 levels; skips hidden/build/dependency folders by default. Results prioritize important files. A project over 100 files must be read selectively: README, dependencies, entry points, core pipeline and evaluation. The conversation shares a hard 100-distinct-file content budget across reads and searches.', {
+    attachment_id: FOLDER_ID, path: { type: 'string' }, pattern: { type: 'string' }, recursive: { type: 'boolean' }, include_hidden: { type: 'boolean' },
+  }, ['attachment_id']),
+  tool('search_folder', 'Search text within an authorized folder, important files first. Shares the 100-distinct-file reading budget; at most 200 hits, 300 characters each, 10 seconds and 50 MB scanned. Regex runs in a killable worker. Prefer narrow patterns.', {
+    attachment_id: FOLDER_ID, query: { type: 'string' }, regex: { type: 'boolean' }, case_sensitive: { type: 'boolean' }, pattern: { type: 'string' },
+    max_results: { type: 'integer', minimum: 1, maximum: 200 },
+  }, ['attachment_id', 'query']),
+  tool('read_folder', 'Read small previews of important files in an authorized folder, paginated. Shares a hard 100-distinct-file conversation budget with read_attachment and search_folder. At most 30 files and 20000 result characters; default 2000 characters per file. Report unexamined files instead of claiming to have read the whole project.', {
+    attachment_id: FOLDER_ID, pattern: { type: 'string' }, path: { type: 'string' },
+    max_files: { type: 'integer', minimum: 1, maximum: 30 }, max_chars_per_file: { type: 'integer', minimum: 1, maximum: 12000 }, cursor: { type: 'string' },
+  }, ['attachment_id', 'pattern']),
+  tool(REQUEST_FOLDER_ACCESS_TOOL, 'Ask permission to read a local folder the user has not provided. Shows Allow / Deny; never grants access until Allow. User-written paths are already authorized on Send; use their folder ids directly. No access to disk roots, home root or system folders.', {
+    path: { type: 'string' }, reason: { type: 'string' },
+  }, ['path', 'reason']),
+];
+
 /**
  * The tools offered for one turn: every one with a project open, otherwise NO_PROJECT_TOOL_NAMES and
  * create_project. Where the chat takes attachments, read_attachment is added and propose_changes
@@ -286,12 +308,13 @@ const PROPOSE_CHANGES_WITH_ATTACHMENTS = proposeChangesTool({ attachments: true 
 export function agentToolDefinitions({ projectOpen = true, attachments = false } = {}) {
   if (!projectOpen) {
     const offered = AGENT_TOOL_DEFINITIONS.filter((definition) => NO_PROJECT_TOOL_NAMES.has(definition.function.name));
-    return [...offered, ...(attachments ? [READ_ATTACHMENT_DEFINITION] : []), CREATE_PROJECT_DEFINITION];
+    return [...offered, ...(attachments ? [READ_ATTACHMENT_DEFINITION, ...FOLDER_TOOLS] : []), CREATE_PROJECT_DEFINITION];
   }
   if (!attachments) return AGENT_TOOL_DEFINITIONS;
   return [
     ...AGENT_TOOL_DEFINITIONS.map((definition) => (definition.function.name === PROPOSE_CHANGES_TOOL ? PROPOSE_CHANGES_WITH_ATTACHMENTS : definition)),
     READ_ATTACHMENT_DEFINITION,
+    ...FOLDER_TOOLS,
   ];
 }
 
@@ -467,6 +490,9 @@ async function runTool(name, args, runtime) {
       return tryProcess(args, runtime);
     case 'read_attachment':
       return runtime.readAttachment(args);
+    case 'list_folder': return runtime.listFolder(args);
+    case 'search_folder': return runtime.searchFolder(args);
+    case 'read_folder': return runtime.readFolder(args);
     default:
       return { error: `Unknown tool: ${name}` };
   }

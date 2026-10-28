@@ -17,6 +17,7 @@ import {
   agentToolDefinitions,
   ASK_USER_TOOL,
   CREATE_PROJECT_TOOL,
+  REQUEST_FOLDER_ACCESS_TOOL,
   PROPOSE_CHANGES_TOOL,
   RUN_NODES_TOOL,
   PIPELINE_ACTION_TOOL,
@@ -46,7 +47,8 @@ export function toApiMessages(messages) {
   const out = [];
   for (const m of messages) {
     if (m.role === 'tool') {
-      out.push({ role: 'tool', tool_call_id: m.toolCallId, content: m.content });
+      const local = m.attachments?.length ? attachmentsMessageText(m.attachments) : '';
+      out.push({ role: 'tool', tool_call_id: m.toolCallId, content: [m.content, local].filter(Boolean).join('\n\n') });
       continue;
     }
     if (m.role === 'assistant' && m.toolCalls?.length) {
@@ -99,7 +101,7 @@ export function findPendingInteraction(messages) {
       };
     }
     return {
-      kind: { [RUN_NODES_TOOL]: 'run', [PIPELINE_ACTION_TOOL]: 'pipeline', [CREATE_PROJECT_TOOL]: 'project' }[call.name] || 'proposal',
+      kind: { [RUN_NODES_TOOL]: 'run', [PIPELINE_ACTION_TOOL]: 'pipeline', [CREATE_PROJECT_TOOL]: 'project', [REQUEST_FOLDER_ACCESS_TOOL]: 'folder' }[call.name] || 'proposal',
       toolCallId: call.id,
       summary: String(args.summary || ''),
       request: args,
@@ -192,6 +194,13 @@ export function resolveCreateProject(messages, request, result) {
       : result.status === 'cancelled' ? `Cancelled${result.feedback ? `: ${result.feedback}` : ''}`
         : `Failed: ${result.error}`,
   });
+}
+
+export function resolveFolderAccess(messages, request, result) {
+  messages.push({ role: 'tool', toolCallId: request.toolCallId, name: REQUEST_FOLDER_ACCESS_TOOL,
+    content: JSON.stringify(result), ok: result.status === 'allowed', label: request.request.reason || 'Local folder access',
+    outcome: result.status === 'allowed' ? 'Access allowed' : result.status === 'denied' ? 'Access denied' : `Failed: ${result.error}`,
+    ...(result.attachment ? { attachments: [result.attachment] } : {}) });
 }
 
 /**
@@ -303,7 +312,7 @@ export async function runAgentLoop({ messages, credentialId, runtime, workspaceS
         waiting = true;
         continue;
       }
-      if (call.name === PROPOSE_CHANGES_TOOL || call.name === RUN_NODES_TOOL || call.name === PIPELINE_ACTION_TOOL || call.name === CREATE_PROJECT_TOOL) {
+      if (call.name === PROPOSE_CHANGES_TOOL || call.name === RUN_NODES_TOOL || call.name === PIPELINE_ACTION_TOOL || call.name === CREATE_PROJECT_TOOL || call.name === REQUEST_FOLDER_ACCESS_TOOL) {
         // A request sent back to fix costs another model call, so it counts toward the budget too:
         // otherwise a model that keeps sending invalid ones never stops.
         if (overBudget()) {
@@ -318,14 +327,15 @@ export async function runAgentLoop({ messages, credentialId, runtime, workspaceS
         const isRun = call.name === RUN_NODES_TOOL;
         const isPipeline = call.name === PIPELINE_ACTION_TOOL;
         const isProject = call.name === CREATE_PROJECT_TOOL;
+        const isFolder = call.name === REQUEST_FOLDER_ACCESS_TOOL;
         progress({ status: isProject ? 'Checking the project...' : isPipeline ? 'Checking the Pipeline...' : isRun ? 'Checking the jobs...' : 'Checking the proposal...' });
         const preview = !args
           ? { ok: false, error: argumentsError }
-          : await (isProject ? runtime.previewCreateProject(args) : isPipeline ? runtime.previewPipelineAction(args) : isRun ? runtime.previewRunRequest(args) : runtime.previewProposal(args));
+          : await (isFolder ? runtime.previewFolderAccess(args) : isProject ? runtime.previewCreateProject(args) : isPipeline ? runtime.previewPipelineAction(args) : isRun ? runtime.previewRunRequest(args) : runtime.previewProposal(args));
         if (preview.ok) {
-          call.preview = isProject ? { items: preview.items, name: preview.name }
+          call.preview = isFolder ? { items: preview.items, path: preview.path } : isProject ? { items: preview.items, name: preview.name }
             : isPipeline ? { items: preview.items, action: preview.action, routeKey: preview.routeKey, runId: preview.runId, projectId: preview.projectId, projectIdentity: preview.projectIdentity, requestId: preview.requestId }
-              : isRun ? { items: preview.items, total: preview.total, stopGuards: preview.stopGuards, projectIdentity: preview.projectIdentity } : { items: preview.items, warnings: preview.warnings };
+              : isRun ? { items: preview.items, total: preview.total, stopGuards: preview.stopGuards, projectIdentity: preview.projectIdentity } : { items: preview.items, warnings: preview.warnings, ...(preview.importSnapshots ? { importSnapshots: preview.importSnapshots } : {}) };
           waiting = true;
           if (onMessage) onMessage();
         } else {
