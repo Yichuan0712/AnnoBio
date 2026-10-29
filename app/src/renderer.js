@@ -76,6 +76,8 @@ export async function initializeApp({ onStartupStatus = () => {} } = {}) {
     const root = document.getElementById('app') || document.body;
 
     const isElectron = !!window.electronAPI;
+    const requestedWebProjectId = isElectron ? null : new URLSearchParams(window.location.search).get('open');
+    const initialWebProjectId = isElectron ? null : requestedWebProjectId || getStoredWebProjectId();
     // Web has no theme switcher (see topBar.js) — always light, regardless of what a previous
     // desktop session on this machine left in localStorage or what the OS prefers.
     setTheme(isElectron ? getStoredTheme() : THEME_LIGHT);
@@ -99,6 +101,7 @@ export async function initializeApp({ onStartupStatus = () => {} } = {}) {
     const canvasAPI = buildWorkflowCanvas(appMain, {
       getCurrentProjectPath: () => currentProjectPath,
       isElectron,
+      projectLoading: !!initialWebProjectId,
     });
     const historyStore = {
       loadIndex: loadRunHistoryIndex,
@@ -274,9 +277,9 @@ export async function initializeApp({ onStartupStatus = () => {} } = {}) {
   };
 
   // Web: New and Open both surface the same picker (list existing / create new) since there's
-  // no native "Open File" dialog in a browser — see webProjectModal.js. `silent` is used by the
-  // page-load restore attempt below, where a stale/deleted project id should just fall back to
-  // the empty state instead of popping an error dialog on every refresh.
+  // no native "Open File" dialog in a browser — see webProjectModal.js. Restoring a deleted
+  // project can fall back to an empty state; temporary failures must keep the remembered ID
+  // and surface through the startup screen, so Retry can restore the same workspace.
   // Shown instead of the generic error alert when the Hub reports its per-user containers are
   // all full (see hub/containers.py's CapacityExceeded, surfaced via loadWebProject/
   // createWebProject's throwApiError in webProjectModal.js) — offers the desktop app as a
@@ -286,7 +289,8 @@ export async function initializeApp({ onStartupStatus = () => {} } = {}) {
     if (goDownload) window.location.href = '/download';
   };
 
-  const openProjectWeb = async ({ id, name }, { silent = false } = {}) => {
+  const openProjectWeb = async ({ id, name }, { silent = false, startup = false } = {}) => {
+    canvasAPI.setProjectLoading(true);
     try {
       const project = await loadWebProject(id);
       setCurrentProject(id);
@@ -300,10 +304,15 @@ export async function initializeApp({ onStartupStatus = () => {} } = {}) {
       topBarAPI.setMergeEnabled?.(true);
       topBarAPI.setPublishEnabled?.(true);
       canvasAPI.syncProjectPanels?.();
+      return true;
     } catch (err) {
-      if (silent) { setStoredWebProjectId(null); return; }
+      if (silent && err.status === 404) { setStoredWebProjectId(null); return false; }
+      if (startup) throw err;
       if (err.capacityExceeded) { await offerDesktopDownload(err.message); return; }
       showAlert(err.message || 'Could not open project.', { title: 'Error' });
+      return false;
+    } finally {
+      canvasAPI.setProjectLoading(false);
     }
   };
 
@@ -433,18 +442,20 @@ export async function initializeApp({ onStartupStatus = () => {} } = {}) {
   if (!isElectron) {
     // Arriving from the Hub's Profile page (see hub/main.py) with ?open=<id> — a specific
     // workspace was picked there, so it wins over the usual "reopen the last project" restore.
-    const openId = new URLSearchParams(window.location.search).get('open');
+    const openId = requestedWebProjectId;
     if (openId) {
-      const url = new URL(window.location.href);
-      url.searchParams.delete('open');
-      window.history.replaceState({}, '', url);
       onStartupStatus('Opening your project…');
-      openingProject = openProjectWeb({ id: openId, name: '' });
+      openingProject = openProjectWeb({ id: openId, name: '' }, { startup: true }).then((opened) => {
+        if (!opened) return;
+        const url = new URL(window.location.href);
+        url.searchParams.delete('open');
+        window.history.replaceState({}, '', url);
+      });
     } else {
-      const lastId = getStoredWebProjectId();
+      const lastId = initialWebProjectId;
       if (lastId) {
         onStartupStatus('Opening your project…');
-        openingProject = openProjectWeb({ id: lastId, name: '' }, { silent: true });
+        openingProject = openProjectWeb({ id: lastId, name: '' }, { silent: true, startup: true });
       }
     }
   }

@@ -1044,6 +1044,14 @@ export function buildWorkflowCanvas(root, options = {}) {
   const isElectron = !!options.isElectron;
   const canvas = document.createElement('div');
   canvas.className = 'workflow-canvas';
+  let projectLoading = options.projectLoading === true;
+  let refreshEmptyState = () => {};
+  function setProjectLoading(loading) {
+    projectLoading = !!loading;
+    canvas.setAttribute('aria-busy', String(projectLoading));
+    refreshEmptyState();
+  }
+  setProjectLoading(projectLoading);
 
   const scrollWrapper = document.createElement('div');
   scrollWrapper.className = 'workflow-canvas__scroll';
@@ -6280,11 +6288,11 @@ export function buildWorkflowCanvas(root, options = {}) {
     `;
     canvas.appendChild(emptyState);
 
-    function updateEmptyState() {
-      emptyState.hidden = nodesLayer.children.length > 0;
-    }
-    updateEmptyState();
-    new MutationObserver(updateEmptyState).observe(nodesLayer, { childList: true });
+    refreshEmptyState = () => {
+      emptyState.hidden = projectLoading || nodesLayer.children.length > 0;
+    };
+    refreshEmptyState();
+    new MutationObserver(refreshEmptyState).observe(nodesLayer, { childList: true });
   }
 
   let panelVisibility = { pipeline: false, agent: false };
@@ -6391,6 +6399,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   return {
     getCanvasState,
     inspectNode,
+    setProjectLoading,
     addScoreNode,
     updateScoreNode,
     updateScoreRowSelection,

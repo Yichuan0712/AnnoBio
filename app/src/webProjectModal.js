@@ -35,6 +35,7 @@ async function throwApiError(res, fallbackMessage) {
       if (body?.error === 'capacity_exceeded') {
         const err = new Error(body.detail || 'The server is at capacity right now.');
         err.capacityExceeded = true;
+        err.status = res.status;
         throw err;
       }
     } catch (err) {
@@ -42,7 +43,7 @@ async function throwApiError(res, fallbackMessage) {
       // Not JSON (or no capacity marker) — fall through to the generic message below.
     }
   }
-  throw new Error(fallbackMessage);
+  throw Object.assign(new Error(fallbackMessage), { status: res.status });
 }
 
 async function fetchProjects() {
