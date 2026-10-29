@@ -10,7 +10,7 @@ import { setTheme, THEME_LIGHT, THEME_DARK } from './theme.js';
 import { openSettingsModal } from './settingsModal.js';
 import { openPythonSettingsModal } from './pythonSettingsModal.js';
 import { iconClose, iconMaximize, iconMinimize, iconRestore } from './modalMaximize.js';
-import { iconRun } from './icons.js';
+import { iconProcess, iconRun } from './icons.js';
 import logoIconUrl from '../../images/logo.png';
 
 /**
@@ -332,7 +332,7 @@ const iconNewDataset = () => svgIcon({
 
 // Generate shares its filled sparkle with the canvas; Process = Lucide's "code".
 const iconNewRun = () => iconRun(16);
-const iconNewProcess = () => svgIcon({ paths: ['m16 18 6-6-6-6', 'm8 6-6 6 6 6'] });
+const iconNewProcess = () => iconProcess(16);
 
 // Publish to Gallery = Lucide's "cloud-upload" (official path data) — reads as "send this up
 // to a shared place" rather than the globe's general "public/web" or the megaphone's "announce".

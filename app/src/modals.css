@@ -9028,13 +9028,11 @@ body.wd-image-dragging .wd-image-thumb { cursor: grabbing; }
 .pipeline-overview-step:hover,
 .pipeline-overview-step:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .pipeline-overview-arrow { color: var(--text-muted); font-size: 14px; }
-.pipeline-step-kind {
-  font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
-  padding: 1px 6px; border-radius: 999px;
+.pipeline-step-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: 0 0 16px; width: 16px; height: 16px;
+  color: var(--text-muted);
 }
-.pipeline-step-kind--prompt { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
-.pipeline-step-kind--process { background: color-mix(in srgb, var(--status-success) 16%, transparent); color: var(--status-success); }
-.pipeline-step-kind--dataset { background: color-mix(in srgb, var(--status-dataset) 16%, transparent); color: var(--status-dataset); }
 .pipeline-step-name { min-width: 0; font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
 .pipeline-overview-branch {
   flex: 0 1 auto; width: fit-content; max-width: 100%; box-sizing: border-box; padding: 8px 10px; margin: 0; list-style: none;
@@ -9123,7 +9121,7 @@ body.wd-image-dragging .wd-image-thumb { cursor: grabbing; }
 .run-plan-dialog__step:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .run-plan-dialog__step.has-problem { border-color: color-mix(in srgb, var(--status-danger) 60%, var(--border)); }
 .run-plan-dialog__step-head { display: flex; align-items: center; gap: 8px; }
-.run-plan-dialog__step-head .pipeline-step-kind { flex-shrink: 0; }
+.run-plan-dialog__step-head .pipeline-step-icon { flex-shrink: 0; }
 .run-plan-dialog__step-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
 .run-plan-dialog__open { flex-shrink: 0; font-size: 18px; line-height: 1; color: var(--text-muted); }
 .run-plan-dialog__step:hover .run-plan-dialog__open { color: var(--accent); }

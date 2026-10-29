@@ -4,6 +4,8 @@
  * runs, in order. A step card shows that node on the canvas. Problems keep it from starting.
  */
 
+import { iconProcess, iconRun } from './icons.js';
+
 const KIND_LABELS = { run: 'Generate', process: 'Process data' };
 
 function escapeHtml(value) {
@@ -59,7 +61,7 @@ export function runPlanView(plan, { modelLabel = (id) => id } = {}) {
 function cardHtml(item) {
   return `<button type="button" class="run-plan-dialog__step${item.problems.length ? ' has-problem' : ''}" data-node-id="${escapeHtml(item.nodeId)}" title="Show on the canvas">
     <span class="run-plan-dialog__step-head">
-      <span class="pipeline-step-kind pipeline-step-kind--${item.kind === 'run' ? 'prompt' : 'process'}">${KIND_LABELS[item.kind]}</span>
+      <span class="pipeline-step-icon pipeline-step-icon--${item.kind === 'run' ? 'run' : 'process'}" role="img" aria-label="${KIND_LABELS[item.kind]}" title="${KIND_LABELS[item.kind]}">${(item.kind === 'run' ? iconRun : iconProcess)(16).outerHTML}</span>
       <span class="run-plan-dialog__step-name">${escapeHtml(item.name)}</span>
       <span class="run-plan-dialog__open" aria-hidden="true">›</span>
     </span>

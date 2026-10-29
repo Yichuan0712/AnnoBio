@@ -1,4 +1,4 @@
-/* Run tab (executionsPanel.js). Step kind badges come from .pipeline-step-kind in modals.css. */
+/* Run tab (executionsPanel.js). Step icons use .pipeline-step-icon in modals.css. */
 .executions { height: 100%; overflow: auto; padding: 14px 18px; box-sizing: border-box; color: var(--text); }
 .executions__empty { margin: 0; color: var(--text-muted); font-size: 13.5px; }
 .executions__list, .executions__steps { margin: 0; padding: 0; list-style: none; }
@@ -27,7 +27,7 @@
   border: 1px solid transparent; border-radius: 6px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
 }
 .executions__step:hover { border-color: var(--accent); }
-.executions__step .pipeline-step-kind { flex-shrink: 0; }
+.executions__step .pipeline-step-icon { flex-shrink: 0; }
 .executions__step-name { flex: 1; min-width: 0; font-size: 12.5px; overflow-wrap: anywhere; }
 .executions__step-status { flex-shrink: 0; font-size: 12px; color: var(--text-muted); }
 .executions__step-status--running { color: var(--accent); }

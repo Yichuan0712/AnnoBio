@@ -5,6 +5,7 @@
  */
 import './executionsPanel.css';
 import { executionSummary } from './executionRecords.js';
+import { iconProcess, iconRun } from './icons.js';
 
 const STATUS_LABELS = { running: 'Running', completed: 'Completed', failed: 'Failed', stopped: 'Stopped' };
 const STEP_LABELS = {
@@ -21,7 +22,7 @@ function stepHtml(step) {
   const errors = step.errorRows ? ` · ${step.errorRows} row${step.errorRows === 1 ? '' : 's'} with errors` : '';
   return `<li>
     <button type="button" class="executions__step" data-action="show" data-node-id="${escapeHtml(step.nodeId)}" title="Show on the canvas">
-      <span class="pipeline-step-kind pipeline-step-kind--${step.kind === 'run' ? 'prompt' : 'process'}">${KIND_LABELS[step.kind] || step.kind}</span>
+      <span class="pipeline-step-icon pipeline-step-icon--${step.kind === 'run' ? 'run' : 'process'}" role="img" aria-label="${escapeHtml(KIND_LABELS[step.kind] || step.kind)}" title="${escapeHtml(KIND_LABELS[step.kind] || step.kind)}">${(step.kind === 'run' ? iconRun : iconProcess)(16).outerHTML}</span>
       <span class="executions__step-name">${escapeHtml(step.name)}</span>
       <span class="executions__step-status executions__step-status--${escapeHtml(step.status)}">${escapeHtml(STEP_LABELS[step.status] || step.status)}${errors}</span>
     </button>

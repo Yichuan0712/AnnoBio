@@ -72,6 +72,12 @@ export const iconRun = (size = 14) => {
   return svg;
 };
 
+/** Code chevrons for Process, shared with the toolbar and pipeline step lists. */
+export const iconProcess = (size = 14) => svgIcon({
+  size,
+  paths: ['m16 18 6-6-6-6', 'm8 6-6 6 6 6'],
+});
+
 /** The Evaluate node's chart, shared with Optimize's source input. */
 export const iconEvaluate = (size = 14) => svgIcon({
   size,

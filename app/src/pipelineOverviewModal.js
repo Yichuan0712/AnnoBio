@@ -8,7 +8,7 @@
  * step (docs/design/RUN_TO_HERE_PLAN.md); its runs are listed in the Run tab.
  */
 import { showAlert } from './alertModal.js';
-import { iconDownload, iconRun } from './icons.js';
+import { iconDownload, iconProcess, iconRun } from './icons.js';
 
 // The export button is an icon; this is its tooltip and accessible name.
 const EXPORT_LABEL = 'Export Python Project';
@@ -60,7 +60,7 @@ function renderFlowNode(node) {
   if (step.kind === 'passthrough') return '';
   const kind = step.selectedOption?.kind || step.kind;
   const icon = kind === 'prompt' ? iconRun(16).outerHTML
-    : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg>';
+    : iconProcess(16).outerHTML;
   const picker = renderPickerOrName(step.choiceId, step.options, step.selectedValue, `Choose ${STEP_LABELS[kind]} step`);
   const name = step.options.find(option => option.value === step.selectedValue)?.label || '';
   return `<div class="pipeline-flow-step" style="${position}" tabindex="0" role="${step.options.length > 1 ? 'group' : 'button'}" aria-label="${escapeHtml(`Locate ${name} on canvas`)}" title="${escapeHtml(name)}" data-flow-node="${id}" data-canvas-node-ids="${encodeURIComponent(JSON.stringify(getCanvasNodeIds(step)))}">
