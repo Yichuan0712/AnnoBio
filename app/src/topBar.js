@@ -88,10 +88,10 @@ function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, add
     <button type="button" class="menu-option" data-action="undo" disabled>Undo</button>
     <button type="button" class="menu-option" data-action="redo" disabled>Redo</button>
     <div class="menu-separator"></div>
-    <button type="button" class="menu-option menu-option--create" data-action="new-prompt" disabled>Create new prompt</button>
-    <button type="button" class="menu-option menu-option--create" data-action="new-dataset" disabled>Create new dataset</button>
+    <button type="button" class="menu-option menu-option--create" data-action="new-prompt" disabled>Create Prompt</button>
+    <button type="button" class="menu-option menu-option--create" data-action="new-dataset" disabled>Create Dataset</button>
     <button type="button" class="menu-option menu-option--create" data-action="new-run" disabled>Create Generate</button>
-    <button type="button" class="menu-option menu-option--create" data-action="new-process" disabled>Create new process</button>
+    <button type="button" class="menu-option menu-option--create" data-action="new-process" disabled>Create Process</button>
   `;
   const undoOpt = editDrop.querySelector('[data-action="undo"]');
   const redoOpt = editDrop.querySelector('[data-action="redo"]');
@@ -462,21 +462,21 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, addRunN
 
   const newPromptBtn = iconButton({
     icon: iconNewPrompt,
-    label: 'Create new prompt',
+    label: 'Create Prompt',
     onClick: () => openAddPromptModal(),
   });
   rail.appendChild(newPromptBtn.wrap);
 
   const newDatasetBtn = iconButton({
     icon: iconNewDataset,
-    label: 'Create new dataset',
+    label: 'Create Dataset',
     onClick: () => openAddDatasetModal(),
   });
   rail.appendChild(newDatasetBtn.wrap);
 
   const newRunBtn = iconButton({ icon: iconNewRun, label: 'Create Generate', onClick: () => addRunNode?.() });
   rail.appendChild(newRunBtn.wrap);
-  const newProcessBtn = iconButton({ icon: iconNewProcess, label: 'Create new process', onClick: () => addProcessNode?.() });
+  const newProcessBtn = iconButton({ icon: iconNewProcess, label: 'Create Process', onClick: () => addProcessNode?.() });
   rail.appendChild(newProcessBtn.wrap);
 
   // Publish to Gallery — disabled until a project is open (unlike New Prompt/Dataset, publishing
