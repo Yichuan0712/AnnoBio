@@ -1,0 +1,32 @@
+/* Available before the editor's modules or styles load, including over file://. */
+:root { --startup-bg: #e2e6ea; --startup-text: #1a1d21; --startup-muted: #5c636a; --startup-accent: #2563eb; color-scheme: light; }
+html.dark { --startup-bg: #222326; --startup-text: #f3f4f6; --startup-muted: #b7b8be; --startup-accent: #93c5fd; color-scheme: dark; }
+html, body { margin: 0; background: var(--startup-bg); }
+.app-startup {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: grid;
+  place-items: center;
+  background: var(--startup-bg);
+  color: var(--startup-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  transition: opacity 180ms ease;
+}
+.app-startup-content { display: flex; flex-direction: column; align-items: center; padding: 40px 24px; text-align: center; max-width: 360px; }
+.app-startup::before { content: ''; position: absolute; inset: 0 0 auto; height: 30px; -webkit-app-region: drag; }
+.app-startup-status { margin: 0; font-size: 12px; line-height: 1.6; color: var(--startup-muted); }
+.app-startup-pulse { display: flex; gap: 6px; margin-top: 16px; }
+.app-startup-pulse > span { width: 5px; height: 5px; border-radius: 50%; background: var(--startup-accent); opacity: .25; animation: startup-breathe 1.5s ease-in-out infinite; }
+.app-startup-pulse > span:nth-child(2) { animation-delay: .2s; }
+.app-startup-pulse > span:nth-child(3) { animation-delay: .4s; }
+.app-startup-detail { margin: 14px 0 0; color: var(--startup-muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.app-startup-retry { margin-top: 20px; padding: 7px 20px; color: var(--startup-text); background: transparent; border: 1px solid var(--startup-muted); border-radius: 3px; font: inherit; font-size: 12px; cursor: pointer; }
+.app-startup-retry:hover { background: color-mix(in srgb, var(--startup-text) 8%, transparent); }
+.app-startup-retry:focus-visible { outline: 2px solid var(--startup-accent); outline-offset: 3px; }
+.app-startup--error .app-startup-pulse { visibility: hidden; }
+.app-startup--error .app-startup-pulse > span { animation: none; }
+.app-startup--leaving { opacity: 0; pointer-events: none; }
+.app-startup [hidden] { display: none; }
+@keyframes startup-breathe { 0%, 100% { opacity: .25; } 50% { opacity: .9; } }
+@media (prefers-reduced-motion: reduce) { .app-startup { transition: none; } .app-startup-pulse > span { animation: none; opacity: .65; } }

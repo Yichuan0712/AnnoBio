@@ -2,13 +2,46 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AnnoBio</title>
     <link rel="icon" type="image/png" href="./assets/icon.png">
+    <script>
+      // Match the desktop theme before the first paint; the web workspace stays light.
+      try {
+        if (window.electronAPI && localStorage.getItem('app-display-mode') === 'dark') {
+          document.documentElement.classList.add('dark');
+        }
+      } catch (_) {}
+      // This also works if the small entry module itself cannot be downloaded.
+      window.addEventListener('error', function (event) {
+        if (event.target?.tagName !== 'SCRIPT') return;
+        var screen = document.querySelector('.app-startup');
+        if (!screen) return;
+        screen.classList.add('app-startup--error');
+        screen.setAttribute('aria-busy', 'false');
+        screen.querySelector('.app-startup-status').textContent = 'Could not open workspace';
+        var detail = screen.querySelector('.app-startup-detail');
+        detail.textContent = 'Some application files could not be loaded. Please try again.';
+        detail.hidden = false;
+        var retry = screen.querySelector('.app-startup-retry');
+        retry.hidden = false;
+        retry.onclick = function () { window.location.reload(); };
+      }, true);
+    </script>
+    <link rel="stylesheet" href="/src/startup.css" />
   </head>
   <body>
     <div id="app">
-      <div class="app-loading" style="padding:20px;font-family:system-ui;color:#666;">Loading…</div>
+      <section class="app-startup" aria-label="Starting workspace" aria-busy="true">
+        <div class="app-startup-content">
+          <p class="app-startup-status" role="status" aria-live="polite">Starting…</p>
+          <span class="app-startup-pulse" aria-hidden="true"><span></span><span></span><span></span></span>
+          <p class="app-startup-detail" hidden></p>
+          <button type="button" class="app-startup-retry" hidden>Retry</button>
+          <noscript>Enable JavaScript to open the workspace.</noscript>
+        </div>
+      </section>
     </div>
-    <script type="module" src="/src/renderer.js"></script>
+    <script type="module" src="/src/bootstrap.js"></script>
   </body>
 </html>

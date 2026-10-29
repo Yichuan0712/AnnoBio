@@ -7,11 +7,16 @@
  */
 
 import { setTheme, THEME_LIGHT, THEME_DARK } from './theme.js';
-import { openSettingsModal } from './settingsModal.js';
+import { showAlert } from './alertModal.js';
 import { openPythonSettingsModal } from './pythonSettingsModal.js';
 import { iconClose, iconMaximize, iconMinimize, iconRestore } from './modalMaximize.js';
 import { iconProcess, iconRun } from './icons.js';
 import logoIconUrl from '../../images/logo.png';
+
+async function openSettingsModal() {
+  try { (await import('./settingsModal.js')).openSettingsModal(); }
+  catch (error) { showAlert(error?.message || 'Could not open Settings.', { title: 'Settings' }); }
+}
 
 /**
  * @param {HTMLElement} root - App root (#app or body)

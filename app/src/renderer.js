@@ -35,8 +35,6 @@ import './agentWindow.css';
 import { getStoredTheme, setTheme, THEME_LIGHT } from './theme.js';
 import { buildTopBar } from './topBar.js';
 import { buildWorkflowCanvas } from './workflowCanvas.js';
-import { openAddPromptModal } from './addPromptModal.js';
-import { openAddDatasetModal } from './addDatasetModal.js';
 import { initModalDrag } from './modalDrag.js';
 import { initModalMaximize } from './modalMaximize.js';
 import { showProjectPickerModal, loadWebProject, saveWebProject, saveWebProjectThumbnail, createWebProject, findUniqueProjectName, publishCurrentProjectToGallery } from './webProjectModal.js';
@@ -64,18 +62,18 @@ function setStoredWebProjectId(id) {
   } catch (_) { /* private mode / storage blocked — just skip persistence */ }
 }
 
-function showInitError(err) {
-  const root = document.getElementById('app') || document.body;
-  root.innerHTML = `<div style="padding:20px;font-family:system-ui;color:#c00;white-space:pre-wrap;">Init error:\n${err?.message || err}\n\n${err?.stack || ''}</div>`;
-  console.error('Init error', err);
+// Import creation windows on their first use, rather than while the app is starting.
+async function openAddPromptModal(api) {
+  try { (await import('./addPromptModal.js')).openAddPromptModal(api); }
+  catch (error) { showAlert(error?.message || 'Could not open the Prompt window.', { title: 'Prompt' }); }
+}
+async function openAddDatasetModal(api) {
+  try { (await import('./addDatasetModal.js')).openAddDatasetModal(api); }
+  catch (error) { showAlert(error?.message || 'Could not open the Dataset window.', { title: 'Dataset' }); }
 }
 
-window.addEventListener('DOMContentLoaded', () => {
-  let root;
-  try {
-    root = document.getElementById('app') || document.body;
-    const loadingEl = root.querySelector('.app-loading');
-    if (loadingEl) loadingEl.remove();
+export async function initializeApp({ onStartupStatus = () => {} } = {}) {
+    const root = document.getElementById('app') || document.body;
 
     const isElectron = !!window.electronAPI;
     // Web has no theme switcher (see topBar.js) — always light, regardless of what a previous
@@ -431,6 +429,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  let openingProject = null;
   if (!isElectron) {
     // Arriving from the Hub's Profile page (see hub/main.py) with ?open=<id> — a specific
     // workspace was picked there, so it wins over the usual "reopen the last project" restore.
@@ -439,10 +438,14 @@ window.addEventListener('DOMContentLoaded', () => {
       const url = new URL(window.location.href);
       url.searchParams.delete('open');
       window.history.replaceState({}, '', url);
-      openProjectWeb({ id: openId, name: '' });
+      onStartupStatus('Opening your project…');
+      openingProject = openProjectWeb({ id: openId, name: '' });
     } else {
       const lastId = getStoredWebProjectId();
-      if (lastId) openProjectWeb({ id: lastId, name: '' }, { silent: true });
+      if (lastId) {
+        onStartupStatus('Opening your project…');
+        openingProject = openProjectWeb({ id: lastId, name: '' }, { silent: true });
+      }
     }
   }
 
@@ -500,7 +503,5 @@ window.addEventListener('DOMContentLoaded', () => {
     canvasChangeVersion += 1;
     scheduleAutosave();
   });
-  } catch (err) {
-    showInitError(err);
-  }
-});
+  await openingProject;
+}

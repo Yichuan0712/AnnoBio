@@ -482,12 +482,7 @@ function startPythonBackendInner() {
   if (pyProc) return;
 
   const cwd = getBackendCwd();
-  const pycache = path.join(cwd, '__pycache__');
-  if (fsSync.existsSync(pycache)) {
-    try {
-      fsSync.rmSync(pycache, { recursive: true });
-    } catch (_) {}
-  }
+  // Keep Python's bytecode cache between launches; Python invalidates changed source itself.
 
   const pythonExe = getPythonExe();
   if (!fsSync.existsSync(pythonExe)) {
@@ -557,6 +552,8 @@ const createWindow = () => {
   const macOS = process.platform === 'darwin';
   const mainWindow = new BrowserWindow({
     title: APP_NAME,
+    show: false,
+    backgroundColor: '#e2e6ea',
     width,
     height,
     minWidth: 640,
@@ -570,6 +567,13 @@ const createWindow = () => {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
     },
+  });
+
+  // Paint the lightweight branded page before backend process cleanup or startup can block
+  // the main process. The page polls health while its editor modules load in parallel.
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+    startPythonBackend();
   });
 
   if (process.platform === 'win32') {
@@ -937,10 +941,7 @@ if (gotSingleInstanceLock) app.whenReady().then(() => {
     },
   });
 
-  // Start backend first
-  startPythonBackend();
-
-  // Then create the UI
+  // Backend startup begins once the window's first frame is ready.
   createWindow();
 
   // On OS X it's common to re-create a window in the app when the

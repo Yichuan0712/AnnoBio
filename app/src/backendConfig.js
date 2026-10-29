@@ -23,7 +23,10 @@ export async function waitForBackend(timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     try {
-      const res = await fetch(`${BACKEND_API_BASE}/health`);
+      // A listening but unresponsive service must not leave startup waiting forever.
+      const res = await fetch(`${BACKEND_API_BASE}/health`, {
+        signal: AbortSignal.timeout(Math.max(1, Math.min(1500, deadline - Date.now()))),
+      });
       if (res.ok) return true;
     } catch (_) {
       // Not listening yet.
