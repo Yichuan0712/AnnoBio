@@ -188,7 +188,6 @@ export function openAddDatasetModal(workflowCanvasApi) {
                     <div class="dataset-import-actions">
                       <input type="file" id="image-file-input" accept="${IMAGE_FILE_ACCEPT}" multiple hidden />
                       <button type="button" class="btn btn-secondary image-import-choose-btn">Choose images</button>
-                      ${window.electronAPI?.importDatasetFolder ? '<button type="button" class="btn btn-secondary" data-import-folder="image">Import a folder</button><label><input type="checkbox" data-folder-recursive="image" /> Include subfolders</label>' : ''}
                       <span class="dataset-filename image-import-filenames" aria-live="polite"></span>
                     </div>
                   </div>
@@ -196,11 +195,10 @@ export function openAddDatasetModal(workflowCanvasApi) {
                 <div class="dataset-source-panel" data-source-panel="pdf" hidden>
                   <div class="dataset-import">
                     <h3 class="dataset-import-title">Upload PDFs</h3>
-                    <p class="dataset-sheet-hint">One row per PDF, with a Filename column and a PDF column — the file itself is attached, not parsed, so it can be sent straight to models that accept PDF input.</p>
+                    <p class="dataset-sheet-hint">One row per PDF, with a Filename column and a PDF column. Each file is attached without parsing and can be sent directly to models that accept PDF input.</p>
                     <div class="dataset-import-actions">
                       <input type="file" id="pdf-file-input" accept=".pdf,application/pdf" multiple hidden />
                       <button type="button" class="btn btn-secondary pdf-import-choose-btn">Choose PDFs</button>
-                      ${window.electronAPI?.importDatasetFolder ? '<button type="button" class="btn btn-secondary" data-import-folder="pdf">Import a folder</button><label><input type="checkbox" data-folder-recursive="pdf" /> Include subfolders</label>' : ''}
                       <span class="dataset-filename pdf-import-filenames" aria-live="polite"></span>
                     </div>
                   </div>
@@ -214,7 +212,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
                 <div class="dataset-source-panel" data-source-panel="pubmed" hidden>
                   <div class="dataset-import">
                     <h3 class="dataset-import-title">Import from PubMed</h3>
-                    <p class="dataset-sheet-hint">Look up articles by PMID and import whichever fields you pick (title, abstract, authors, ...) as columns — one row per article.</p>
+                    <p class="dataset-sheet-hint">Look up articles by PMID and import your selected fields (title, abstract, authors, ...) as columns. Each article becomes one row.</p>
                     <label class="dataset-meta-label" for="pm-ids">PMIDs (one per line, or comma/space separated)</label>
                     <textarea id="pm-ids" class="dataset-meta-input dataset-meta-textarea pubmed-import-ids" rows="6" placeholder="13252012&#10;7834742&#10;11988757"></textarea>
                     <div class="pubmed-import-fields">
@@ -238,7 +236,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
                 <div class="dataset-source-panel" data-source-panel="clinicaltrials" hidden>
                   <div class="dataset-import">
                     <h3 class="dataset-import-title">Import from ClinicalTrials.gov</h3>
-                    <p class="dataset-sheet-hint">Look up studies by NCT ID and import whichever fields you pick (title, status, conditions, ...) as columns — one row per study.</p>
+                    <p class="dataset-sheet-hint">Look up studies by NCT ID and import your selected fields (title, status, conditions, ...) as columns. Each study becomes one row.</p>
                     <label class="dataset-meta-label" for="ct-ids">NCT IDs (one per line, or comma/space separated)</label>
                     <textarea id="ct-ids" class="dataset-meta-input dataset-meta-textarea clinicaltrials-import-ids" rows="6" placeholder="NCT00001372&#10;NCT04280705"></textarea>
                     <div class="clinicaltrials-import-fields">
@@ -262,7 +260,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
                 <div class="dataset-source-panel" data-source-panel="preprint" hidden>
                   <div class="dataset-import">
                     <h3 class="dataset-import-title">Import from bioRxiv / medRxiv</h3>
-                    <p class="dataset-sheet-hint">Look up preprints by DOI and import whichever fields you pick (title, abstract, authors, ...) as columns — one row per preprint.</p>
+                    <p class="dataset-sheet-hint">Look up preprints by DOI and import your selected fields (title, abstract, authors, ...) as columns. Each preprint becomes one row.</p>
                     <label class="dataset-meta-label" for="pp-ids">DOIs (one per line, or comma/space separated)</label>
                     <textarea id="pp-ids" class="dataset-meta-input dataset-meta-textarea preprint-import-ids" rows="6" placeholder="10.1101/2020.09.16.300343"></textarea>
                     <div class="preprint-import-fields">
@@ -286,7 +284,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
                 <div class="dataset-source-panel" data-source-panel="chembl" hidden>
                   <div class="dataset-import">
                     <h3 class="dataset-import-title">Import from ChEMBL</h3>
-                    <p class="dataset-sheet-hint">Look up molecules by ChEMBL ID and import whichever fields you pick (name, structure, properties, ...) as columns — one row per molecule.</p>
+                    <p class="dataset-sheet-hint">Look up molecules by ChEMBL ID and import your selected fields (name, structure, properties, ...) as columns. Each molecule becomes one row.</p>
                     <label class="dataset-meta-label" for="chembl-ids">ChEMBL IDs (one per line, or comma/space separated)</label>
                     <textarea id="chembl-ids" class="dataset-meta-input dataset-meta-textarea chembl-import-ids" rows="6" placeholder="CHEMBL25&#10;CHEMBL192"></textarea>
                     <div class="chembl-import-fields">
@@ -1046,8 +1044,6 @@ export function openAddDatasetModal(workflowCanvasApi) {
   function setPdfRunningUi(running) {
     pdfChooseBtn.disabled = running;
     addBtn.disabled = running;
-    const folderButton = overlay.querySelector('[data-import-folder="pdf"]');
-    if (folderButton) folderButton.disabled = running;
   }
 
   /** Registers each picked PDF as a project asset (not parsed) and builds a Filename + PDF
@@ -1096,30 +1092,6 @@ export function openAddDatasetModal(workflowCanvasApi) {
   function setImageRunningUi(running) {
     imageChooseBtn.disabled = running;
     addBtn.disabled = running;
-    const folderButton = overlay.querySelector('[data-import-folder="image"]');
-    if (folderButton) folderButton.disabled = running;
-  }
-
-  for (const button of overlay.querySelectorAll('[data-import-folder]')) {
-    button.addEventListener('click', async () => {
-      const kind = button.dataset.importFolder;
-      const setRunning = kind === 'pdf' ? setPdfRunningUi : setImageRunningUi;
-      hideError(); setRunning(true);
-      try {
-        const result = await window.electronAPI.importDatasetFolder(kind, overlay.querySelector(`[data-folder-recursive="${kind}"]`).checked);
-        if (result?.cancelled) return;
-        if (result?.error) throw new Error(result.error);
-        const column = kind === 'pdf' ? 'PDF' : 'Image';
-        const cell = kind === 'pdf' ? pdfCell : imageCell;
-        const headers = ['Filename', column];
-        const rows = result.assets.map((asset) => [asset.name, cell([asset.id], [asset.name])]);
-        fileImported = true;
-        parsedDatasetContent = { headers, rows, columnTypes: ['text', kind] };
-        (kind === 'pdf' ? pdfFilenamesEl : imageFilenamesEl).textContent = `${rows.length} files imported from folder`;
-        renderPreviewTable(headers, rows.slice(0, MAX_PREVIEW_ROWS), rows.length);
-      } catch (error) { showError(`Could not import folder: ${error.message}`); }
-      finally { setRunning(false); }
-    });
   }
 
   /** Registers each picked image as a project asset and builds a Filename + Image column

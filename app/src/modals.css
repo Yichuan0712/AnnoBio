@@ -6411,6 +6411,12 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
 .prompt-detail-text-editor:focus,
 .modal-panel--prompt .dataset-meta-input:focus,
 .modal-panel--field-editor .dataset-meta-input:focus,
+.modal-panel--dataset .dataset-meta-input:focus,
+.modal-panel--model-settings-combined :is(input[type="number"], select):focus,
+.modal-panel--sampler-detail input[type="number"]:focus,
+.modal-panel--agent .credentials-select:focus,
+.dataset-detail-page-inp:focus,
+.dataset-detail-rows-select:focus,
 .modal-panel--dataset :is(input[type="text"], input:not([type]), textarea):focus {
   outline: none;
   border-color: var(--text-muted);

@@ -84,7 +84,7 @@ Excel 表格支持 `.xlsx`、`.xls`、`.xlsm`、`.xlsb`、`.xltx`、`.xltm`、`.
 
 `import_attachment` 可用 `folder: "f1"` 配 `files: ["data/train.jsonl"]` 或 `pattern: "**/*.pdf"`，两者二选一，不能再配 `attachments`。一个表格（CSV/TSV/Excel/JSON/JSONL/NDJSON）成为文本 Dataset；一批图片或一批 PDF 作为文件导入。每次最多 500 文件、512 MB；超过 200 文件会提示。预览固定文件清单和内容，应用前发现变化需重新提案；重启后的待应用导入也需新预览。JSON 的对象数组或恰有一个数组字段的对象可作表格，JSONL 每个非空行一个对象；列取键的并集，嵌套值存成 JSON 文本。读配置原文用 `format: "text"`。
 
-界面 Create Dataset 的图片/PDF 来源也有 Import a folder，支持 Include subfolders；表格来源可选 JSON/JSONL。导入需要打开项目。源项目复现的完整流程先读 `reproduce-project`。
+界面 Create Dataset 的图片/PDF 来源使用 Choose images / Choose PDFs 选择文件；表格来源可选 JSON/JSONL。导入需要打开项目。源项目复现的完整流程先读 `reproduce-project`。
 
 ## Sample nodes
 
