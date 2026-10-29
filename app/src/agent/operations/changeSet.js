@@ -28,6 +28,7 @@ import { contentLocks } from '../../contentLocks.js';
 import { isTaskLocked } from '../../runTaskLocks.js';
 import { validateAgentScoreTree } from './scoreRules.js';
 import { importDescription, sourceOptions } from './sourceImports.js';
+import { nodeBaseColor, nextNodeColorIndex } from '../../workflowNodeColors.js';
 
 export class ChangeSetError extends Error {
   constructor(message, index = null) {
@@ -211,6 +212,9 @@ export function planChangeSet(state, operations, ctx) {
   }
 
   function addNode(node) {
+    if (['dataset', 'prompt'].includes(node.type) && node.colorIndex == null) {
+      node.colorIndex = nextNodeColorIndex(next.nodes.filter((item) => ['dataset', 'prompt'].includes(item.type)));
+    }
     addedIds.add(node.nodeId);
     next.nodes.push(node);
     touched.add(node.nodeId);
@@ -842,10 +846,11 @@ export function planChangeSet(state, operations, ctx) {
       const outputFormat = op.output != null ? normalizeOutput(op.output, source.outputFormat) : JSON.parse(JSON.stringify(source.outputFormat || { returnShape: 'single', fields: [] }));
       if (op.input_types != null) fail(NO_INPUT_TYPES);
       const name = uniqueName(clean(op.name) || nodeTitle(source), takenNames('prompt'));
+      const colorIndex = nextNodeColorIndex(next.nodes.filter((node) => ['dataset', 'prompt'].includes(node.type)), -1, nodeBaseColor(source));
       const node = addNode({
         type: 'prompt', nodeId: generateNodeId(), ...placeNear(source), name,
         note: op.note != null ? String(op.note) : String(source.note || ''),
-        text, outputFormat, nodeOrigin: 'agent',
+        text, outputFormat, colorIndex, nodeOrigin: 'agent',
       });
       connect(source.nodeId, node.nodeId, 'prompt-to-prompt');
       registerRef(op, node.nodeId);
@@ -1303,6 +1308,7 @@ export function planChangeSet(state, operations, ctx) {
         note: String(op.note ?? `Created from Optimize "${nodeTitle(review)}" (suggestions ${ids.join(', ')}).`),
         text: normalizeText(text),
         outputFormat: JSON.parse(JSON.stringify(sourcePrompt.outputFormat || { returnShape: 'single', fields: [] })),
+        colorIndex: nextNodeColorIndex(next.nodes.filter((node) => ['dataset', 'prompt'].includes(node.type)), -1, nodeBaseColor(source)),
         nodeOrigin: 'agent',
       });
       connect(review.nodeId, node.nodeId, 'prompt-review-to-prompt');

@@ -68,7 +68,8 @@ import { applyPortTitles, centerWithin, findPortDot, renderNodePorts } from './w
 import { attachPortDrag } from './workflowPortDrag.js';
 import { attachContextMenuDismissal } from './workflowContextMenu.js';
 import { createWorkflowCanvasRuntime } from './workflowCanvasRuntime.js';
-import { DATASET_BORDER_COLORS, datasetColorAt } from './workflowNodeColors.js';
+import { DATASET_BORDER_COLORS, nodeBaseColor, nodeDisplayColor, normalizeNodeColor, nextNodeColorIndex } from './workflowNodeColors.js';
+import { openNodeColorPicker } from './nodeColorPicker.js';
 import { dependencyColorSources, dependentNodeVisualColors } from './workflowDependencyColors.js';
 import { showAlert, showConfirm, showSelect } from './alertModal.js';
 import { openAgentWindowModal } from './agentWindowModal.js';
@@ -1478,28 +1479,12 @@ export function buildWorkflowCanvas(root, options = {}) {
     if (!Number.isFinite(parsed) || parsed < 0) return null;
     return parsed % DATASET_BORDER_COLORS.length;
   }
-  function chooseAutomaticNodeColorIndex() {
-    if (!Array.isArray(DATASET_BORDER_COLORS) || DATASET_BORDER_COLORS.length === 0) return 0;
-    const usageCounts = Array(DATASET_BORDER_COLORS.length).fill(0);
-    nodesLayer.querySelectorAll('.workflow-node--dataset, .workflow-node--prompt').forEach((existingNode) => {
-      const existingIndex = normalizeDatasetColorIndex(
-        existingNode.dataset.datasetColorIndex ?? existingNode.dataset.promptColorIndex,
-      );
-      if (existingIndex != null) usageCounts[existingIndex] += 1;
-    });
-    const minUsage = usageCounts.reduce((min, count) => Math.min(min, count), Number.POSITIVE_INFINITY);
-    const startIndex = lastAutoNodeColorIndex >= 0
-      ? ((lastAutoNodeColorIndex + 1) % DATASET_BORDER_COLORS.length)
-      : 0;
-    for (let offset = 0; offset < DATASET_BORDER_COLORS.length; offset += 1) {
-      const candidateIndex = (startIndex + offset) % DATASET_BORDER_COLORS.length;
-      if (usageCounts[candidateIndex] === minUsage) {
-        lastAutoNodeColorIndex = candidateIndex;
-        return candidateIndex;
-      }
-    }
-    lastAutoNodeColorIndex = startIndex;
-    return startIndex;
+  function chooseAutomaticNodeColorIndex(avoidColor = '') {
+    lastAutoNodeColorIndex = nextNodeColorIndex(
+      nodesLayer.querySelectorAll('.workflow-node--dataset, .workflow-node--prompt'),
+      lastAutoNodeColorIndex, avoidColor,
+    );
+    return lastAutoNodeColorIndex;
   }
   function allocateNodePosition(left, top) {
     const x = typeof left === 'number' ? left : 80 + (nodeCount % 5) * (280 + STAGGER);
@@ -2272,7 +2257,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   function sourceColor(source) {
     const node = getNodeById(source?.nodeId);
     if (!node) return '';
-    if (source.kind === 'dataset') return datasetColorAt(normalizeDatasetColorIndex(node.dataset.datasetColorIndex) ?? 0);
+    if (source.kind === 'dataset') return nodeDisplayColor(node);
     return node.style.borderColor || '';
   }
 
@@ -2886,19 +2871,19 @@ export function buildWorkflowCanvas(root, options = {}) {
       .map((node) => [node.dataset.nodeId, node]));
     nodeById.forEach((node) => {
       if (node.classList.contains('workflow-node--dataset')) {
-        node.style.borderColor = datasetColorAt(normalizeDatasetColorIndex(node.dataset.datasetColorIndex) ?? 0);
+        node.style.borderColor = nodeDisplayColor(node);
       } else if (node.classList.contains('workflow-node--prompt')) {
-        node.style.borderColor = datasetColorAt(normalizeDatasetColorIndex(node.dataset.promptColorIndex) ?? 0);
+        node.style.borderColor = nodeDisplayColor(node);
       }
       if (!['sampler', 'process', 'run', 'score', 'promptReview'].includes(node.dataset.nodeType)) return;
       const { datasetIds, promptId } = dependencyColorSources(node, nodeById, connections);
       const dataColors = datasetIds.map((id) => nodeById.get(id))
         .filter((sourceNode) => sourceNode?.classList.contains('workflow-node--dataset'))
-        .map((sourceNode) => datasetColorAt(normalizeDatasetColorIndex(sourceNode.dataset.datasetColorIndex) ?? 0))
+        .map((sourceNode) => nodeDisplayColor(sourceNode))
         .filter(Boolean);
       const promptNode = nodeById.get(promptId);
       const promptColor = promptNode?.classList.contains('workflow-node--prompt')
-        ? datasetColorAt(normalizeDatasetColorIndex(promptNode.dataset.promptColorIndex) ?? 0)
+        ? nodeDisplayColor(promptNode)
         : '';
       const { borderColor, dataColor } = dependentNodeVisualColors(dataColors, promptColor);
       node.style.borderColor = borderColor;
@@ -3669,6 +3654,9 @@ export function buildWorkflowCanvas(root, options = {}) {
       `;
     }
 
+    if (!isPortMenu && (isDataset || node.dataset.nodeType === 'prompt')) {
+      manageItems += '<button type="button" class="workflow-node-context-item" data-action="change-color" role="menuitem">Change color</button>';
+    }
     if (!isPortMenu) {
       manageItems += '<button type="button" class="workflow-node-context-item" data-action="copy-name" role="menuitem">Copy name</button>';
     }
@@ -3698,7 +3686,10 @@ export function buildWorkflowCanvas(root, options = {}) {
         note: node.dataset.promptNote || '',
         text: node.dataset.promptText || '',
         outputFormat,
-        colorIndex: normalizeDatasetColorIndex(node.dataset.promptColorIndex),
+        ...(isNewVersion ? { avoidColor: nodeBaseColor(node) } : {
+          colorIndex: normalizeDatasetColorIndex(node.dataset.promptColorIndex),
+          color: normalizeNodeColor(node.dataset.nodeColor),
+        }),
         left: isNewVersion ? left + width + NEW_NODE_OFFSET : left,
         top: isNewVersion ? top : top + height + NEW_NODE_OFFSET,
       });
@@ -3708,6 +3699,25 @@ export function buildWorkflowCanvas(root, options = {}) {
     }
 
     const actions = {
+      'change-color': () => {
+        openNodeColorPicker({
+          color: nodeBaseColor(node),
+          onReset: () => {
+            if (getNodeById(node.dataset.nodeId) !== node) return;
+            if (node.dataset.nodeColor) {
+              delete node.dataset.nodeColor;
+              document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+            }
+            return nodeBaseColor(node);
+          },
+          onApply: (color) => {
+            if (getNodeById(node.dataset.nodeId) !== node) return;
+            if (nodeBaseColor(node) === color) return;
+            node.dataset.nodeColor = color;
+            document.dispatchEvent(new CustomEvent('workflow:canvas-changed'));
+          },
+        });
+      },
       'create-input': async (button) => {
         const dfCode = button.dataset.createType === 'process' ? buildDefaultProcessCode([]) : '';
         const codeHash = dfCode ? await codeHashOf(dfCode) : '';
@@ -3751,8 +3761,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         const workingSets = Array.from(nodesLayer.querySelectorAll('.workflow-node--dataset')).map((n) => {
           const id = n.dataset.nodeId || '';
           const content = datasetContentByNodeId.get(id);
-          const colorIndex = n.dataset.datasetColorIndex != null ? parseInt(n.dataset.datasetColorIndex, 10) : 0;
-          const color = datasetColorAt(colorIndex);
+          const color = nodeDisplayColor(n);
           return {
             nodeId: id,
             name: (n.dataset.datasetName || n.dataset.subsetName || '').trim() || 'Dataset',
@@ -4775,8 +4784,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       if (gtId) {
         const wsNode = getNodeById(gtId);
         if (wsNode && wsNode.classList.contains('workflow-node--dataset')) {
-          const colorIndex = wsNode.dataset.datasetColorIndex != null ? parseInt(wsNode.dataset.datasetColorIndex, 10) : 0;
-          const color = datasetColorAt(colorIndex);
+          const color = nodeDisplayColor(wsNode);
           const bar = scoreNode.querySelector('.workflow-node__score-progress');
           if (bar) bar.style.background = color;
         }
@@ -4979,6 +4987,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           sampledSourceRowIds: node.dataset.sampledSourceRowIds ? JSON.parse(node.dataset.sampledSourceRowIds) : undefined,
           savedFrom: readSavedFrom(node.dataset.savedFrom) || undefined,
           colorIndex: node.dataset.datasetColorIndex != null ? parseInt(node.dataset.datasetColorIndex, 10) : undefined,
+          color: normalizeNodeColor(node.dataset.nodeColor) || undefined,
           datasetContent: content ? cloneDatasetContent(content) : undefined,
           nodeOrigin: (node.dataset.nodeOrigin || '').trim() || undefined,
         };
@@ -5171,6 +5180,7 @@ export function buildWorkflowCanvas(root, options = {}) {
         name: node.dataset.promptName || '',
         note: node.dataset.promptNote || '',
         colorIndex: normalizeDatasetColorIndex(node.dataset.promptColorIndex) ?? undefined,
+        color: normalizeNodeColor(node.dataset.nodeColor) || undefined,
         text: node.dataset.promptText || '',
         outputFormat,
         optimizationMethodId: node.dataset.optimizationMethodId || undefined,
@@ -5212,6 +5222,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           sampledSourceRowIds: n.sampledSourceRowIds,
           savedFrom: n.savedFrom,
           colorIndex: n.colorIndex,
+          color: n.color,
           headers: content?.headers,
           rows: content?.rows,
           columnTypes: content?.columnTypes,
@@ -5383,6 +5394,7 @@ export function buildWorkflowCanvas(root, options = {}) {
           name: n.name || '',
           note: n.note || '',
           colorIndex: n.colorIndex,
+          color: n.color,
           text: typeof n.text === 'string' ? n.text : '',
           optimizationMethodId: n.optimizationMethodId || '',
           outputFormat: n.outputFormat,

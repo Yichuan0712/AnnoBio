@@ -11,7 +11,7 @@ import { postRun } from './runClient.js';
 import { getCurrentProjectId } from './currentProject.js';
 import { imageCell } from './datasetContent.js';
 import { runSettingsOverrides, reviewSettingsOverrides } from './nodeSettings.js';
-import { datasetColorAt } from './workflowNodeColors.js';
+import { nodeBaseColor, nodeDisplayColor } from './workflowNodeColors.js';
 import { reviewNeedsResume } from './executionResumeState.js';
 import { optimizeReviewSuggestion, optimizedReviewSuggestion } from './reviewSuggestionOptimizer.js';
 import { registerNodeStop } from './nodeExecutionControl.js';
@@ -112,6 +112,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
     top,
     ensureUniqueName = true,
     agentCreated = false,
+    avoidColor,
   } = {}) {
     const requestedName = (name || '').trim() || 'Prompt';
     const finalName = ensureUniqueName && isPromptNameAlreadyUsed(requestedName)
@@ -122,6 +123,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       note: String(note || ''),
       text: String(text || ''),
       outputFormat,
+      avoidColor,
       left,
       top,
     });
@@ -244,6 +246,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       note: 'Exported from Optimize.',
       text: resolvedText,
       outputFormat: sourcePromptData?.outputFormat || undefined,
+      avoidColor: sourcePromptNode ? nodeBaseColor(sourcePromptNode) : undefined,
       left: resolvedLeft,
       top: resolvedTop,
       ensureUniqueName: false,
@@ -650,8 +653,7 @@ export function createWorkflowCanvasRuntime(deps = {}) {
       } else {
         delete scoreNode.dataset.reviewCredentialId;
       }
-      const colorIndex = groundTruthNode.dataset.datasetColorIndex != null ? parseInt(groundTruthNode.dataset.datasetColorIndex, 10) : 0;
-      const color = datasetColorAt(colorIndex);
+      const color = nodeDisplayColor(groundTruthNode);
       scoreNode.style.borderColor = color;
       const progressBar = scoreNode.querySelector('.workflow-node__score-progress');
       if (progressBar) progressBar.style.background = color;

@@ -9359,3 +9359,60 @@ body.wd-image-dragging .wd-image-thumb { cursor: grabbing; }
   .modal-panel--prompt-schema .prompt-output-keys-list { overflow: visible; }
 }
 .review-detail-source-note { flex-shrink: 0; margin: 12px 20px; }
+.modal-panel--node-color { width: 320px; min-width: 0; }
+.modal-panel--node-color .modal-header { cursor: default; }
+.node-color-form { min-height: 0; overflow: auto; }
+.node-color-fields { display: flex; flex-direction: column; gap: 18px; padding: 20px; }
+.node-color-palette {
+  position: relative;
+  aspect-ratio: 1.5;
+  flex-shrink: 0;
+  background: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent), var(--picker-hue);
+  border-radius: var(--control-radius);
+  cursor: crosshair;
+  touch-action: none;
+  outline: none;
+  outline-offset: 3px;
+}
+.node-color-palette:focus-visible { outline: 2px solid var(--accent); }
+.node-color-cursor {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.node-color-hue {
+  appearance: none;
+  width: 100%;
+  height: 12px;
+  margin: 0;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+  cursor: pointer;
+}
+.node-color-hue::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+}
+.node-color-hue::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+}
+.node-color-value { display: flex; align-items: end; gap: 12px; }
+.node-color-swatch { width: 36px; height: 36px; flex-shrink: 0; border-radius: var(--control-radius); }
+.node-color-field { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 6px; color: var(--text-muted); font-size: 12px; }
+.node-color-hex { box-sizing: border-box; width: 100%; min-width: 0; font-family: ui-monospace, monospace; }

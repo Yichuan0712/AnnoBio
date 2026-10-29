@@ -1,7 +1,7 @@
 import { reviewSettingsOverrides } from './nodeSettings.js';
 import { optimizationApplyBlockReason } from './evaluationHistory.js';
 import { generateDisplayName, isDefaultGenerateName } from './nodeLabels.js';
-import { datasetColorAt, promptColorAt } from './workflowNodeColors.js';
+import { nodeDisplayColor, normalizeNodeColor } from './workflowNodeColors.js';
 import { isTaskLocked } from './runTaskLocks.js';
 import { sourceKey } from './stepInputs.js';
 import { readSavedFrom } from './savedDatasets.js';
@@ -210,7 +210,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     };
   }
 
-  function createPromptNode({ name = '', note = '', text = '', outputFormat, optimizationMethodId = '', left, top, nodeId: givenNodeId, colorIndex: givenColorIndex }) {
+  function createPromptNode({ name = '', note = '', text = '', outputFormat, optimizationMethodId = '', left, top, nodeId: givenNodeId, colorIndex: givenColorIndex, color, avoidColor }) {
     const nodeId = givenNodeId || generateNodeId();
     const title = (name && name.trim()) ? name.trim() : 'Prompt';
     const node = document.createElement('div');
@@ -218,13 +218,15 @@ export function createWorkflowNodeFactories(deps = {}) {
     node.setAttribute('role', 'article');
     node.setAttribute('aria-label', `Prompt node: ${title}`);
     node.dataset.nodeId = nodeId;
+    node.dataset.nodeType = 'prompt';
     node.dataset.promptText = String(text || '');
     node.dataset.promptName = name;
     node.dataset.promptNote = note;
     if (optimizationMethodId) node.dataset.optimizationMethodId = optimizationMethodId;
-    const colorIndex = normalizeDatasetColorIndex(givenColorIndex) ?? chooseAutomaticNodeColorIndex();
+    const colorIndex = normalizeDatasetColorIndex(givenColorIndex) ?? chooseAutomaticNodeColorIndex(avoidColor);
     node.dataset.promptColorIndex = String(colorIndex);
-    node.style.borderColor = promptColorAt(colorIndex);
+    if (normalizeNodeColor(color)) node.dataset.nodeColor = normalizeNodeColor(color);
+    node.style.borderColor = nodeDisplayColor(node);
     let ofList = outputFormat?.fields ?? (Array.isArray(outputFormat) ? outputFormat : []);
     if (!ofList.length && outputFormat?.columns?.length) {
       ofList = outputFormat.columns.map((key) => ({
@@ -377,7 +379,7 @@ export function createWorkflowNodeFactories(deps = {}) {
     return node;
   }
 
-  function createDatasetNode({ name = '', notes = '', left, top, nodeId: givenNodeId, samplerNodeId = '', sampledSourceRowIds, savedFrom = null, colorIndex: givenColorIndex, headers, rows, columnTypes, rowIds }) {
+  function createDatasetNode({ name = '', notes = '', left, top, nodeId: givenNodeId, samplerNodeId = '', sampledSourceRowIds, savedFrom = null, colorIndex: givenColorIndex, color, headers, rows, columnTypes, rowIds }) {
     const nodeId = givenNodeId || generateNodeId();
     const title = (name && name.trim()) ? name.trim() : 'Dataset';
     const samplerNode = samplerNodeId ? getNodeById(samplerNodeId) : null;
@@ -399,7 +401,8 @@ export function createWorkflowNodeFactories(deps = {}) {
     if (origin) node.dataset.savedFrom = JSON.stringify(origin);
     const colorIndex = normalizeDatasetColorIndex(givenColorIndex) ?? chooseAutomaticNodeColorIndex();
     node.dataset.datasetColorIndex = String(colorIndex);
-    node.style.borderColor = datasetColorAt(colorIndex);
+    if (normalizeNodeColor(color)) node.dataset.nodeColor = normalizeNodeColor(color);
+    node.style.borderColor = nodeDisplayColor(node);
     if (Array.isArray(headers) && Array.isArray(rows)) datasetContentByNodeId.set(nodeId, { headers, rows, columnTypes, rowIds });
     const position = allocateNodePosition(left, top);
     setNodeCanvasPosition(node, position.left, position.top);
@@ -553,7 +556,7 @@ export function createWorkflowNodeFactories(deps = {}) {
           return promptNode ? {
             nodeId: promptNode.dataset.nodeId,
             label: promptNameOf(promptNode) || 'Prompt',
-            color: promptColorAt(normalizeDatasetColorIndex(promptNode.dataset.promptColorIndex) ?? 0),
+            color: nodeDisplayColor(promptNode),
           } : null;
         },
         describeInput: () => {
@@ -746,8 +749,7 @@ export function createWorkflowNodeFactories(deps = {}) {
       const workingSets = Array.from(nodesLayer.querySelectorAll('.workflow-node--dataset')).map((n) => {
         const id = n.dataset.nodeId || '';
         const content = datasetContentByNodeId.get(id);
-        const colorIndex = n.dataset.datasetColorIndex != null ? parseInt(n.dataset.datasetColorIndex, 10) : 0;
-        const color = datasetColorAt(colorIndex);
+        const color = nodeDisplayColor(n);
         return {
           nodeId: id,
           name: (n.dataset.datasetName || n.dataset.subsetName || '').trim() || 'Dataset',
