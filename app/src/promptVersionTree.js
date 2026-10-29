@@ -12,9 +12,10 @@ const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character
 const escapeTitle = (value) => escapeHtml(value).replaceAll('\n', '&#10;');
 
 const svg = (viewBox, strokeWidth, body, size = 16) => `<svg width="${size}" height="${size}" viewBox="${viewBox}" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
-// The canvas icons for Prompt and Evaluate (icons.js), and Lucide "git-compare-arrows".
+// The existing canvas icons for Prompt, Evaluate and Optimize, and Lucide "git-compare-arrows".
 const PROMPT_ICON = svg('0 0 14 14', 1.5, '<path d="M2 4h10M2 7h10M2 10h6"/>');
-const ROUND_ICON = svg('0 0 14 14', 1.2, '<path d="M3 8v4M6 5v7M9 3v9M12 6v6"/>');
+const EVALUATE_ICON = svg('0 0 14 14', 1.2, '<path d="M3 8v4M6 5v7M9 3v9M12 6v6"/>');
+const OPTIMIZE_ICON = svg('0 0 14 14', 1.2, '<rect x="2" y="2" width="10" height="10" rx="1"/><path d="M4 7l2.5 2.5L10 4"/>');
 const COMPARE_ICON = svg('0 0 24 24', 2, '<circle cx="5" cy="6" r="3"/><circle cx="19" cy="18" r="3"/><path d="M12 6h5a2 2 0 0 1 2 2v7"/><path d="m15 9-3-3 3-3"/><path d="M12 18H7a2 2 0 0 1-2-2V9"/><path d="m9 15 3 3-3 3"/>', 14);
 
 export const ROUND_LABEL = 'Evaluate & Optimize';
@@ -91,7 +92,7 @@ function renderStep({ step, id, x, y }) {
   const name = round.reviewId ? round.method || round.reviewName : round.scoreName;
   const canvasIds = [round.runId, round.scoreId, round.reviewId].filter(Boolean);
   return `<div class="pipeline-flow-step prompt-flow__step${pending ? ' prompt-flow__step--pending' : ''}" style="${position}" tabindex="0" role="button" aria-label="${escapeHtml(`Locate ${ROUND_LABEL} ${name} on canvas${pending ? ` (${ROUND_STATUS[round.status]})` : ''}`)}" title="${escapeTitle(roundTitle(round))}" data-flow-node="${id}" data-focus-key="${escapeHtml(`round:${round.id}`)}" data-canvas-node-ids="${encodeURIComponent(JSON.stringify(canvasIds))}">
-    <span class="pipeline-flow-icon" aria-hidden="true">${ROUND_ICON}</span>
+    <span class="pipeline-flow-icon prompt-flow__round-icons" aria-hidden="true">${EVALUATE_ICON}${OPTIMIZE_ICON}</span>
     <div class="pipeline-flow-content"><span class="pipeline-flow-kind">${escapeHtml(ROUND_STATUS[round.status] || ROUND_LABEL)}</span><span class="pipeline-step-name">${escapeHtml(name)}</span></div>
   </div>`;
 }

@@ -3,6 +3,8 @@
 .prompt-optimization__empty { margin: 0; color: var(--text-muted); font-size: 13.5px; }
 /* An Evaluate not optimized yet, or an Optimize not applied yet. */
 .prompt-flow__step--pending { border-style: dashed; }
+.prompt-flow__step .prompt-flow__round-icons { flex-basis: 35px; gap: 3px; }
+.prompt-flow__round-icons svg { flex: 0 0 16px; }
 /* Beside the short kind line, so the version name keeps the card's full width. */
 .prompt-flow__compare {
   position: absolute; top: 5px; right: 5px; display: grid; place-items: center; width: 20px; height: 20px; padding: 0;
