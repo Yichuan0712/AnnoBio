@@ -1191,7 +1191,8 @@
   padding: 4px 10px;
   font-size: 12px;
   background: var(--hover);
-  border: 1px solid var(--border);
+  border: none;
+  border-radius: 999px;
   color: var(--text);
 }
 
@@ -1521,29 +1522,35 @@
   white-space: nowrap;
 }
 
-.credential-source-badge {
-  display: inline-block;
+.credential-source-badge,
+.pill-select__pill {
+  display: inline-flex;
+  align-items: center;
   padding: 1px 6px;
   border-radius: 999px;
   font-size: 10px;
-  font-weight: 600;
+  font-weight: 500;
+  line-height: 1.4;
   letter-spacing: 0.02em;
   vertical-align: middle;
-  border: 1px solid var(--border);
-  color: var(--text-secondary, #888);
+  white-space: nowrap;
+  border: none;
+  box-shadow: none;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
 }
 
 .credential-source-badge--openrouter {
   color: #6b4fbb;
-  border-color: #6b4fbb;
-  background: rgba(107, 79, 187, 0.1);
+  background: rgba(107, 79, 187, 0.18);
 }
 
 .credential-source-badge--litellm {
   color: #3b6ea5;
-  border-color: #3b6ea5;
-  background: rgba(59, 110, 165, 0.1);
+  background: rgba(59, 110, 165, 0.18);
 }
+html.dark .credential-source-badge--openrouter { color: #c4b5fd; background: rgba(107, 79, 187, 0.28); }
+html.dark .credential-source-badge--litellm { color: #93c5fd; background: rgba(59, 110, 165, 0.28); }
 
 /* A select drawn with a status pill per option (pillSelect.js), e.g. the Agent's default model.
    The pill matches .credential-source-badge above; the trigger matches the other selects. */
@@ -1595,30 +1602,20 @@
 .pill-select__option[aria-selected="true"] { font-weight: 600; }
 .pill-select__pill {
   flex-shrink: 0;
-  padding: 1px 6px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-  color: var(--text-muted);
 }
 .pill-select__pill--ok {
   color: var(--diff-added-text, #15803d);
-  border-color: currentColor;
   background: var(--diff-added-bg, rgba(22, 163, 74, 0.12));
 }
 .pill-select__pill--error {
   color: var(--diff-removed-text, #b91c1c);
-  border-color: currentColor;
   background: var(--diff-removed-bg, rgba(200, 60, 60, 0.12));
 }
 .pill-select__pill--warning {
-  color: #a16207;
-  border-color: #a16207;
-  background: rgba(202, 138, 4, 0.12);
+  color: var(--status-warning, #a16207);
+  background: rgba(202, 138, 4, 0.18);
 }
+html.dark .pill-select__pill--warning { background: rgba(202, 138, 4, 0.28); }
 
 .credential-status-icon {
   display: inline-block;
@@ -3051,8 +3048,8 @@
   font-size: 11px;
   font-weight: 600;
   padding: 2px 8px;
-  border-radius: 0;
-  border: 1px solid var(--border);
+  border-radius: 999px;
+  border: none;
 }
 .review-selection-preview-chip--ok {
   color: var(--success, #0a0);
@@ -3064,7 +3061,7 @@
 }
 .review-selection-preview-chip--info {
   color: var(--text-muted);
-  background: var(--bg);
+  background: var(--hover);
 }
 .review-selection-preview-sections {
   display: grid;
@@ -5176,8 +5173,8 @@ html.dark .review-suggestion-optimization-pill--clickable:hover {
   font-size: 11px;
   padding: 2px 6px;
   background: var(--hover);
-  border: 1px solid var(--border);
-  border-radius: 2px;
+  border: none;
+  border-radius: 999px;
 }
 
 .score-detail-gt-chip-remove {
@@ -7007,8 +7004,8 @@ body.wd-row-resizing {
   font-size: 12px;
   color: var(--text);
   background: var(--hover);
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: none;
+  border-radius: 999px;
 }
 
 .prompt-detail-section-title {

@@ -374,7 +374,7 @@ html.top-bar-web {
   text-align: center;
   color: #fff;
   background: #d92d20; /* solid in both themes; the theme red is a light pink in dark mode */
-  box-shadow: 0 0 0 1.5px var(--bg-bar);
+  box-shadow: none;
 }
 .top-bar-panel-toggle__badge[hidden] { display: none; }
 /* Web: the same size as the rail's icon buttons. */
