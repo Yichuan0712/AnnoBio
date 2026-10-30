@@ -216,7 +216,7 @@ export const iconCopyPlus = (size) => svgIcon({
 });
 
 /**
- * VS Code-style layout icons for the top bar's panel toggles on desktop and web (workflowCanvas.js): a window
+ * VS Code-style layout icons for the desktop top bar's panel toggles (workflowCanvas.js): a window
  * frame whose bottom / right region is filled while that panel is open and only outlined while it
  * is hidden, so the icon itself shows the state. Drawn on the 12-unit grid of modalMaximize.js's
  * window-control icons, at the same rendered line weight, so they sit together in the title bar.
@@ -247,3 +247,20 @@ export const iconLayoutPanel = (open, size) => layoutIcon('bottom', open, size);
 
 /** The right panel (Agent Assistant). */
 export const iconLayoutSidebarRight = (open, size) => layoutIcon('right', open, size);
+
+/** Bottom dock with a chevron indicating the next expand/collapse action. */
+export const iconBottomPanel = (open, size = 18) => svgIcon({
+  size,
+  strokeWidth: 1.7,
+  rects: [[2, 3, 20, 18, 2]],
+  lines: [[2, 15, 22, 15]],
+  paths: [open ? 'm9 8 3 3 3-3' : 'm9 11 3-3 3 3'],
+});
+
+/** A simple message outline with the same stroke and corner treatment as the web toolbar. */
+export const iconAgentAssistant = (size = 18) => svgIcon({
+  size,
+  strokeWidth: 1.7,
+  paths: ['M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z'],
+  lines: [[7, 8, 17, 8], [7, 12, 14, 12]],
+});

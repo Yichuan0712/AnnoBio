@@ -349,15 +349,10 @@ const iconCloudUpload = () => svgIcon({
   ],
 });
 
-// LLM settings = Lucide's "cpu", not a generic gear — reads as "the model" specifically rather
-// than "app settings" in general.
-const iconLlmChip = () => svgIcon({
-  rects: [[4, 4, 16, 16, 2], [8, 8, 8, 8, 1]],
-  lines: [
-    [12, 20, 12, 22], [12, 2, 12, 4], [17, 20, 17, 22], [17, 2, 17, 4],
-    [2, 12, 4, 12], [2, 17, 4, 17], [2, 7, 4, 7], [20, 12, 22, 12], [20, 17, 22, 17], [20, 7, 22, 7],
-    [7, 20, 7, 22], [7, 2, 7, 4],
-  ],
+// Settings gear uses the same thin outline as the rest of the web toolbar.
+const iconSettings = () => svgIcon({
+  paths: ['M9.17 4.62 9.5 2h5l.33 2.62a7.8 7.8 0 0 1 1.85 1.07l2.44-.99 2.5 4.33-2.1 1.6a8 8 0 0 1 0 2.74l2.1 1.6-2.5 4.33-2.44-.99a7.8 7.8 0 0 1-1.85 1.07L14.5 22h-5l-.33-2.62a7.8 7.8 0 0 1-1.85-1.07l-2.44.99-2.5-4.33 2.1-1.6a8 8 0 0 1 0-2.74l-2.1-1.6 2.5-4.33 2.44.99a7.8 7.8 0 0 1 1.85-1.07Z'],
+  circles: [[12, 12, 3]],
 });
 
 function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, addRunNode, addProcessNode, onNewProject, onOpenProject, onUndo, onRedo, onPublishToGallery, panelToggles }) {
@@ -441,19 +436,13 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, addRunN
   // renderer.js's onSaveAsProject wiring, which web no longer uses.
   function setSaveAsEnabled() {}
 
-  // Settings — first in the rail. Not project-scoped, so it's the one action that's always been
-  // meaningful with nothing open yet. No Python settings (nothing local to browse for outside the
-  // desktop app) and no Display mode (web is always light, see renderer.js's setTheme call — no
-  // switcher to show), so it's a single action, not a dropdown.
+  // Project editing and creation actions stay together in the left rail.
   const undoBtn = iconButton({ icon: iconUndo, label: 'Undo', onClick: () => { if (!undoBtn.btn.disabled) onUndo?.(); } });
   const redoBtn = iconButton({ icon: iconRedo, label: 'Redo', onClick: () => { if (!redoBtn.btn.disabled) onRedo?.(); } });
   undoBtn.btn.disabled = true;
   redoBtn.btn.disabled = true;
   rail.appendChild(undoBtn.wrap);
   rail.appendChild(redoBtn.wrap);
-
-  const settingsBtn = iconButton({ icon: iconLlmChip, label: 'LLM settings', onClick: openSettingsModal });
-  rail.appendChild(settingsBtn.wrap);
 
   // Create prompt / dataset — always visible and always enabled, same as Settings: with no
   // project open yet, clicking one just creates a project first (see renderer.js's
@@ -505,6 +494,11 @@ function buildWebTopBar(root, { openAddPromptModal, openAddDatasetModal, addRunN
   spacer.className = 'top-bar-spacer';
   bar.appendChild(spacer);
   if (panelToggles) bar.appendChild(panelToggles);
+
+  // Model configuration is account-wide and remains available without an open project.
+  const settingsBtn = iconButton({ icon: iconSettings, label: 'LLM settings', onClick: openSettingsModal });
+  settingsBtn.wrap.classList.add('top-bar-settings-item');
+  bar.appendChild(settingsBtn.wrap);
 
   // ---- Account avatar (only present when served by the Hub and logged in) — clicking it goes
   // straight to Profile, and it still opens a hover dropdown with Profile/Review(admin)/Log out:

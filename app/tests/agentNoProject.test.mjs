@@ -113,3 +113,20 @@ test('create_project is checked before its card and passes the conversation to t
   const cancelled = await executeCreateProject({ name: 'Sites' }, { hasProject: () => false, createProject: async () => ({ status: 'cancelled', feedback: 'closed' }) }, 'chat-1');
   assert.deepEqual(cancelled, { status: 'cancelled', feedback: 'closed' });
 });
+
+test('web project creation uses server storage and does not offer a local save location', async () => {
+  const workspace = {
+    projectStorage: 'server',
+    hasProject: () => false,
+    createProject: async ({ name }) => ({ status: 'created', name, projectId: 'server-project-1' }),
+  };
+  const preview = previewCreateProject({ name: 'Literature review' }, workspace);
+  assert.equal(preview.ok, true);
+  assert.match(preview.items[0].lines.join(' '), /server/);
+  assert.doesNotMatch(preview.items[0].lines.join(' '), /choose.*(?:where|location)|project file/i);
+  const result = await executeCreateProject({ name: 'Literature review' }, workspace, 'chat-web');
+  assert.equal(result.status, 'created');
+  assert.equal(result.projectId, 'server-project-1');
+  assert.equal(result.path, undefined);
+  assert.match(previewCreateProject({ name: 'Other' }, { ...workspace, hasProject: () => true }).error, /project picker/);
+});

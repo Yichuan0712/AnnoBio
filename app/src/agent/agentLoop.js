@@ -55,6 +55,7 @@ export function toApiMessages(messages) {
       out.push({
         role: 'assistant',
         content: m.content || null,
+        ...(m.reasoningContent != null ? { reasoning_content: m.reasoningContent } : {}),
         tool_calls: m.toolCalls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: c.arguments } })),
       });
       for (const c of m.toolCalls) {
@@ -64,7 +65,8 @@ export function toApiMessages(messages) {
     }
     // A user message's attachments reach the model as their previews, after the text.
     const attached = m.role === 'user' ? attachmentsMessageText(m.attachments) : '';
-    out.push({ role: m.role, content: [m.content || '', attached].filter(Boolean).join('\n\n') });
+    out.push({ role: m.role, content: [m.content || '', attached].filter(Boolean).join('\n\n'),
+      ...(m.role === 'assistant' && m.reasoningContent != null ? { reasoning_content: m.reasoningContent } : {}) });
   }
   return out;
 }
@@ -253,10 +255,11 @@ export async function runAgentLoop({ messages, credentialId, runtime, workspaceS
     let text = '';
     let toolCalls = [];
     let finishReason = '';
+    let reasoningContent = '';
     for (let attempt = 0; attempt < 2 && !text.trim() && !toolCalls.length; attempt += 1) {
       let streamed = '';
       progress({ status: 'Thinking...', text: '' });
-      ({ text, toolCalls, finishReason } = await streamAgentTurn({
+      ({ text, toolCalls, finishReason, reasoningContent } = await streamAgentTurn({
         credentialId,
         messages: toApiMessages(plan.messages),
         conversationSummary: plan.summaryText,
@@ -273,7 +276,8 @@ export async function runAgentLoop({ messages, credentialId, runtime, workspaceS
     const content = text.trim() || toolCalls.length
       ? text
       : 'The model returned an empty reply. Send the message again, or choose a different Agent model in Settings.';
-    messages.push({ role: 'assistant', content, ...(toolCalls.length ? { toolCalls } : {}) });
+    messages.push({ role: 'assistant', content, ...(toolCalls.length ? { toolCalls } : {}),
+      ...(reasoningContent ? { reasoningContent } : {}) });
     if (onMessage) onMessage();
     if (!toolCalls.length) return 'answered';
     if (budgetSpent) {

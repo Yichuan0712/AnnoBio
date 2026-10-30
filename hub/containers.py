@@ -13,6 +13,7 @@ import docker
 from docker.errors import DockerException, NotFound
 
 import db
+from hosted_model import account_token
 
 BACKEND_IMAGE = os.environ.get("PROMPT_STUDIO_BACKEND_IMAGE", "prompt-studio-backend:latest")
 NETWORK_NAME = os.environ.get("PROMPT_STUDIO_NETWORK", "prompt-studio-net")
@@ -110,7 +111,12 @@ def ensure_running(user_id: int) -> str:
                 detach=True,
                 network=NETWORK_NAME,
                 volumes={volume_name(user_id): {"bind": "/app/backend/data", "mode": "rw"}},
-                environment={"PROMPT_STUDIO_PUBLIC_BASE_URL": PUBLIC_BASE_URL} if PUBLIC_BASE_URL else {},
+                environment={
+                    "PROMPT_STUDIO_PUBLIC_BASE_URL": PUBLIC_BASE_URL,
+                    "ANNOBIO_HOSTED_MODE": "1",
+                    "ANNOBIO_HOSTED_GATEWAY_URL": "http://hub:8080/internal/hosted-model",
+                    "ANNOBIO_HOSTED_TOKEN": account_token(user_id),
+                },
                 # 512m was too tight even at rest: with dspy/langchain/boto3/fastembed/etc. all
                 # loaded, uvicorn's own baseline RSS was already ~510MB, so any extra memory
                 # pressure (e.g. PyMuPDF/pdfplumber parsing an image-heavy PDF) tipped the whole

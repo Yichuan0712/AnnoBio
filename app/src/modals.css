@@ -1657,6 +1657,18 @@ html.dark .pill-select__pill--warning { background: rgba(202, 138, 4, 0.28); }
   min-width: 160px;
 }
 
+.settings-free-allowance {
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius, 3px);
+  color: var(--text);
+  font-size: 12px;
+}
+.settings-free-allowance[hidden] { display: none; }
+.settings-free-allowance-text { margin: 6px 0 10px; line-height: 1.5; color: var(--text-muted); }
+.credentials-managed-label { color: var(--text-muted); font-size: 12px; }
+
 .credentials-add-btn {
   white-space: nowrap;
 }

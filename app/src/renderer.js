@@ -214,12 +214,18 @@ export async function initializeApp({ onStartupStatus = () => {} } = {}) {
     await startNewProjectDesktop(path);
   };
 
-  // The Agent's create_project card (agent/project/createProject.js): the user picks where to save,
-  // as with File → New. Only offered while no project is open, which only the desktop app shows.
+  // The Agent creates a server-owned project on web; only desktop asks for a local file.
+  // In both cases its conversation moves into the project before the same turn continues.
   canvasAPI.setAgentProjectCreator?.(async ({ name, adoptAgentConversationId }) => {
+    if (currentProjectPath) return { status: 'failed', error: 'A project is already open.' };
+    if (!isElectron) {
+      const projectName = await findUniqueProjectName(name);
+      const { id } = await createWebProject(projectName);
+      await openProjectWeb({ id, name: projectName }, { startup: true, adoptAgentConversationId });
+      return { status: 'created', name: projectName, projectId: id };
+    }
     const api = window.electronAPI;
     if (!api?.showNewProjectDialog) return { status: 'failed', error: 'Only the desktop app can create a project here.' };
-    if (currentProjectPath) return { status: 'failed', error: 'A project is already open.' };
     const path = await api.showNewProjectDialog(name);
     if (!path) return { status: 'cancelled', feedback: 'The user closed the save dialog without choosing where to save the project.' };
     await startNewProjectDesktop(path, { adoptAgentConversationId });
@@ -289,7 +295,7 @@ export async function initializeApp({ onStartupStatus = () => {} } = {}) {
     if (goDownload) window.location.href = '/download';
   };
 
-  const openProjectWeb = async ({ id, name }, { silent = false, startup = false } = {}) => {
+  const openProjectWeb = async ({ id, name }, { silent = false, startup = false, adoptAgentConversationId = '' } = {}) => {
     canvasAPI.setProjectLoading(true);
     try {
       const project = await loadWebProject(id);
@@ -303,7 +309,7 @@ export async function initializeApp({ onStartupStatus = () => {} } = {}) {
       topBarAPI.setSaveAsEnabled?.(true);
       topBarAPI.setMergeEnabled?.(true);
       topBarAPI.setPublishEnabled?.(true);
-      canvasAPI.syncProjectPanels?.();
+      await canvasAPI.syncProjectPanels?.({ adoptAgentConversationId });
       return true;
     } catch (err) {
       if (silent && err.status === 404) { setStoredWebProjectId(null); return false; }

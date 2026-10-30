@@ -266,7 +266,7 @@ Jobs ("kind" plus):
   ),
 ];
 
-// With no project open (the desktop app, docs/design/AGENT_NO_PROJECT_PLAN.md) there is no canvas
+// With no project open (desktop or web) there is no canvas
 // to read, change or run, so only these are offered, plus create_project.
 const NO_PROJECT_TOOL_NAMES = new Set(['list_models', 'read_guide', 'search_source', 'inspect_source', ASK_USER_TOOL, 'read_attachment']);
 
@@ -274,9 +274,9 @@ const NO_PROJECT_TOOL_NAMES = new Set(['list_models', 'read_guide', 'search_sour
 // tools sent with a project open unchanged.
 const CREATE_PROJECT_DEFINITION = tool(
   CREATE_PROJECT_TOOL,
-  'Ask the user to create a new project for what you have discussed; available only while no project is open. The user confirms on a card and chooses where to save the project file. This conversation then moves into the new project and you continue in the same turn with every tool and the new, empty workspace.',
+  'Ask the user to create a new project for what you have discussed; available only while no project is open. The user confirms on a card. Web projects are saved automatically on the server without choosing a location; desktop projects use a local save dialog. This conversation then moves into the new project and you continue in the same turn with every tool and the new, empty workspace.',
   {
-    name: { type: 'string', description: 'Short project name saying what it is for; suggested as the file name.' },
+    name: { type: 'string', description: 'Short project name saying what it is for.' },
     summary: { type: 'string', description: 'One sentence telling the user why this project and what you will build in it.' },
   },
   ['name', 'summary'],

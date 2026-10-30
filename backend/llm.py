@@ -58,6 +58,8 @@ _RETRYABLE_ERRORS = (
 def _is_retryable_error(e: Exception) -> bool:
     """True if error is transient (429, timeout, connection, 5xx), by LiteLLM's exception type or the
     status code, never by words in the message (a model's own text can contain "rate" or "timeout")."""
+    if "free_quota_exhausted" in str(e) or "daily free token allowance" in str(e).lower():
+        return False
     if isinstance(e, _RETRYABLE_ERRORS):
         return True
     return getattr(e, "status_code", None) in (429, 500, 502, 503, 504)
@@ -276,7 +278,7 @@ def chat(
     return _extract_completion_text(response)
 
 
-def _normalize_tool_messages(messages: list[dict]) -> list[dict]:
+def _normalize_tool_messages(messages: list[dict], include_reasoning: bool = False) -> list[dict]:
     """OpenAI-format messages for a tool-calling conversation. Unlike _normalize_messages this keeps
     assistant `tool_calls` and tool-result `tool_call_id`, which LiteLLM translates per provider."""
     out: list[dict] = []
@@ -290,6 +292,8 @@ def _normalize_tool_messages(messages: list[dict]) -> list[dict]:
             })
             continue
         message: dict[str, Any] = {"role": role, "content": m.get("content") or ""}
+        if include_reasoning and role == "assistant" and m.get("reasoning_content") is not None:
+            message["reasoning_content"] = m["reasoning_content"]
         if role == "assistant" and m.get("tool_calls"):
             message["tool_calls"] = [
                 {
@@ -335,7 +339,7 @@ def stream_chat_with_tools(
         base_url=base_url,
         max_tokens=max_tokens,
     )
-    kwargs["messages"] = _normalize_tool_messages(messages)
+    kwargs["messages"] = _normalize_tool_messages(messages, include_reasoning=(provider == "deepseek" or "deepseek" in model.lower() or "/internal/hosted-model/" in base_url))
     if tools:
         kwargs["tools"] = tools
     kwargs["stream"] = True
@@ -366,6 +370,9 @@ def stream_chat_with_tools(
         delta = getattr(choice, "delta", None)
         if delta is None:
             continue
+        reasoning = getattr(delta, "reasoning_content", None)
+        if reasoning:
+            yield {"type": "reasoning", "delta": str(reasoning)}
         text = getattr(delta, "content", None)
         if text:
             yield {"type": "text", "delta": _message_content_to_text(text)}

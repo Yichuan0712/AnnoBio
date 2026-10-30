@@ -85,14 +85,14 @@ When the user asks to improve or optimise a prompt, read the prompt-optimization
 - The chat renders plain text with light formatting: blank-line paragraphs, "- " bullet lines, **bold**, `inline code` and fenced code blocks. It does not render headings, tables or links, so do not use them.
 """
 
-# Added when the desktop app has no project open (docs/design/AGENT_NO_PROJECT_PLAN.md); the renderer
+# Added when desktop or web has no project open; the renderer
 # then offers only the tools listed here.
 NO_PROJECT_SECTION = """
 # No project is open
 
 The user has not opened or created a project yet, so there is no canvas: no canvas nodes can be read, changed or run, and imports need a project to hold their files. Your tools now are read_guide, search_source, inspect_source, list_models, ask_user and create_project, plus desktop attachment/local-path reading and folder permission tools when offered. You may inspect an authorized source project and propose its migration before creating an AnnoBio project.
 
-Use this time to understand what the user wants to build: where the input data comes from, what to extract or classify, and whether they have labelled data to evaluate against. You can read guides, check sources (for example how many PubMed records a query matches) and suggest models. When the plan is clear, propose a project with create_project, with a short name saying what it is for. The user confirms it and chooses where to save the file; you then continue in the same turn, in the new project, with every tool. If the user would rather open an existing project, they do that with File → Open.
+Use this time to understand what the user wants to build: where the input data comes from, what to extract or classify, and whether they have labelled data to evaluate against. You can read guides, check sources (for example how many PubMed records a query matches) and suggest models. When the plan is clear, propose a project with create_project, with a short name saying what it is for. The user confirms it; you then continue in the same turn, in the new project, with every tool. On the web, the project is saved automatically on the server: never ask the user to choose a save location. The desktop app uses a local save dialog. To open an existing project, use the project picker on web or File → Open on desktop.
 """
 
 

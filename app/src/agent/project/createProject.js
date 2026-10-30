@@ -1,7 +1,6 @@
 /**
- * The Agent's create_project, offered only while no project is open (the desktop app,
- * docs/design/AGENT_NO_PROJECT_PLAN.md). The user confirms on a card and picks where to save, as with
- * File → New; the conversation then moves into the new project (agentWindowModal.js's adoptProject).
+ * The Agent's create_project, offered only while no project is open. Web saves on the server;
+ * desktop asks for a local file. The conversation then moves into the confirmed project.
  */
 
 const MAX_NAME_CHARS = 80;
@@ -11,21 +10,22 @@ export function previewCreateProject(args, runtime) {
   const name = String(args?.name || '').replace(/\s+/g, ' ').trim();
   if (!name) return { ok: false, error: 'Give the project a name.' };
   if (name.length > MAX_NAME_CHARS) return { ok: false, error: `Keep the project name within ${MAX_NAME_CHARS} characters.` };
-  if (runtime.hasProject?.()) return { ok: false, error: 'A project is already open. The user creates another one with File → New.' };
+  const serverStorage = runtime.projectStorage === 'server';
+  if (runtime.hasProject?.()) return { ok: false, error: `A project is already open. ${serverStorage ? 'Use the project picker to create another one.' : 'The user creates another one with File → New.'}` };
   return {
     ok: true,
     name,
     items: [{
       kind: 'add',
       title: `Create project "${name}"`,
-      lines: ['You choose where to save the project file.', 'This conversation moves into the new project.'],
+      lines: [serverStorage ? 'The project is saved automatically on the server.' : 'You choose where to save the project file.', 'This conversation moves into the new project.'],
     }],
   };
 }
 
 /**
- * Creates the project the user confirmed; `runtime.createProject` asks where to save it.
- * @returns {Promise<{status: 'created', name: string, path: string, note: string} | {status: 'cancelled', feedback?: string} | {status: 'failed', error: string}>}
+ * Creates the confirmed project using the platform's storage and adopts its conversation.
+ * @returns {Promise<{status: 'created', name: string, path?: string, projectId?: string, note: string} | {status: 'cancelled', feedback?: string} | {status: 'failed', error: string}>}
  */
 export async function executeCreateProject(request, runtime, conversationId) {
   const preview = previewCreateProject(request, runtime);

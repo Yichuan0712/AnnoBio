@@ -28,8 +28,8 @@ const webAgentStorageApi = {
   },
 };
 
-// Chats from before any project is open, kept by the backend apart from every project; only the
-// desktop app shows the dock without a project (docs/design/AGENT_NO_PROJECT_PLAN.md). A failed load
+// Chats from before any project is open are kept by the backend apart from every project on both
+// desktop and web. A failed load
 // throws rather than reading as empty, so the dock never saves an empty list over chats it could not read.
 const globalAgentStorageApi = {
   async loadAgentConversations() {
@@ -126,6 +126,7 @@ function mapMessageForStorage(message) {
   const out = {
     role: String(message.role || 'assistant'),
     content: String(message.content || ''),
+    ...(message.role === 'assistant' && message.reasoningContent != null ? { reasoningContent: String(message.reasoningContent) } : {}),
   };
   if (Array.isArray(message.toolCalls) && message.toolCalls.length) {
     out.toolCalls = message.toolCalls.map((call) => ({
@@ -329,9 +330,11 @@ export async function openAgentWindowModal(options = {}) {
   function saveConversations() {
     if (loadFailed || !storageApi?.saveAgentConversations) return;
     const payload = buildSavePayload();
+    const targetStorage = storageApi;
+    const targetProject = projectPath;
     saveChain = saveChain
       .catch(() => {})
-      .then(() => storageApi.saveAgentConversations(projectPath, payload))
+      .then(() => targetStorage.saveAgentConversations(targetProject, payload))
       .catch((error) => {
         console.error('Save agent conversations:', error);
       });

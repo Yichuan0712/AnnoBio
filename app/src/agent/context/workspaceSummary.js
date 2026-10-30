@@ -207,7 +207,7 @@ function modelLines(options) {
  * @param {{extractInputFields: Function, inspectNode: (id: string) => Promise<object>,
  *   credentialsById: Map, defaultRunCredential: object|null, defaultReviewCredential?: object|null,
  *   selectedNodeIds?: string[], projectOpen?: boolean}} options
- *   inspectNode is the canvas's own (it adds live score metrics); projectOpen false (the desktop app
+ *   inspectNode is the canvas's own (it adds live score metrics); projectOpen false (desktop or web
  *   before a project is open) has no canvas to describe, only the models.
  */
 export async function buildWorkspaceSummary(canvasState, options = {}) {

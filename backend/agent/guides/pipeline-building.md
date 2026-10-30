@@ -13,9 +13,10 @@ Before building, find out:
 - whether the user has labelled data (a ground truth) to evaluate the prompt against, or would build a
   small one.
 
-In the desktop app the Agent can be used before any project is open. Settle these questions first,
-then propose a project with `create_project`; the user chooses where to save it and the conversation
-continues in the new project.
+The Agent can be used before any project is open on both desktop and web. Settle these questions first,
+then propose a project with `create_project`. The user confirms it on a card and the conversation
+continues in the new project. Web projects are saved automatically on the server; never ask for a save
+location on the web. Only the desktop app asks where to save a local project file.
 
 ## Choosing the step type
 

@@ -40,7 +40,7 @@ export function historyTokenBudget(context, { workspaceSummary = '', tools = [] 
 }
 
 function messageTokens(message) {
-  let tokens = estimateTokens(message.content) + MESSAGE_OVERHEAD_TOKENS;
+  let tokens = estimateTokens(message.content) + estimateTokens(message.reasoningContent) + MESSAGE_OVERHEAD_TOKENS;
   for (const call of message.toolCalls || []) tokens += estimateTokens(call.name) + estimateTokens(call.arguments);
   for (const attachment of message.attachments || []) tokens += estimateTokens(attachment.preview);
   return tokens;

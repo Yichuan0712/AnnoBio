@@ -76,6 +76,7 @@ function credentialModelLabel(credential) {
 }
 
 function credentialSourceBadge(c) {
+  if (c.builtin) return '<span class="credential-source-badge">Included</span>';
   const isOpenRouter = c.provider === 'openrouter';
   const label = isOpenRouter ? 'OpenRouter' : 'LiteLLM';
   const kind = isOpenRouter ? 'openrouter' : 'litellm';
@@ -83,6 +84,7 @@ function credentialSourceBadge(c) {
 }
 
 function credentialStatusIcon(c) {
+  if (c.builtin) return '';
   if (c.last_check_ok === true) {
     const label = PROVIDER_LABELS[c.provider] || c.provider || 'Verified';
     return `<span class="credential-status-icon credential-status-icon--ok" data-status-icon="${c.id}" title="Verified: ${escapeHtml(label)}">✓</span>`;
@@ -105,15 +107,15 @@ function renderCredentialsTable(scope, list) {
   tbody.innerHTML = list.map((c) => `
     <tr data-credential-id="${c.id}">
       <td>${escapeHtml(credentialModelLabel(c))} ${credentialSourceBadge(c)} ${credentialStatusIcon(c)}</td>
-      <td class="credentials-provider-cell">${escapeHtml(c.base_url || 'Default')}</td>
-      <td class="credentials-key-cell">
-        <code class="credentials-key-value">${maskedPlaceholder}</code>
+      <td class="credentials-provider-cell">${c.builtin ? 'Provided by AnnoBio' : escapeHtml(c.base_url || 'Default')}</td>
+      <td class="${c.builtin ? 'credentials-managed-cell' : 'credentials-key-cell'}">
+        ${c.builtin ? '<span>Included</span>' : `<code class="credentials-key-value">${maskedPlaceholder}</code>`}
       </td>
       <td class="credentials-actions-cell">
-        <div class="credentials-actions-inline">
+        ${c.builtin ? '<span class="credentials-managed-label">Managed</span>' : `<div class="credentials-actions-inline">
           <button type="button" class="btn btn-secondary credentials-test-btn" data-id="${c.id}" aria-label="Test">Test</button>
           <button type="button" class="btn btn-secondary credentials-delete-btn" data-id="${c.id}" aria-label="Delete">Delete</button>
-        </div>
+        </div>`}
       </td>
     </tr>
   `).join('');
@@ -651,6 +653,7 @@ function wireOpenRouterConnect(addFormRoot, tableHost) {
 /* ——— Modal ——— */
 
 export function openSettingsModal() {
+  const isDesktop = Boolean(window.electronAPI);
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.setAttribute('aria-modal', 'true');
@@ -668,6 +671,7 @@ export function openSettingsModal() {
               <h3 id="model-settings-col-credentials-title" class="model-settings-col-heading model-settings-col-heading--credentials">Credentials</h3>
               <h3 id="model-settings-col-settings-title" class="model-settings-col-heading model-settings-col-heading--settings">Settings</h3>
               <aside class="model-settings-col model-settings-col-left" aria-labelledby="model-settings-col-credentials-title">
+                ${isDesktop ? '' : '<section class="settings-free-allowance" hidden aria-live="polite"><strong>Free allowance</strong><p class="settings-free-allowance-text"></p><button type="button" class="btn btn-secondary settings-connect-openrouter">Connect OpenRouter</button></section>'}
                 <div id="model-settings-credentials-root"></div>
               </aside>
               <div class="model-settings-col model-settings-col-right" aria-labelledby="model-settings-col-settings-title">
@@ -683,17 +687,17 @@ export function openSettingsModal() {
                   <div class="review-detail-tab-panels model-settings-tab-panels">
                     <div class="review-detail-tab-panel review-detail-tab-panel--active" id="settings-panel-credentials" role="tabpanel" aria-labelledby="settings-tab-credentials" data-panel="credentials">
                       <div class="defaults-page-scroll settings-credentials-tab-body">
-                        <p class="settings-tab-intro">A credential is a model ID plus the API key that pays for it. Add one through LiteLLM, which reaches most providers and your own server through Base URL, or connect an OpenRouter account. Credentials appear on the left, where Test checks them, and can then be used by Generate nodes, Optimize nodes and the Agent.</p>
+                        <p class="settings-tab-intro">${isDesktop ? 'A credential is a model ID plus the API key that pays for it. Add one through LiteLLM, which reaches most providers and your own server through Base URL, or connect an OpenRouter account. Credentials appear on the left, where Test checks them, and can then be used by Generate nodes, Optimize nodes and the Agent.' : 'AnnoBio AI is included for text prompts and selected by default. Its daily token allowance is shared by Generate, Optimize and Agent. Connect OpenRouter to use your own models and continue after the free allowance is used. The desktop app also supports LiteLLM and custom endpoints.'}</p>
                         <div id="model-settings-credentials-add" class="model-settings-credentials-add">
                           <div class="credentials-add-method-row">
                             <label class="dataset-meta-label" for="credentials-add-method-select">Add credential</label>
                             <select id="credentials-add-method-select" class="dataset-meta-input credentials-add-method-select" aria-label="Add credential method">
-                              <option value="litellm" selected>Via LiteLLM</option>
-                              <option value="openrouter">Via OpenRouter</option>
+                              ${isDesktop ? '<option value="litellm" selected>Via LiteLLM</option>' : ''}
+                              <option value="openrouter" ${isDesktop ? '' : 'selected'}>Via OpenRouter</option>
                             </select>
                           </div>
                           <div class="credentials-add-tab-panels">
-                            <div class="credentials-add-tab-panel credentials-add-tab-panel--active" id="credentials-add-panel-litellm" data-panel="litellm">
+                            ${isDesktop ? `<div class="credentials-add-tab-panel credentials-add-tab-panel--active" id="credentials-add-panel-litellm" data-panel="litellm">
                               <div class="credentials-add-row">
                                 <div class="credentials-add-field credentials-add-field--grow credentials-add-field--full-row">
                                   <label class="dataset-meta-label" for="credentials-model">Model ID</label>
@@ -711,7 +715,7 @@ export function openSettingsModal() {
                                 </div>
                               </div>
                             </div>
-                            <div class="credentials-add-tab-panel" id="credentials-add-panel-openrouter" data-panel="openrouter">
+                            ` : ''}<div class="credentials-add-tab-panel${isDesktop ? '' : ' credentials-add-tab-panel--active'}" id="credentials-add-panel-openrouter" data-panel="openrouter">
                               <div class="credentials-add-row">
                                 <div class="credentials-add-field credentials-add-field--full-row">
                                   <span class="dataset-meta-label" id="credentials-openrouter-account-label">OpenRouter account</span>
@@ -1039,6 +1043,33 @@ export function openSettingsModal() {
     }
   }
 
+  async function loadFreeAllowance() {
+    const section = overlay.querySelector('.settings-free-allowance');
+    if (!section) return;
+    try {
+      const response = await fetch(`${API_BASE}/api/hosted-model`);
+      if (!response.ok) return;
+      const allowance = await response.json();
+      if (!allowance.enabled) return;
+      section.hidden = false;
+      const text = section.querySelector('.settings-free-allowance-text');
+      if (!allowance.available) {
+        text.textContent = 'The free model is temporarily unavailable. Connect OpenRouter to use your own model.';
+      } else {
+        const reset = allowance.resets_at ? ` Resets ${new Date(allowance.resets_at).toLocaleString()}.` : '';
+        text.textContent = allowance.remaining > 0
+          ? `${Number(allowance.remaining).toLocaleString()} of ${Number(allowance.limit).toLocaleString()} daily tokens remaining.${reset}`
+          : `Your daily free token allowance has been reached. Connect OpenRouter to continue.${reset}`;
+        if (allowance.reserved) text.textContent += ' Active requests are using part of this allowance.';
+        if (allowance.estimated) text.textContent += ' Interrupted requests include estimated usage.';
+      }
+    } catch { /* The rest of Settings stays available during a usage-service outage. */ }
+  }
+  overlay.querySelector('.settings-connect-openrouter')?.addEventListener('click', () => {
+    activateSettingsTab('credentials');
+    overlay.querySelector('.credentials-openrouter-link')?.click();
+  });
+
   async function loadReviewMethodOptions() {
     try {
       const res = await fetch(`${API_BASE}/api/review/methods`);
@@ -1146,11 +1177,12 @@ export function openSettingsModal() {
     agentStatusEl.hidden = false;
     agentStatusEl.dataset.state = state;
     agentStatusText.textContent = text;
-    agentCheckBtn.hidden = !c || agentChecksInFlight.has(c.id);
+    agentCheckBtn.hidden = !c || c.builtin === true || agentChecksInFlight.has(c.id);
     agentCheckBtn.textContent = c?.agent_check_ok == null && !checkError ? 'Check' : 'Check again';
   }
 
   async function runAgentModelCheck(credentialId) {
+    if (agentCredentials.find(c => c.id === credentialId)?.builtin) return;
     if (!credentialId || agentChecksInFlight.has(credentialId)) return;
     agentChecksInFlight.add(credentialId);
     renderAgentModelStatus();
@@ -1298,7 +1330,7 @@ export function openSettingsModal() {
         void loadAgentHints();
       },
     });
-    const liteLlmAdd = wireCredentialsAddForm(addRoot, credRoot);
+    const liteLlmAdd = isDesktop ? wireCredentialsAddForm(addRoot, credRoot) : null;
     const openRouterConnect = wireOpenRouterConnect(addRoot, credRoot);
     const addMethodSelect = addRoot.querySelector('#credentials-add-method-select');
     wireCredentialsAddTabs(addRoot, {
@@ -1316,6 +1348,9 @@ export function openSettingsModal() {
     populateCredentialSelects(credentials);
     populateReviewMethodSelect(reviewMethods);
     applySettings(settings || MODEL_SETTINGS_DEFAULTS);
+    if (!isDesktop) {
+      void loadFreeAllowance();
+    }
     void loadAgentHints();
   }
 

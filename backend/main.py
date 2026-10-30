@@ -15,6 +15,7 @@ from typing import Any, List, Optional
 from urllib.parse import unquote
 
 import httpx
+import hosted_model
 
 # Ensure UTF-8 for subprocess / CLI starts (Electron also sets PYTHONUTF8 when spawning).
 os.environ.setdefault("PYTHONUTF8", "1")
@@ -359,6 +360,7 @@ class CredentialResponse(BaseModel):
     agent_check_ok: bool | None = None
     agent_check_detail: str | None = None
     api_key_masked: str
+    builtin: bool = False
 
 
 class CredentialDetailResponse(BaseModel):
@@ -372,6 +374,7 @@ class CredentialDetailResponse(BaseModel):
     last_check_ok: bool | None = None
     last_check_error: str | None = None
     api_key: str
+    builtin: bool = False
 
 
 class RunRequest(BaseModel):
@@ -535,7 +538,7 @@ def _load_settings() -> dict:
     """Load settings from disk; return defaults if missing or invalid."""
     _ensure_data_dir()
     if not SETTINGS_FILE.exists():
-        return dict(DEFAULT_SETTINGS)
+        return hosted_model.settings(dict(DEFAULT_SETTINGS), _load_credentials())
     try:
         raw = SETTINGS_FILE.read_text(encoding="utf-8")
         data = json.loads(raw)
@@ -544,9 +547,9 @@ def _load_settings() -> dict:
             if k in data:
                 out[k] = data[k]
         out["model_settings"] = clean_model_settings(out.get("model_settings"))
-        return out
+        return hosted_model.settings(out, _load_credentials())
     except (json.JSONDecodeError, OSError):
-        return dict(DEFAULT_SETTINGS)
+        return hosted_model.settings(dict(DEFAULT_SETTINGS), _load_credentials())
 
 
 def _save_settings(data: dict) -> None:
@@ -571,16 +574,24 @@ def _resolve_review_method_id(explicit: str | None, settings: dict | None = None
 def _load_credentials() -> list[dict]:
     _ensure_data_dir()
     if not CREDENTIALS_FILE.exists():
-        return []
+        return hosted_model.credentials([])
     try:
         raw = CREDENTIALS_FILE.read_text(encoding="utf-8")
-        return json.loads(raw)
+        return hosted_model.credentials(json.loads(raw))
     except (json.JSONDecodeError, OSError):
-        return []
+        return hosted_model.credentials([])
 
 
 def _save_credentials(items: list[dict]) -> None:
     _ensure_data_dir()
+    # The managed credential is virtual. Keep desktop-only credentials on disk when hosted filters them.
+    if hosted_model.enabled():
+        try:
+            previous = json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            previous = []
+        items = [item for item in items if not hosted_model.is_builtin(item)] + [
+            item for item in previous if item.get("provider") != "openrouter" and item.get("id") != hosted_model.CREDENTIAL_ID]
     CREDENTIALS_FILE.write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
@@ -640,10 +651,18 @@ def _credential_base_url(item: dict) -> str:
     return DEFAULT_BASE_URLS_BY_PROVIDER.get(_credential_provider(item), "")
 
 
+def _credential_for_task(item: dict, role: str) -> dict:
+    try:
+        return hosted_model.resolve(item, role)
+    except ValueError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
 def _pipeline_credential(credential_id: str) -> dict | None:
     """Resolve one opaque credential binding at job start without copying its secret into a run."""
     for item in _load_credentials():
         if item.get("id") == credential_id:
+            item = _credential_for_task(item, "generate")
             return {
                 **item,
                 "model": _credential_model(item),
@@ -957,9 +976,15 @@ def list_credentials():
             agent_check_ok=_current_agent_check(item).get("ok"),
             agent_check_detail=_current_agent_check(item).get("detail"),
             api_key_masked=_mask_key(item["api_key"]),
+            builtin=hosted_model.is_builtin(item),
         )
         for item in items
     ]
+
+
+@app.get("/api/hosted-model")
+def hosted_model_status():
+    return hosted_model.usage()
 
 
 def _current_agent_check(item: dict) -> dict:
@@ -1037,6 +1062,8 @@ def _catalog_tools_hint(item: dict, catalog: dict[str, dict]) -> bool | None:
 def _credential_context_tokens(item: dict) -> int | None:
     """The model's context window in tokens from the registries (OpenRouter's catalog, else
     LiteLLM's), or None when neither knows the model, e.g. behind a custom endpoint."""
+    if hosted_model.is_builtin(item):
+        return 32768
     model = _credential_model(item)
     if _credential_provider(item) == "openrouter":
         from oauth_openrouter import get_catalog
@@ -1082,6 +1109,8 @@ def credential_agent_hints():
 @app.post("/api/credentials/{credential_id}/agent-check")
 def agent_check_credential(credential_id: str):
     """Check for real whether the credential's model calls tools (see llm.probe_tool_calling) and remember it."""
+    if hosted_model.is_builtin(credential_id):
+        raise HTTPException(status_code=403, detail="The included model is managed by AnnoBio and cannot be tested.")
     items = _load_credentials()
     cred = next((item for item in items if item.get("id") == credential_id), None)
     if not cred:
@@ -1109,6 +1138,8 @@ def credential_run_params(credential_id: str):
     cred = next((item for item in _load_credentials() if item.get("id") == credential_id), None)
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
+    if hosted_model.is_builtin(cred):
+        return {"params": []}
     provider = _credential_provider(cred)
     model = _credential_model(cred)
     openrouter_parameters = None
@@ -1137,6 +1168,8 @@ async def detect_credential_provider(request: Request):
     return that provider's own live model list (for autocomplete). Never raises on a failed
     detection -- callers should treat provider="" as "let the user type it manually".
     """
+    if hosted_model.enabled():
+        raise HTTPException(status_code=403, detail="The web app supports OpenRouter. LiteLLM is available in the desktop app.")
     try:
         body = await request.json()
     except Exception as e:
@@ -1158,6 +1191,8 @@ async def add_credential(request: Request):
     api_key = (body.get("api_key") or "").strip()
     base_url = (body.get("base_url") or "").strip()
     provider = (body.get("provider") or "").strip()
+    if hosted_model.enabled() and (provider != "openrouter" or base_url not in ("", "https://openrouter.ai/api/v1")):
+        raise HTTPException(status_code=403, detail="The web app supports OpenRouter. LiteLLM is available in the desktop app.")
     if not model:
         raise HTTPException(status_code=400, detail="model is required")
     if not api_key:
@@ -1196,6 +1231,7 @@ def get_credential(credential_id: str):
                 last_check_ok=item.get("last_check_ok"),
                 last_check_error=item.get("last_check_error"),
                 api_key=item["api_key"],
+                builtin=hosted_model.is_builtin(item),
             )
     raise HTTPException(status_code=404, detail="Credential not found")
 
@@ -1217,6 +1253,8 @@ _LITELLM_CATALOG_PROVIDERS = {"openai", "anthropic", "gemini", "deepseek", "bedr
 @app.get("/api/credentials/litellm/catalog")
 def litellm_catalog():
     """LiteLLM's built-in static model list (no key/network needed) for the 'choose a model' picker."""
+    if hosted_model.enabled():
+        raise HTTPException(status_code=403, detail="LiteLLM is available in the desktop app. Use OpenRouter on the web.")
     import litellm
 
     models = []
@@ -1253,6 +1291,8 @@ async def test_credential(credential_id: str):
     "openai/gpt-oss-20b" needs the openrouter/ wrapper rather than a literal call to OpenAI's
     own API, so this is also what runs (in the background, non-blocking) right after Add.
     """
+    if hosted_model.is_builtin(credential_id):
+        raise HTTPException(status_code=403, detail="The included model is managed by AnnoBio and cannot be tested.")
     items = _load_credentials()
     cred = None
     for item in items:
@@ -1292,7 +1332,7 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(..., min_length=1, description="Conversation history; last message should be user")
 
 
-def _resolve_chat_credential(credential_id: str) -> tuple[dict, int]:
+def _resolve_chat_credential(credential_id: str, role: str = "agent") -> tuple[dict, int]:
     items = _load_credentials()
     cred = None
     for item in items:
@@ -1302,7 +1342,7 @@ def _resolve_chat_credential(credential_id: str) -> tuple[dict, int]:
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
     max_tokens = settings_for_model(_load_settings(), credential_id).get("review_max_tokens") or DEFAULT_SETTINGS["review_max_tokens"]
-    return cred, max_tokens
+    return _credential_for_task(cred, role), max_tokens
 
 
 @app.post("/api/chat")
@@ -1347,6 +1387,7 @@ class AgentMessage(BaseModel):
     content: str | None = None
     tool_calls: list[AgentToolCall] | None = None
     tool_call_id: str | None = None
+    reasoning_content: str | None = None
 
 
 class AgentTurnRequest(BaseModel):
@@ -1355,7 +1396,7 @@ class AgentTurnRequest(BaseModel):
     tools: list[dict[str, Any]] = Field(default_factory=list, description="OpenAI-format function tools")
     workspace_summary: str = Field(default="", description="Workspace summary built by the renderer")
     conversation_summary: str = Field(default="", description="Summary replacing the start of a long conversation")
-    project_open: bool = Field(default=True, description="False in the desktop app before a project is open")
+    project_open: bool = Field(default=True, description="False before a project is open")
 
 
 def _sse(event: dict[str, Any]) -> str:
@@ -1484,6 +1525,8 @@ def agent_guide(topic: str):
 @app.delete("/api/credentials/{credential_id}")
 def delete_credential(credential_id: str):
     """Delete a credential by id."""
+    if hosted_model.is_builtin(credential_id):
+        raise HTTPException(status_code=403, detail="The included model cannot be deleted.")
     def change(items: list[dict]) -> bool:
         kept = [x for x in items if x.get("id") != credential_id]
         removed = len(kept) != len(items)
@@ -1649,6 +1692,7 @@ def _do_run_work(
                 _run_jobs[run_id] = {"status": "done", "error": "Credential not found", "run_node_id": nid}
             _persist_run_jobs()
             return
+        cred = _credential_for_task(cred, "generate")
         provider = _credential_provider(cred)
         model = _credential_model(cred)
         api_key = cred.get("api_key", "")
@@ -3539,6 +3583,7 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
                     _review_jobs[review_id]["status"] = "done"
                     _review_jobs[review_id]["error"] = "Credential not found"
             return
+        cred = _credential_for_task(cred, "optimize")
         api_key = cred.get("api_key", "")
         if not api_key:
             append_event({"type": "error", "detail": "Missing API key"})
@@ -3630,6 +3675,7 @@ def optimization_segments(body: OptimizationSegmentsRequest):
     cred = next((c for c in items if c.get("id") == body.credential_id), None)
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
+    cred = _credential_for_task(cred, "optimize")
     model = _credential_model(cred)
     api_key = cred.get("api_key", "")
     if not api_key:
@@ -3666,6 +3712,7 @@ def optimization_candidates(body: OptimizationCandidatesRequest):
     cred = next((c for c in items if c.get("id") == body.credential_id), None)
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
+    cred = _credential_for_task(cred, "optimize")
     model = _credential_model(cred)
     api_key = cred.get("api_key", "")
     if not api_key:

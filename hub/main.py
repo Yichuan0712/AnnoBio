@@ -26,6 +26,7 @@ import db
 import mailer
 from guide import GUIDE_GROUPS, build_chapters
 from proxy import proxy_request
+from hosted_model import router as hosted_model_router
 
 mimetypes.add_type("image/webp", ".webp")
 db.init_db()
@@ -33,6 +34,7 @@ db.init_db()
 REAP_INTERVAL_SEC = int(os.environ.get("PROMPT_STUDIO_REAP_INTERVAL_SEC", "300"))
 
 app = FastAPI()
+app.include_router(hosted_model_router)
 
 
 async def _reap_idle_loop():
@@ -908,6 +910,7 @@ async def require_login(request: Request, call_next):
     # so they fall through to the login check below same as everything else under /gallery.
     if (
         path in ("/", "/login", "/logout", "/register", "/download", "/guide", "/about", "/gallery", "/forgot-password", "/reset-password")
+        or path.startswith("/internal/hosted-model/")
         or path.startswith("/guide/images/")
         or path.startswith("/gallery-images/")
         or path.startswith("/images/")

@@ -637,7 +637,9 @@ export function mountAgentChatSession({
             } : isProject ? {
               applyLabel: 'Create',
               rejectLabel: 'Cancel',
-              hint: 'Create asks where to save the project file. To change the name or the plan, type below.',
+              hint: workspace.projectStorage === 'server'
+                ? 'Create saves the project automatically on the server. To change the name or the plan, type below.'
+                : 'Create asks where to save the project file. To change the name or the plan, type below.',
             } : isPipeline ? {
               applyLabel: actionLabel,
               rejectLabel: 'Cancel',
@@ -904,7 +906,7 @@ export function mountAgentChatSession({
     const { credentialsById, defaultRunCredential, defaultReviewCredential } = await loadCredentialContext();
     const inspectOptions = { credentialsById, defaultRunCredential };
     const inspectNode = (nodeId, readOptions = {}) => workspace.inspectNode(nodeId, { ...inspectOptions, ...readOptions });
-    // Only the desktop app shows the Agent with no project open.
+    // Both platforms allow discussion before a project is created.
     const projectOpen = workspace.hasProject?.() !== false;
     const buildSummary = async () => {
       const summary = await buildWorkspaceSummary(workspace.getCanvasState(), {

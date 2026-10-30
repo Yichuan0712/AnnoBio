@@ -7,7 +7,7 @@ import { BACKEND_API_BASE } from '../../backendConfig.js';
  *   onText?: (delta: string) => void}} request messages are OpenAI-format; conversationSummary
  *   replaces the conversation's earliest messages; projectOpen false adds the no-project section to
  *   the system prompt
- * @returns {Promise<{text: string, toolCalls: {id: string, name: string, arguments: string}[], finishReason: string}>}
+ * @returns {Promise<{text: string, toolCalls: {id: string, name: string, arguments: string}[], finishReason: string, reasoningContent: string}>}
  */
 export async function streamAgentTurn({ credentialId, messages, tools, workspaceSummary, conversationSummary = '', projectOpen = true, signal, onText }) {
   const res = await fetch(`${BACKEND_API_BASE}/api/agent/turn`, {
@@ -34,11 +34,14 @@ export async function streamAgentTurn({ credentialId, messages, tools, workspace
   let text = '';
   let toolCalls = [];
   let finishReason = '';
+  let reasoningContent = '';
 
   function handle(event) {
     if (event.type === 'text') {
       text += event.delta;
       if (onText) onText(event.delta);
+    } else if (event.type === 'reasoning') {
+      reasoningContent += event.delta || '';
     } else if (event.type === 'tool_calls') {
       toolCalls = event.tool_calls || [];
     } else if (event.type === 'done') {
@@ -61,7 +64,7 @@ export async function streamAgentTurn({ credentialId, messages, tools, workspace
       boundary = buffer.indexOf('\n\n');
     }
   }
-  return { text, toolCalls, finishReason };
+  return { text, toolCalls, finishReason, reasoningContent };
 }
 
 /**

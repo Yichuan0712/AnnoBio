@@ -309,13 +309,15 @@ html.top-bar-web {
   margin-left: 14px;
 }
 
-.top-bar--web .top-bar-icon-btn {
+.top-bar--web .top-bar-icon-btn,
+.top-bar--web .top-bar-panel-toggle {
   width: 36px;
   height: 36px;
   border-radius: 7px;
 }
 
-.top-bar--web .top-bar-icon-btn svg {
+.top-bar--web .top-bar-icon-btn svg,
+.top-bar--web .top-bar-panel-toggle svg {
   width: 18px;
   height: 18px;
 }
@@ -324,15 +326,17 @@ html.top-bar-web {
   margin-left: 10px;
 }
 
+.top-bar--web .top-bar-settings-item {
+  margin-left: 4px;
+}
+
 .top-bar--web .top-bar-avatar {
   width: 32px;
   height: 32px;
   font-size: 11.5px;
 }
 
-/* Pipeline / Agent Assistant toggles (workflowCanvas.js's panelToggles), icon-only like
-   VS Code's layout controls. On desktop the layout icon itself shows whether its panel is open;
-   on web the original icons turn blue instead. */
+/* Pipeline / Agent Assistant toggles use the same neutral colors as the icon rail. */
 .top-bar-panel-toggles {
   -webkit-app-region: no-drag;
   display: flex;
@@ -379,10 +383,6 @@ html.top-bar-web {
 .top-bar-panel-toggle__badge[hidden] { display: none; }
 /* Web: the same size as the rail's icon buttons. */
 .top-bar--web .top-bar-panel-toggles { gap: 4px; margin-right: 0; }
-.top-bar--web .top-bar-panel-toggle { color: var(--text-muted); }
-.top-bar--web .top-bar-panel-toggle:hover { color: var(--text); }
-.top-bar--web .top-bar-panel-toggle { width: 36px; height: 36px; border-radius: 7px; }
-.top-bar--web .top-bar-panel-toggle svg { width: 18px; height: 18px; }
 
 .top-bar-window-controls {
   -webkit-app-region: no-drag;

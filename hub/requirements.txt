@@ -4,3 +4,6 @@ httpx>=0.24.0
 docker>=7.0.0
 itsdangerous>=2.0.0
 python-multipart>=0.0.9
+tokenizers>=0.22.0,<0.23
+litellm==1.83.12
+tiktoken>=0.8.0,<1

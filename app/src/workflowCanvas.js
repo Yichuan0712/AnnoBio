@@ -82,7 +82,7 @@ import { setLogPanelAvailable, subscribeAppErrors } from './appErrors.js';
 import { mountBackendLogPanel } from './backendLogPanel.js';
 import { hasNodeExecution, nodeExecutionIdentity, registerNodeJob, registerNodeStop, stopNodeExecution } from './nodeExecutionControl.js';
 import { mountPromptOptimizationPanel } from './promptOptimizationPanel.js';
-import { iconGitCompareArrows, iconLayoutPanel, iconLayoutSidebarRight } from './icons.js';
+import { iconGitCompareArrows, iconLayoutPanel, iconLayoutSidebarRight, iconBottomPanel, iconAgentAssistant } from './icons.js';
 import { runSettingsOverrides, reviewSettingsOverrides } from './nodeSettings.js';
 import { BACKEND_API_BASE } from './backendConfig.js';
 import { DatasetContentMap, cloneCell, cloneDatasetContent, displayCell, isAssetCell } from './datasetContent.js';
@@ -3375,9 +3375,7 @@ export function buildWorkflowCanvas(root, options = {}) {
   `;
   const [currentPipelineBtn, agentAssistantBtn] = panelToggles.querySelectorAll('.top-bar-panel-toggle');
   const [pipelineToggleIcon, agentToggleIcon] = panelToggles.querySelectorAll('.top-bar-panel-toggle__icon');
-  // Desktop and web share VS Code-style layout icons that show each panel's state (redrawn in
-  // syncPanelButtons); the web top bar only draws them larger.
-  const panelToggleIconSize = isElectron ? undefined : 18;
+  // Desktop uses window-layout icons; web uses a bottom-dock toggle and an Agent chat icon.
   // Uncaught errors land in the bottom panel's Log tab (desktop); this keeps them noticeable
   // while that panel is collapsed or showing another tab.
   const panelErrorBadge = document.createElement('span');
@@ -3414,6 +3412,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       isCurrent: () => generation === agentMountGeneration,
       workspace: {
         hasProject: () => Boolean(getCurrentProjectPath()),
+        projectStorage: isElectron ? 'file' : 'server',
         getCurrentProjectPath,
         createProject: (request) => (agentProjectCreator
           ? agentProjectCreator(request)
@@ -3489,17 +3488,15 @@ export function buildWorkflowCanvas(root, options = {}) {
   }
 
   /**
-   * Call after the open project changes, so the docks show its pipelines and chats. On desktop both
-   * docks are there with no project too (the Agent's chats from before a project are stored apart
-   * from every project); on web they appear with a project.
+   * Call after the open project changes, so the docks show its pipelines and chats. Both platforms
+   * also show the docks without a project; those Agent chats are stored apart from every project.
    * @param {{adoptAgentConversationId?: string}} [options] set when the Agent's create_project made
    *   this project: that chat moves into it and its turn carries on, instead of the dock being remounted
    * @returns {Promise<void>|undefined} the move, when there is one
    */
   function syncProjectPanels({ adoptAgentConversationId = '' } = {}) {
     const projectPath = String(getCurrentProjectPath() || '');
-    const available = isElectron || Boolean(projectPath);
-    panelToggles.hidden = !available;
+    panelToggles.hidden = false;
     let adoption;
     if (projectPath !== panelProjectPath) {
       const agentOverlay = workspacePanels.agentHost.querySelector('.agent-window-overlay');
@@ -3513,7 +3510,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       panelProjectPath = projectPath;
       workspacePanels.pipelineHost.querySelector('.pipeline-overview-overlay')?.destroyPipelineOverview?.();
     }
-    workspacePanels.setEnabled(available);
+    workspacePanels.setEnabled(true);
     return adoption;
   }
 
@@ -6300,10 +6297,9 @@ export function buildWorkflowCanvas(root, options = {}) {
   let optimizationVisible = false;
   let optimizationPanel = null;
   function syncPanelButtons() {
-    // Same on desktop and web; desktop adds the Log tab and its frontend error badge.
     for (const [button, visible, label] of [
-      [currentPipelineBtn, panelVisibility.pipeline, 'Toggle Panel'],
-      [agentAssistantBtn, panelVisibility.agent, 'Toggle Agent Side Bar'],
+      [currentPipelineBtn, panelVisibility.pipeline, isElectron ? 'Toggle Panel' : 'Toggle bottom panel'],
+      [agentAssistantBtn, panelVisibility.agent, isElectron ? 'Toggle Agent Side Bar' : 'Toggle Agent Assistant'],
     ]) {
       button.classList.toggle('is-open', visible);
       button.setAttribute('aria-expanded', String(visible));
@@ -6312,8 +6308,8 @@ export function buildWorkflowCanvas(root, options = {}) {
     }
     panelErrorBadge.hidden = !appErrorCount;
     panelErrorBadge.textContent = appErrorCount > 99 ? '99+' : String(appErrorCount);
-    pipelineToggleIcon.replaceChildren(iconLayoutPanel(panelVisibility.pipeline, panelToggleIconSize));
-    agentToggleIcon.replaceChildren(iconLayoutSidebarRight(panelVisibility.agent, panelToggleIconSize));
+    pipelineToggleIcon.replaceChildren(isElectron ? iconLayoutPanel(panelVisibility.pipeline) : iconBottomPanel(panelVisibility.pipeline, 18));
+    agentToggleIcon.replaceChildren(isElectron ? iconLayoutSidebarRight(panelVisibility.agent) : iconAgentAssistant(18));
   }
   function renamePipeline(nameKey, name) {
     const trimmed = String(name || '').trim();
