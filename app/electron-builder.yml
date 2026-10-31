@@ -12,6 +12,9 @@ win:
         - x64
   executableName: AnnoBio
 nsis:
+  # Fixed, version-free name so https://github.com/<repo>/releases/latest/download/<name>
+  # always points at the newest installer (the release title carries the version).
+  artifactName: AnnoBio-Setup-x64.${ext}
   oneClick: false
   allowToChangeInstallationDirectory: true
   allowElevation: true
@@ -35,9 +38,16 @@ mac:
   target:
     - target: dmg
   category: public.app-category.developer-tools
-  identity: null
+  # Ad-hoc signature ("-"): free, no Apple Developer account. Apple Silicon refuses to run
+  # code with no valid signature at all, and an unsigned bundle whose resources were changed
+  # after Electron's own linker signature shows "AnnoBio is damaged". Ad-hoc signed, a
+  # downloaded copy instead gets the ordinary unverified-developer prompt, which users can
+  # clear in System Settings > Privacy & Security > Open Anyway.
+  identity: '-'
   hardenedRuntime: false
 dmg:
+  # Fixed, version-free name — see nsis.artifactName above.
+  artifactName: AnnoBio-arm64.${ext}
   # Default title (`${productName} ${version}`) contains spaces, which trips
   # a known electron-builder/hdiutil bug on GitHub Actions macOS runners
   # (hdiutil create exits 1 with no usable error - see electron-builder#9246).

@@ -32,6 +32,10 @@ Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile $getPipPa
 
 Write-Host "=== Installing backend dependencies ===" -ForegroundColor Cyan
 & (Join-Path $embedDir "python.exe") -m pip install --no-cache-dir -r (Join-Path $backendDir "requirements.txt")
+# textgrad is deliberately not in requirements.txt (see its comment there) - installed the
+# same reduced-dependency way as backend/Dockerfile.
+& (Join-Path $embedDir "python.exe") -m pip install --no-cache-dir --no-deps textgrad==0.1.8
+& (Join-Path $embedDir "python.exe") -m pip install --no-cache-dir platformdirs diskcache
 
 Write-Host "=== Done ===" -ForegroundColor Cyan
 & (Join-Path $embedDir "python.exe") --version
