@@ -104,6 +104,20 @@ jobs:
         working-directory: app
         run: npm run package
 
+      # electron-builder never signs a --pd (prepackaged) app, so mac.identity in
+      # electron-builder.yml can't do this. Ad-hoc ("-"): free, no Apple Developer account.
+      # Unsigned, a downloaded copy says "AnnoBio is damaged"; ad-hoc signed, it gets the
+      # ordinary unverified-developer prompt that System Settings > Privacy & Security >
+      # Open Anyway clears.
+      - name: Ad-hoc sign the app
+        working-directory: app
+        run: |
+          set -euo pipefail
+          for bundle in out/app-darwin-arm64/*.app; do
+            codesign --force --deep --sign - "$bundle"
+            codesign --verify --deep --strict --verbose=2 "$bundle"
+          done
+
       - name: Build dmg (electron-builder)
         working-directory: app
         run: npx electron-builder --mac --arm64 --pd out/app-darwin-arm64

@@ -38,12 +38,9 @@ mac:
   target:
     - target: dmg
   category: public.app-category.developer-tools
-  # Ad-hoc signature ("-"): free, no Apple Developer account. Apple Silicon refuses to run
-  # code with no valid signature at all, and an unsigned bundle whose resources were changed
-  # after Electron's own linker signature shows "AnnoBio is damaged". Ad-hoc signed, a
-  # downloaded copy instead gets the ordinary unverified-developer prompt, which users can
-  # clear in System Settings > Privacy & Security > Open Anyway.
-  identity: '-'
+  # Builds use --pd, which electron-builder never signs; CI ad-hoc signs the app itself
+  # before this step (see .github/workflows/build-desktop.yml).
+  identity: null
   hardenedRuntime: false
 dmg:
   # Fixed, version-free name — see nsis.artifactName above.
