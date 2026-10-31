@@ -421,11 +421,6 @@ def about_page(request: Request):
         and processing steps on the canvas, or describe your research task to the Agent and build
         the workflow together.
       </p>
-      <p class="page-sub">
-        Find relevant data, generate structured results, evaluate outputs, and improve prompts.
-        Keep sources and prompt versions connected as you refine your workflow. Available in
-        your browser and on Windows and macOS.
-      </p>
       <h2 class="about-heading">Contact</h2>
       <p class="page-sub about-contact-intro">For questions about AnnoBio data, methods, website feedback, or collaboration, please contact:</p>
       <p class="about-contact-line">Yichuan Zhang (<a class="link" href="mailto:yichuan@usf.edu">yichuan@usf.edu</a>)</p>
