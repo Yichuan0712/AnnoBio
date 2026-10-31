@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(node drive.mjs eval \"Array.from\\(document.querySelectorAll\\('.workflow-node'\\)\\).map\\(n => \\({cls:n.className.split\\(' '\\)[1], id:n.dataset.nodeId}\\)\\)\")"
-    ]
-  }
-}

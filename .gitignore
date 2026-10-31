@@ -119,3 +119,6 @@ examples/
 
 # Internal design notes, plans and paper drafts; kept locally, not published
 docs/
+
+# Claude Code project settings (local tool permissions)
+.claude/
