@@ -75,6 +75,31 @@ class HostedReasoningTests(unittest.TestCase):
         error.status_code = 429
         self.assertFalse(llm._is_retryable_error(error))
 
+    def test_gateway_refusal_is_raised_once_with_its_own_message(self):
+        message = "This request is larger than what is left of today's free allowance. Shorten it, wait for the reset at 00:00 UTC, or add an OpenRouter credential under New credential in LLM settings."
+        calls = []
+
+        def refuse():
+            calls.append(1)
+            error = RuntimeError(f"litellm.RateLimitError: RateLimitError: OpenAIException - {message}")
+            error.status_code = 429
+            raise error
+
+        with self.assertRaises(llm.HostedModelError) as raised:
+            llm._retry_invoke(refuse, max_retries=3)
+        self.assertEqual(str(raised.exception), message)
+        self.assertEqual(len(calls), 1)
+
+    def test_gateway_json_error_body_is_unwrapped(self):
+        error = RuntimeError('litellm.ServiceUnavailableError: OpenAIException - {"error": {"message": "The free model is temporarily unavailable.", "code": "hosted_model_error"}}')
+        self.assertEqual(str(llm._hosted_model_error(error)), "The free model is temporarily unavailable.")
+
+    def test_other_rate_limits_are_still_retried(self):
+        error = RuntimeError("litellm.RateLimitError: RateLimitError: OpenAIException - Rate limit reached for requests")
+        error.status_code = 429
+        self.assertIsNone(llm._hosted_model_error(error))
+        self.assertTrue(llm._is_retryable_error(error))
+
 
 if __name__ == "__main__":
     unittest.main()

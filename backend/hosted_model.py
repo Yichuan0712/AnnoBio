@@ -42,7 +42,7 @@ def resolve(item: dict, role: str) -> dict:
     token = os.environ.get("ANNOBIO_HOSTED_TOKEN", "")
     gateway = os.environ.get("ANNOBIO_HOSTED_GATEWAY_URL", "").rstrip("/")
     if not token or not gateway:
-        raise ValueError("The free model is not configured yet. Connect OpenRouter in LLM settings to continue.")
+        raise ValueError("The free model is not configured yet. To use your own model, add an OpenRouter credential under New credential in LLM settings.")
     # Explicit LiteLLM routing is required for this opaque model name, including DSPy calls.
     return {**item, "provider": "openai", "model": "openai/annobio-free", "base_url": f"{gateway}/{role}/v1", "api_key": token}
 

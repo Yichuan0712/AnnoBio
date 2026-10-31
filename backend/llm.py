@@ -8,6 +8,8 @@ APIs directly. Structured output goes through llm_structured.py, which picks
 the first of its four modes the model accepts and remembers it per model.
 """
 
+import json
+import re
 import threading
 import time
 from typing import Any
@@ -55,10 +57,36 @@ _RETRYABLE_ERRORS = (
 )
 
 
+class HostedModelError(RuntimeError):
+    """A refusal from the web app's free-model gateway (hub/hosted_model.py), such as a used-up
+    daily allowance. Carries the gateway's own sentence, written for the user, instead of LiteLLM's
+    "litellm.RateLimitError: RateLimitError: OpenAIException - " wrapping. Never retried."""
+
+
+# Every gateway refusal names "the free model" or "free allowance", or carries the
+# free_quota_exhausted code (hub/hosted_model.py).
+_HOSTED_REFUSAL = re.compile(r"free_quota_exhausted|free (?:token )?(?:model|allowance)", re.IGNORECASE)
+_LITELLM_PREFIX = re.compile(r"^(?:litellm\.\w+:\s*)?(?:\w+Error:\s*)?(?:\w+Exception\s*-\s*)?")
+
+
+def _hosted_model_error(e: Exception) -> HostedModelError | None:
+    if isinstance(e, HostedModelError):
+        return e
+    text = str(e)
+    if not _HOSTED_REFUSAL.search(text):
+        return None
+    message = _LITELLM_PREFIX.sub("", text, count=1).strip()
+    try:
+        message = json.loads(message)["error"]["message"]
+    except (ValueError, TypeError, KeyError):
+        pass
+    return HostedModelError(message)
+
+
 def _is_retryable_error(e: Exception) -> bool:
     """True if error is transient (429, timeout, connection, 5xx), by LiteLLM's exception type or the
     status code, never by words in the message (a model's own text can contain "rate" or "timeout")."""
-    if "free_quota_exhausted" in str(e) or "daily free token allowance" in str(e).lower():
+    if _hosted_model_error(e):
         return False
     if isinstance(e, _RETRYABLE_ERRORS):
         return True
@@ -72,6 +100,9 @@ def _retry_invoke(fn, max_retries: int = 3):
         try:
             return fn()
         except Exception as e:
+            hosted = _hosted_model_error(e)
+            if hosted is not None:
+                raise hosted from e
             last_e = e
             if attempt < max_retries and _is_retryable_error(e):
                 delay = 1.0 * (2**attempt)

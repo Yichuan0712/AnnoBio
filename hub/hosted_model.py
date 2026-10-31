@@ -30,7 +30,7 @@ except ImportError:  # Uvicorn runs main:app from the hub/ working directory.
 router = APIRouter(prefix="/internal/hosted-model")
 DISPLAY_MODEL = "annobio-free"
 ROLES = {"generate", "optimize", "agent"}
-QUOTA_MESSAGE = "Your daily free token allowance has been reached. Connect your OpenRouter account in LLM settings to continue, or wait for the daily reset."
+QUOTA_MESSAGE = "Today's free allowance is used up. It resets at 00:00 UTC; to keep working now, add an OpenRouter credential under New credential in LLM settings."
 DB_PATH = Path(__file__).resolve().parent / "data" / "hosted_usage.db"
 
 
@@ -64,7 +64,7 @@ def authenticated_account(request: Request) -> int:
 
 
 def daily_limit() -> int:
-    return max(0, int(os.environ.get("ANNOBIO_HOSTED_DAILY_TOKENS", "50000")))
+    return max(0, int(os.environ.get("ANNOBIO_HOSTED_DAILY_TOKENS", "500000")))
 
 
 def day_key(now=None) -> str:
@@ -121,7 +121,7 @@ def reserve(user_id: int, input_bound: int, output_limit: int):
         available = daily_limit() - used - held
         output_limit = min(output_limit, available - input_bound)
         if output_limit < 1:
-            raise QuotaExceeded(QUOTA_MESSAGE if available <= 0 else "This request needs more free token allowance than remains. Shorten the request or connect OpenRouter in LLM settings to continue.")
+            raise QuotaExceeded(QUOTA_MESSAGE if available <= 0 else "This request is larger than what is left of today's free allowance. Shorten it, wait for the reset at 00:00 UTC, or add an OpenRouter credential under New credential in LLM settings.")
         reservation = uuid.uuid4().hex
         connection.execute("INSERT INTO calls(id,user_id,day,reserved,state,created) VALUES(?,?,?,?,?,?)",
                            (reservation, user_id, day, input_bound + output_limit, "reserved", time.time()))
@@ -194,9 +194,9 @@ async def completion(role: str, request: Request):
     try:
         credential = credential_for_role(role)
     except (ValueError, KeyError):
-        return safe_error("The free model is temporarily unavailable. Connect OpenRouter in LLM settings to continue.", 503)
+        return safe_error("The free model is temporarily unavailable. To use your own model, add an OpenRouter credential under New credential in LLM settings.", 503)
     if not credential["api_key"]:
-        return safe_error("The free model is not configured yet. Connect OpenRouter in LLM settings to use your own model.", 503)
+        return safe_error("The free model is not configured yet. To use your own model, add an OpenRouter credential under New credential in LLM settings.", 503)
     raw = await request.body()
     if len(raw) > 1_000_000:
         return safe_error("This request is too large for the free model.", 413)
@@ -221,7 +221,7 @@ async def completion(role: str, request: Request):
         input_bound = input_reservation(forwarded, credential["tokenizer"])
     except Exception:
         # Missing/corrupt tokenizer must never allow unmetered provider requests.
-        return safe_error("The free model is temporarily unavailable. Connect OpenRouter in LLM settings to continue.", 503)
+        return safe_error("The free model is temporarily unavailable. To use your own model, add an OpenRouter credential under New credential in LLM settings.", 503)
     try:
         reservation, maximum = reserve(user_id, input_bound, min(requested, int(os.environ.get("ANNOBIO_HOSTED_MAX_OUTPUT_TOKENS", "8192"))))
     except QuotaExceeded as error:
@@ -250,7 +250,7 @@ async def completion(role: str, request: Request):
             await upstream.aclose()
             await client.aclose()
         unsupported = next((name for name in ("response_format", "tool_choice", "tools") if name in error_text and any(word in error_text for word in ("unsupported", "not support", "not allowed", "unavailable", "invalid"))), "") if upstream.status_code == 400 else ""
-        message = f"{unsupported} is not supported by the free model." if unsupported else "The free model could not complete this request. Try again or connect OpenRouter in LLM settings."
+        message = f"{unsupported} is not supported by the free model." if unsupported else "The free model could not complete this request. Try again, or add an OpenRouter credential under New credential in LLM settings."
         return safe_error(message, 400 if upstream.status_code < 500 else 503)
     if not streaming:
         try:
@@ -259,7 +259,7 @@ async def completion(role: str, request: Request):
                 raise ValueError("Invalid completion response")
             settle(reservation, token_usage(payload))
             if "error" in payload:
-                return safe_error("The free model could not complete this request. Connect OpenRouter in LLM settings to continue.", 502)
+                return safe_error("The free model could not complete this request. Try again, or add an OpenRouter credential under New credential in LLM settings.", 502)
             payload["model"] = DISPLAY_MODEL
             return JSONResponse(payload)
         except (ValueError, httpx.HTTPError):

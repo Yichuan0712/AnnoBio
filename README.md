@@ -188,7 +188,7 @@ setting. The main ones:
 | `PROMPT_STUDIO_PUBLIC_BASE_URL` | The public address, such as `https://annobio.org`. Needed for OpenRouter sign-in. |
 | `PROMPT_STUDIO_MAX_ACTIVE_CONTAINERS` | How many workspaces can run at once. `auto` (default) sizes it from the host's memory: (RAM − 2 GB) ÷ 1 GB. A number fixes it; `off` removes the limit. |
 | `PROMPT_STUDIO_IDLE_TIMEOUT_SEC` | Stop a workspace after this many idle seconds. Default `1800`. |
-| `ANNOBIO_HOSTED_DAILY_TOKENS` | Daily free-model allowance per account. Default `50000`. |
+| `ANNOBIO_HOSTED_DAILY_TOKENS` | Daily free-model allowance per account, reset at 00:00 UTC. Default `500000`. |
 
 The free model is configured in `hub/hosted_model_config.py`. `MODEL_CREDENTIALS` names each
 provider, model ID and Base URL, with its API key referenced by environment variable, never
