@@ -99,6 +99,12 @@ NAV_LINKS = [
 ]
 
 
+def _initials(user: dict) -> str:
+    """Avatar letters: the first letters of the first two words of the name, else the email's."""
+    words = (user.get("name") or "").split()
+    return escape("".join(w[0] for w in words[:2]).upper() if words else user["email"][:2].upper())
+
+
 def render_nav(user: dict | None, active: str = "") -> str:
     """Shared top nav for every Hub page (landing, auth, and the Download/Guide/Profile pages) —
     same brand, same links, same auth-state-dependent actions everywhere, so the site reads as one
@@ -108,7 +114,7 @@ def render_nav(user: dict | None, active: str = "") -> str:
         for href, label in NAV_LINKS
     )
     if user:
-        initials = user["email"][:2].upper()
+        initials = _initials(user)
         review_link_html = '<a class="menu-option" href="/admin/gallery">Review</a>' if user.get("is_admin") else ""
         actions_html = (
             '<div class="nav-avatar-wrap">'
@@ -522,15 +528,32 @@ async def _fetch_user_projects(user_id: int) -> list[dict]:
     return []
 
 
+def _edited_label(timestamp: float) -> str:
+    """'Edited today', 'yesterday' or 'N days ago' within a week, then the date."""
+    edited = datetime.date.fromtimestamp(timestamp)
+    days = (datetime.date.today() - edited).days
+    if days <= 0:
+        return "Edited today"
+    if days == 1:
+        return "Edited yesterday"
+    if days < 7:
+        return f"Edited {days} days ago"
+    return f"Edited {edited:%b} {edited.day}, {edited.year}"
+
+
 @app.get("/profile")
 async def profile_page(request: Request):
     user = request.state.user
-    joined = datetime.datetime.fromtimestamp(user["created_at"]).strftime("%B %-d, %Y") if user.get("created_at") else "—"
+    name = user.get("name") or ""
+    created = datetime.date.fromtimestamp(user["created_at"]) if user.get("created_at") else None
+    meta = [escape(user["email"])] if name else []
+    if created:
+        meta.append(f"Member since {created:%B} {created.day}, {created.year}")
     projects = await _fetch_user_projects(user["id"])
     projects.sort(key=lambda p: p.get("updatedAt") or 0, reverse=True)
 
     if not projects:
-        workspaces_html = '<p class="workspaces-empty">No workspaces yet. <a class="link" href="/app">Create one</a>.</p>'
+        workspaces_html = '<p class="workspaces-empty">No workspaces yet. Open the Workspace to create your first project.</p>'
     else:
         # Same card-grid look as the public Gallery (see ARCHIVE_CSS/_archive_thumb_html above) —
         # a thumbnail per workspace, generated client-side on every autosave (see renderer.js's
@@ -542,7 +565,7 @@ async def profile_page(request: Request):
               {_workspace_thumb_html(p)}
               <div class="archive-card-body">
                 <div class="archive-card-title">{escape(p.get('name') or 'Untitled Project')}</div>
-                <div class="archive-card-meta">{datetime.datetime.fromtimestamp(p['updatedAt']).strftime('%b %-d, %Y')}</div>
+                <div class="archive-card-meta">{_edited_label(p['updatedAt'])}</div>
               </div>
             </a>
             """
@@ -551,41 +574,74 @@ async def profile_page(request: Request):
         workspaces_html = f'<div class="archive-grid">{cards}</div>'
 
     body = f"""
-      <h1>Profile</h1>
-      <p class="page-sub">Your AnnoBio account.</p>
-      <div class="profile-card">
-        <div class="profile-row"><span class="profile-label">Email</span><span>{user["email"]}</span></div>
-        <div class="profile-row"><span class="profile-label">Member since</span><span>{joined}</span></div>
+      <div class="profile-header">
+        <div class="profile-avatar" aria-hidden="true">{_initials(user)}</div>
+        <div class="profile-identity">
+          <h1>{escape(name or user["email"])}</h1>
+          <div class="profile-meta">{" · ".join(meta)}</div>
+        </div>
+        <form method="post" action="/logout" class="profile-logout">
+          <button type="submit" class="btn btn-secondary">Log out</button>
+        </form>
       </div>
 
-      <form method="post" action="/profile/info" class="profile-card">
-        <div class="profile-row">
-          <label class="profile-label" for="profile-name">Name</label>
-          <input id="profile-name" name="name" type="text" maxlength="200" value="{escape(user.get('name') or '')}">
+      <form method="post" action="/profile/info" class="profile-name-form">
+        <label class="profile-label" for="profile-name">Display name</label>
+        <div class="profile-name-row">
+          <input id="profile-name" name="name" type="text" maxlength="200" value="{escape(name)}" placeholder="Your full name">
+          <button type="submit" class="btn btn-secondary">Save</button>
         </div>
-        <div class="profile-row profile-save-row"><button type="submit" class="btn btn-secondary">Save</button></div>
-      </form>
-      <p class="page-sub profile-info-note">Shown to the admin reviewing anything you publish to the Gallery. Required before you can publish.</p>
-
-      <form method="post" action="/logout">
-        <button type="submit" class="btn btn-secondary">Log out</button>
+        <p class="profile-hint">Shown to the admin reviewing anything you publish to the Gallery. Required before you can publish.</p>
       </form>
 
-      <h2 class="workspaces-heading">Your workspaces</h2>
+      <div class="workspaces-head">
+        <h2>Your workspaces <span class="workspaces-count">{len(projects)}</span></h2>
+        <a class="btn btn-primary" href="/app">Open Workspace</a>
+      </div>
       {workspaces_html}
     """
     extra_css = ARCHIVE_CSS + """
-      .profile-card { max-width: 460px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--control-radius); padding: 6px 20px; margin-bottom: 22px; }
-      .profile-row { display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
-      .profile-row:last-child { border-bottom: none; }
-      .profile-label { color: var(--text-muted); }
-      .profile-row input[type="text"] { flex: 1; max-width: 260px; margin-left: 16px; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--control-radius); background: var(--bg); color: var(--text); font-size: 13px; font-family: inherit; }
-      .profile-save-row { justify-content: flex-end; padding-top: 12px; }
-      .profile-info-note { max-width: 460px; font-size: 12.5px; margin: -12px 0 22px; }
-      .workspaces-heading { font-size: 18px; margin: 40px 0 14px; }
+      .profile-header { display: flex; align-items: center; gap: 20px; padding-bottom: 28px; margin-bottom: 28px; border-bottom: 1px solid var(--border); }
+      .profile-avatar {
+        flex: none; width: 64px; height: 64px; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 22px; font-weight: 600; color: var(--accent);
+        background: rgba(37, 99, 235, 0.16); border: 1px solid var(--accent);
+      }
+      .profile-identity { flex: 1; min-width: 0; }
+      .page-wrap .profile-identity h1 { margin: 0 0 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .profile-meta { color: var(--text-muted); font-size: 14px; }
+      .profile-logout { flex: none; margin: 0; }
+      .profile-name-form { margin: 0 0 44px; }
+      .profile-label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+      .profile-name-row { display: flex; gap: 8px; max-width: 460px; }
+      .profile-name-row input {
+        flex: 1; min-width: 0; padding: 7px 10px; font: inherit; font-size: 14px; color: var(--text);
+        background: var(--bg); border: 1px solid var(--border); border-radius: var(--control-radius);
+      }
+      .profile-name-row input:focus { outline: none; border-color: var(--accent); }
+      .profile-hint { color: var(--text-muted); font-size: 12.5px; margin: 8px 0 0; }
+      .workspaces-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+      .workspaces-head h2 { display: flex; align-items: center; gap: 8px; font-size: 18px; margin: 0; }
+      .workspaces-count { font-size: 12px; font-weight: 600; color: var(--text-muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; }
+      .archive-card .archive-card-thumb { border-bottom: 1px solid var(--border); }
+      /* No thumbnail yet: the canvas grid with a small workflow mark, instead of a blank box. */
+      .workspace-thumb-empty {
+        display: flex; align-items: center; justify-content: center; color: var(--text-muted);
+        background-color: var(--bg-bar);
+        background-image: linear-gradient(var(--grid-color) 1px, transparent 1px), linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
+        background-size: 16px 16px;
+      }
+      .workspace-thumb-empty svg { opacity: 0.55; }
       .workspaces-empty { color: var(--text-muted); font-size: 14px; }
-      a.link { color: var(--accent); text-decoration: none; }
-      a.link:hover { text-decoration: underline; }
+      .workspaces-head h2 { white-space: nowrap; }
+      @media (max-width: 600px) {
+        .profile-header { flex-wrap: wrap; gap: 16px; }
+        .profile-avatar { width: 48px; height: 48px; font-size: 17px; }
+        .page-wrap .profile-identity h1 { font-size: 24px; white-space: normal; overflow-wrap: anywhere; }
+        .profile-logout { width: 100%; }
+        .workspaces-head { flex-wrap: wrap; }
+      }
     """
     return HTMLResponse(render_page(title="Profile", user=user, active="/profile", body=body, extra_css=extra_css))
 
@@ -630,7 +686,11 @@ def _workspace_thumb_html(project: dict) -> str:
     — served through the per-user proxy at /api/projects/... (see project_store.py's
     GET /{id}/thumbnail) rather than a Hub-owned static path, since only its owner may see it."""
     if not project.get("hasThumbnail"):
-        return '<div class="archive-card-thumb archive-card-thumb-empty"></div>'
+        return ('<div class="archive-card-thumb archive-card-thumb-empty workspace-thumb-empty">'
+                '<svg viewBox="0 0 48 32" width="64" height="43" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">'
+                '<rect x="2" y="4" width="14" height="9" rx="1.5"/><rect x="2" y="19" width="14" height="9" rx="1.5"/>'
+                '<rect x="32" y="11.5" width="14" height="9" rx="1.5"/>'
+                '<path d="M16 8.5h5a4 4 0 0 1 4 4V16h7M16 23.5h5a4 4 0 0 0 4-4V16"/></svg></div>')
     return f'<div class="archive-card-thumb"><img src="/api/projects/{project["id"]}/thumbnail" alt="" loading="lazy"></div>'
 
 
