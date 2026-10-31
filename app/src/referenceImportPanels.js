@@ -120,9 +120,11 @@ export function mountReferenceImports(overlay, { apiBase, onRows, onReset = () =
           continue;
         }
         const options = panel.querySelector('.reference-import-options');
+        // "new-password": with a password box in the dialog, browsers otherwise treat the form as a
+        // login and fill the saved AnnoBio account into it, the email landing in Dataset name.
         options.innerHTML = (info.option_fields || []).map((field) => `<label class="dataset-meta-label">${escapeHtml(field.label)}
           ${field.type === 'select' ? `<select class="dataset-meta-input" data-reference-option="${escapeHtml(field.key)}">${field.choices.map((choice) => `<option value="${escapeHtml(choice.value)}" ${choice.value === field.default ? 'selected' : ''}>${escapeHtml(choice.label)}</option>`).join('')}</select>`
-            : `<input class="dataset-meta-input" type="password" autocomplete="off" data-reference-option="${escapeHtml(field.key)}" placeholder="${field.required ? 'Enter a key, or use the key configured on the server' : 'Optional'}" />`}</label>`).join('');
+            : `<input class="dataset-meta-input" type="password" autocomplete="new-password" data-1p-ignore data-lpignore="true" data-reference-option="${escapeHtml(field.key)}" placeholder="${field.required ? 'Enter a key, or use the key configured on the server' : 'Optional'}" />`}</label>`).join('');
         const helpUrl = allowedExternalUrl(info.help_url);
         if (helpUrl) {
           options.insertAdjacentHTML('beforeend', `<p class="dataset-sheet-hint"><a href="${escapeHtml(helpUrl)}" target="_blank" rel="noopener noreferrer">API access and credentials</a></p>`);

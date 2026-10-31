@@ -248,13 +248,12 @@ export const iconLayoutPanel = (open, size) => layoutIcon('bottom', open, size);
 /** The right panel (Agent Assistant). */
 export const iconLayoutSidebarRight = (open, size) => layoutIcon('right', open, size);
 
-/** Bottom dock with a chevron indicating the next expand/collapse action. */
-export const iconBottomPanel = (open, size = 18) => svgIcon({
+/** Bottom dock: a window with its lower panel marked off. */
+export const iconBottomPanel = (size = 18) => svgIcon({
   size,
   strokeWidth: 1.7,
   rects: [[2, 3, 20, 18, 2]],
   lines: [[2, 15, 22, 15]],
-  paths: [open ? 'm9 8 3 3 3-3' : 'm9 11 3-3 3 3'],
 });
 
 /** A simple message outline with the same stroke and corner treatment as the web toolbar. */

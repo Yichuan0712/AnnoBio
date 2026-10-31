@@ -137,7 +137,7 @@ export function openAddDatasetModal(workflowCanvasApi) {
             <div class="dataset-meta-wrap prompt-meta-wrap">
               <div class="dataset-meta-field">
                 <label class="dataset-meta-label" for="dataset-name-input">Dataset name</label>
-                <input type="text" id="dataset-name-input" class="dataset-meta-input" placeholder="My dataset" />
+                <input type="text" id="dataset-name-input" class="dataset-meta-input" placeholder="My dataset" autocomplete="off" data-1p-ignore data-lpignore="true" />
               </div>
               <div class="dataset-meta-field">
                 <label class="dataset-meta-label" for="dataset-notes-input">Dataset description</label>
