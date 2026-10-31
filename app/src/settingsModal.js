@@ -103,12 +103,22 @@ const ENDPOINT_OWNERS = {
   vertex_ai: 'Google Vertex AI', deepseek: 'DeepSeek', bedrock: 'AWS Bedrock', 'amazon-bedrock': 'AWS Bedrock',
   azure: 'Azure OpenAI', mistral: 'Mistral', groq: 'Groq', xai: 'xAI', cohere: 'Cohere',
   together_ai: 'Together AI', fireworks_ai: 'Fireworks AI', perplexity: 'Perplexity', ollama: 'Ollama',
+  moonshot: 'Moonshot (Kimi)', kimi: 'Moonshot (Kimi)', dashscope: 'Alibaba Qwen', qwen: 'Alibaba Qwen',
+  zai: 'Zhipu GLM', zhipu: 'Zhipu GLM', zhipuai: 'Zhipu GLM', volcengine: 'ByteDance Doubao',
+  doubao: 'ByteDance Doubao', minimax: 'MiniMax', baidu: 'Baidu ERNIE', qianfan: 'Baidu ERNIE',
+  hunyuan: 'Tencent Hunyuan', stepfun: 'StepFun', siliconflow: 'SiliconFlow', ai21: 'AI21',
+  upstage: 'Upstage', nvidia_nim: 'NVIDIA NIM', cerebras: 'Cerebras', sambanova: 'SambaNova',
+  deepinfra: 'DeepInfra', huggingface: 'Hugging Face', watsonx: 'IBM watsonx',
 };
 // An empty provider means LiteLLM routes by the bare model name; these are the families it knows.
 const MODEL_NAME_OWNERS = [
   [/^(gpt-|chatgpt-|o\d)/i, 'OpenAI'], [/^claude/i, 'Anthropic'], [/^gemini/i, 'Google'],
-  [/^deepseek/i, 'DeepSeek'], [/^(mistral|codestral|ministral|magistral)/i, 'Mistral'],
-  [/^grok/i, 'xAI'], [/^command/i, 'Cohere'],
+  [/^deepseek/i, 'DeepSeek'], [/^(mistral|codestral|ministral|magistral|pixtral)/i, 'Mistral'],
+  [/^grok/i, 'xAI'], [/^command/i, 'Cohere'], [/^(kimi|moonshot)/i, 'Moonshot (Kimi)'],
+  [/^(qwen|qwq)/i, 'Alibaba Qwen'], [/^(glm|chatglm)/i, 'Zhipu GLM'], [/^doubao/i, 'ByteDance Doubao'],
+  [/^ernie/i, 'Baidu ERNIE'], [/^hunyuan/i, 'Tencent Hunyuan'], [/^(minimax|abab)/i, 'MiniMax'],
+  [/^step-/i, 'StepFun'], [/^yi-/i, '01.AI'], [/^baichuan/i, 'Baichuan'], [/^jamba/i, 'AI21'],
+  [/^solar/i, 'Upstage'], [/^exaone/i, 'LG EXAONE'], [/^luminous/i, 'Aleph Alpha'], [/^sonar/i, 'Perplexity'],
 ];
 
 function endpointOwner(c) {
