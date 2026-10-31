@@ -33,7 +33,7 @@ class Element {
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-test('web empty-chat examples fill a saved draft without sending and stay out of desktop chats', async (t) => {
+test('web and desktop welcome cards fill saved drafts and remember dismissal without sending', async (t) => {
   const original = { document: globalThis.document, window: globalThis.window, fetch: globalThis.fetch };
   const sessions = [];
   t.after(() => { sessions.forEach(session => session.destroy()); Object.assign(globalThis, original); });
@@ -57,40 +57,39 @@ test('web empty-chat examples fill a saved draft without sending and stay out of
     sessions.push(session);
     session.setConversation(chat);
     const welcome = messagesEl.querySelector('.agent-window__welcome');
-    if (desktop) {
-      assert.equal(welcome, null);
-    } else {
-      assert.ok(welcome);
-      const example = welcome.querySelector('.agent-window__welcome-example');
-      example.listeners.get('click')();
-      assert.ok(inputEl.value.startsWith('My task\n\n'));
-      assert.equal(chat.unsentDraft, inputEl.value);
-      assert.equal(changed, 1);
-      assert.equal(inputEl.focused, true);
-      assert.equal(chat.messages.length, 0);
-      welcome.querySelector('.agent-window__welcome-close').listeners.get('click')();
-      assert.equal(chat.welcomeDismissed, true);
-      assert.equal(changed, 2);
-      assert.equal(chat.unsentDraft, inputEl.value);
-      assert.equal(chat.messages.length, 0);
-      assert.equal(messagesEl.querySelector('.agent-window__welcome'), null);
-      // Rendering the same conversation again must not bring dismissed suggestions back.
-      session.setConversation(chat);
-      assert.equal(messagesEl.querySelector('.agent-window__welcome'), null);
-      chat.messages.push({ role: 'user', content: 'Hello' },
-        { role: 'tool', name: 'web_search', label: 'Searched the web', content: JSON.stringify({ results: [
-          { title: 'Official source', url: 'https://example.org/' },
-          { title: 'Unsafe source', url: 'javascript:alert(1)' },
-        ] }) },
-        { role: 'tool', name: 'read_webpage', label: 'Read a webpage', ok: false, content: '{"error":"The website blocked this request."}' });
-      session.setConversation(chat);
-      assert.equal(messagesEl.querySelector('.agent-window__welcome'), null);
-      const sources = messagesEl.querySelector('.agent-window__web-sources');
-      assert.equal(sources.children.length, 1);
-      assert.equal(sources.children[0].href, 'https://example.org/');
-      assert.equal(sources.children[0].textContent, 'Official source');
-      assert.equal(messagesEl.querySelector('.agent-window__web-error').textContent, 'The website blocked this request.');
-    }
+    assert.ok(welcome);
+    const hint = welcome.querySelector('.agent-window__welcome-hint').textContent;
+    assert.equal(hint.includes('local files or folders'), desktop);
+    const example = welcome.querySelector('.agent-window__welcome-example');
+    example.listeners.get('click')();
+    assert.ok(inputEl.value.startsWith('My task\n\n'));
+    assert.equal(chat.unsentDraft, inputEl.value);
+    assert.equal(changed, 1);
+    assert.equal(inputEl.focused, true);
+    assert.equal(chat.messages.length, 0);
+    welcome.querySelector('.agent-window__welcome-close').listeners.get('click')();
+    assert.equal(chat.welcomeDismissed, true);
+    assert.equal(changed, 2);
+    assert.equal(chat.unsentDraft, inputEl.value);
+    assert.equal(chat.messages.length, 0);
+    assert.equal(messagesEl.querySelector('.agent-window__welcome'), null);
+    // Rendering the same conversation again must not bring dismissed suggestions back.
+    session.setConversation(chat);
+    assert.equal(messagesEl.querySelector('.agent-window__welcome'), null);
+    chat.welcomeDismissed = false;
+    chat.messages.push({ role: 'user', content: 'Hello' },
+      { role: 'tool', name: 'web_search', label: 'Searched the web', content: JSON.stringify({ results: [
+        { title: 'Official source', url: 'https://example.org/' },
+        { title: 'Unsafe source', url: 'javascript:alert(1)' },
+      ] }) },
+      { role: 'tool', name: 'read_webpage', label: 'Read a webpage', ok: false, content: '{"error":"The website blocked this request."}' });
+    session.setConversation(chat);
+    assert.equal(messagesEl.querySelector('.agent-window__welcome'), null);
+    const sources = messagesEl.querySelector('.agent-window__web-sources');
+    assert.equal(sources.children.length, 1);
+    assert.equal(sources.children[0].href, 'https://example.org/');
+    assert.equal(sources.children[0].textContent, 'Official source');
+    assert.equal(messagesEl.querySelector('.agent-window__web-error').textContent, 'The website blocked this request.');
     await tick();
   }
   assert.ok(requests.every(url => url === '/api/credentials' || url === '/api/settings'));

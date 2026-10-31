@@ -618,10 +618,11 @@ export function mountAgentChatSession({
     messagesEl.innerHTML = '';
     const messages = ensureConversationMessages(conversation);
     const busy = conversation?.pending || sendInFlight;
-    if (conversation && !conversation.welcomeDismissed && !messages.length && !busy && !window.electronAPI) {
+    if (conversation && !conversation.welcomeDismissed && !messages.length && !busy) {
       messagesEl.appendChild(createAgentWelcome({
         projectOpen: workspace.hasProject?.() !== false,
         hasNodes: Boolean(workspace.getCanvasState?.()?.nodes?.length),
+        desktop: Boolean(window.electronAPI),
         onDismiss: () => {
           conversation.welcomeDismissed = true;
           notifyConversationDraftChanged(conversation);

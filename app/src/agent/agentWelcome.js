@@ -1,5 +1,5 @@
 /** Lightweight empty-chat guidance; examples become drafts, never automatic requests. */
-export function createAgentWelcome({ projectOpen, hasNodes, onChoose, onDismiss }) {
+export function createAgentWelcome({ projectOpen, hasNodes, desktop = false, onChoose, onDismiss }) {
   const element = document.createElement('section');
   element.className = 'agent-window__welcome';
   element.setAttribute('aria-label', 'What the Agent can help with');
@@ -44,7 +44,9 @@ export function createAgentWelcome({ projectOpen, hasNodes, onChoose, onDismiss 
 
   const hint = document.createElement('p');
   hint.className = 'agent-window__welcome-hint';
-  hint.textContent = 'Choose an example to edit, or describe your task below.';
+  hint.textContent = desktop
+    ? 'Choose an example to edit, describe your task below, or drag in local files or folders.'
+    : 'Choose an example to edit, or describe your task below.';
   element.append(header, description, examples, hint);
   return element;
 }
