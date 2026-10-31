@@ -759,12 +759,50 @@
   overflow-x: auto;
 }
 
-.credentials-panel-host .credentials-actions-inline .btn {
-  margin: 0;
+.credentials-panel-host .credentials-actions-inline {
+  gap: 14px;
+}
+
+/* Test / Delete, written as links like the OpenRouter account line's action above the table. */
+.credentials-action-link {
   flex: 0 0 auto;
-  min-width: 0;
-  padding: 6px 10px;
-  font-size: 12px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--accent, #2563eb);
+  cursor: pointer;
+}
+
+.credentials-action-link:hover,
+.credentials-action-link:focus-visible {
+  outline: none;
+  text-decoration: underline;
+}
+
+.credentials-action-link:disabled {
+  color: var(--text-muted);
+  text-decoration: none;
+  cursor: default;
+}
+
+/* Web: no API key column, so Actions is the third column. */
+.credentials-panel-host .credentials-table--no-key th:nth-child(1),
+.credentials-panel-host .credentials-table--no-key td:nth-child(1) {
+  width: 52%;
+}
+
+.credentials-panel-host .credentials-table--no-key th:nth-child(2),
+.credentials-panel-host .credentials-table--no-key td:nth-child(2) {
+  width: 30%;
+}
+
+.credentials-panel-host .credentials-table--no-key th:nth-child(3),
+.credentials-panel-host .credentials-table--no-key td:nth-child(3) {
+  width: 18%;
+  overflow: visible;
 }
 
 .modal-panel--defaults .defaults-row {

@@ -96,25 +96,33 @@ function credentialStatusIcon(c) {
   return `<span class="credential-status-icon" data-status-icon="${c.id}" title="Not verified yet — click Test"></span>`;
 }
 
+// The web app never shows stored API keys, so its table has no API key column.
+const showKeyColumn = () => Boolean(window.electronAPI);
+
+function credentialsMessageRow(text) {
+  return `<tr class="credentials-table-empty"><td colspan="${showKeyColumn() ? 4 : 3}">${text}</td></tr>`;
+}
+
 function renderCredentialsTable(scope, list) {
   const tbody = getCredTbody(scope);
   if (!tbody) return;
   if (!list || list.length === 0) {
-    tbody.innerHTML = '<tr class="credentials-table-empty"><td colspan="4">No credentials added yet.</td></tr>';
+    tbody.innerHTML = credentialsMessageRow('No credentials added yet.');
     return;
   }
   const maskedPlaceholder = '••••••••';
+  const keyCell = (c) => (showKeyColumn() ? `
+      <td class="${c.builtin ? 'credentials-managed-cell' : 'credentials-key-cell'}">
+        ${c.builtin ? '<span>Included</span>' : `<code class="credentials-key-value">${maskedPlaceholder}</code>`}
+      </td>` : '');
   tbody.innerHTML = list.map((c) => `
     <tr data-credential-id="${c.id}">
       <td>${escapeHtml(credentialModelLabel(c))} ${credentialSourceBadge(c)} ${credentialStatusIcon(c)}</td>
-      <td class="credentials-provider-cell">${c.builtin ? 'Provided by AnnoBio' : escapeHtml(c.base_url || 'Default')}</td>
-      <td class="${c.builtin ? 'credentials-managed-cell' : 'credentials-key-cell'}">
-        ${c.builtin ? '<span>Included</span>' : `<code class="credentials-key-value">${maskedPlaceholder}</code>`}
-      </td>
+      <td class="credentials-provider-cell">${c.builtin ? 'Provided by AnnoBio' : escapeHtml(c.base_url || 'Default')}</td>${keyCell(c)}
       <td class="credentials-actions-cell">
         ${c.builtin ? '<span class="credentials-managed-label">Managed</span>' : `<div class="credentials-actions-inline">
-          <button type="button" class="btn btn-secondary credentials-test-btn" data-id="${c.id}" aria-label="Test">Test</button>
-          <button type="button" class="btn btn-secondary credentials-delete-btn" data-id="${c.id}" aria-label="Delete">Delete</button>
+          <button type="button" class="credentials-action-link credentials-test-btn" data-id="${c.id}">Test</button>
+          <button type="button" class="credentials-action-link credentials-delete-btn" data-id="${c.id}">Delete</button>
         </div>`}
       </td>
     </tr>
@@ -136,7 +144,7 @@ async function loadAndRenderCredentials(scope) {
       // A network error right after launch usually means the backend is still starting.
       if (!(error instanceof TypeError)) throw error;
       const tbody = getCredTbody(scope);
-      if (tbody) tbody.innerHTML = '<tr class="credentials-table-empty"><td colspan="4">Waiting for the backend to start...</td></tr>';
+      if (tbody) tbody.innerHTML = credentialsMessageRow('Waiting for the backend to start...');
       if (!(await waitForBackend())) throw error;
       list = await fetchCredentialsStrict();
     }
@@ -147,7 +155,7 @@ async function loadAndRenderCredentials(scope) {
   } catch (e) {
     console.error('Load credentials:', e);
     const tbody = getCredTbody(scope);
-    if (tbody) tbody.innerHTML = '<tr class="credentials-table-empty"><td colspan="4">Unable to load (is the backend running?).</td></tr>';
+    if (tbody) tbody.innerHTML = credentialsMessageRow('Unable to load (is the backend running?).');
   }
 }
 
@@ -334,20 +342,16 @@ function mountCredentialsTableHost(tableHost, options = {}) {
     <div class="credentials-panel-inner">
       <div class="credentials-prompt-block credentials-prompt-block--table">
         <div class="credentials-table-scroll">
-          <table class="credentials-table" aria-label="Model credentials">
+          <table class="credentials-table${showKeyColumn() ? '' : ' credentials-table--no-key'}" aria-label="Model credentials">
             <thead>
               <tr>
                 <th>Model</th>
                 <th>API Base</th>
-                <th>API key</th>
+                ${showKeyColumn() ? '<th>API key</th>' : ''}
                 <th>Actions</th>
               </tr>
             </thead>
-            <tbody>
-              <tr class="credentials-table-empty">
-                <td colspan="4">No credentials added yet.</td>
-              </tr>
-            </tbody>
+            <tbody>${credentialsMessageRow('No credentials added yet.')}</tbody>
           </table>
         </div>
       </div>
