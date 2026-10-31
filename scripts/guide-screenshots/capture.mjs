@@ -122,6 +122,15 @@ try {
   const shot = async (name) => {
     await evaluate('document.activeElement?.blur?.(); return true;');
     await wait(400);
+    if (name.startsWith('home-')) {
+      await evaluate(`
+        const menus = [...document.querySelectorAll('.top-bar > .menu-item')].map(el => el.childNodes[0].textContent.trim());
+        if (menus.join(',') !== 'File,Edit,Settings' || document.documentElement.classList.contains('top-bar-web')) {
+          throw new Error('Home screenshots must use the desktop shell.');
+        }
+        if (document.querySelectorAll('.top-bar-window-btn').length !== 3) throw new Error('Desktop window controls missing.');
+        return true;`);
+    }
     const errors = await evaluate('return window.errors;');
     if (errors.length) throw new Error(`${name}: page errors ${JSON.stringify(errors)}`);
     const { data } = await cdp('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
@@ -139,11 +148,24 @@ try {
   const ctx = { evaluate, until, wait, open, shot, click, cdp };
   for (const scene of scenes) {
     if (only.size && !only.has(scene.name)) continue;
-    await scene.run(ctx);
+    await cdp('Emulation.setDeviceMetricsOverride', { ...VIEWPORT, ...scene.viewport, mobile: false });
+    // Home promotes the desktop UI; guide scenes keep their existing web walkthrough.
+    const sceneCtx = scene.name.startsWith('home-') ? {
+      ...ctx,
+      open: (query = '') => {
+        const params = new URLSearchParams(query.replace(/^\?/, ''));
+        params.set('desktop', '1');
+        return open('?' + params.toString());
+      },
+    } : ctx;
+    await scene.run(sceneCtx);
   }
 } finally {
   ws?.close();
   browser.kill();
   await server.close();
-  await fs.rm(profile, { recursive: true, force: true }).catch(() => {});
+  const profileRelative = path.relative(path.join(root, '.cache'), path.resolve(profile));
+  if (profileRelative && !profileRelative.startsWith('..') && !path.isAbsolute(profileRelative)) {
+    await fs.rm(profile, { recursive: true, force: true }).catch(() => {});
+  }
 }

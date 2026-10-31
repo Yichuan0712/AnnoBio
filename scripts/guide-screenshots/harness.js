@@ -19,6 +19,7 @@ window.alert = (message) => window.errors.push('alert: ' + String(message));
 
 const PROJECT_ID = 'guide-example';
 const MODEL = 'gpt-4.1-mini';
+const params = new URLSearchParams(location.search);
 
 const ABSTRACTS = [
   ['P1', 'BRCA1 germline variants in early-onset breast cancer',
@@ -74,6 +75,28 @@ const PROMPT_TEXT = [
 const OLD_SENTENCE = 'List every gene that the abstract reports as associated with a disease.';
 const NEW_SENTENCE = 'List every gene that the abstract reports as associated with a disease. Write the gene as its official HGNC symbol only (e.g. APOE, not \u201cAPOE \u03b54\u201d); keep variants and alleles in the evidence. Skip genes the abstract reports as not associated.';
 
+const HOME_REVIEW_PROTOCOL = {
+  scopeBefore: 'Return relevant gene-disease pairs and supporting source sentences.',
+  scopeAfter: 'Extract only positive associations explicitly reported as study findings. Exclude background mentions, negated associations, and speculative hypotheses. Do not infer a causal relation from an association.',
+  entitiesBefore: 'Preserve reported variants and alleles, disease terms, and context.',
+  entitiesAfter: 'Use an HGNC symbol only when unambiguous from the supplied text. Retain variant and allele names in the verbatim evidence. Never invent identifiers or merge distinct disease phenotypes.',
+};
+HOME_REVIEW_PROTOCOL.prompt = [
+  'Task',
+  'Curate gene-disease associations for a systematic evidence review. Use only the supplied record.',
+  '',
+  'Source record',
+  'Title: {title}',
+  'Abstract: {abstract}',
+  '',
+  'Extraction protocol',
+  HOME_REVIEW_PROTOCOL.scopeBefore,
+  HOME_REVIEW_PROTOCOL.entitiesBefore,
+  '',
+  'Output contract',
+  'Return one row per distinct pair with gene, disease, and evidence. Copy supporting evidence verbatim and preserve the reported population or model context. Return an empty table when no supported association remains.',
+].join('\n');
+
 const OUTPUT_FORMAT = {
   returnShape: 'table',
   fields: [
@@ -120,23 +143,24 @@ const PROCESS_CODE = [
 const AGENT_MESSAGES = [
   {
     role: 'user',
-    content: 'Use disease_abstracts to extract gene\u2013disease pairs. Read Title and Abstract and return gene, disease, and a short evidence quote. One abstract may contain several pairs. Show me the proposed nodes before running anything.',
+    content: 'Explain this gene\u2013disease extraction pipeline. What should I check before running it?',
   },
   {
     role: 'assistant',
     content: [
-      'Here is the plan. Nothing has been created or run yet.',
+      'The canvas connects your abstracts and extraction prompt to Generate.',
       '',
-      '1. **Prompt** \u201cExtract gene\u2013disease pairs\u201d with inputs `{title}` and `{abstract}`, returning multiple rows with the fields `gene`, `disease`, and `evidence`.',
-      '2. **Generate** connected to that Prompt and to **disease_abstracts**, mapping Title \u2192 `title` and Abstract \u2192 `abstract`, using gpt-4.1-mini.',
+      '1. **Check the inputs:** Title maps to `{title}` and Abstract maps to `{abstract}`.',
+      '2. **Check the output:** one row per association, with `gene`, `disease`, and a supporting `evidence` quote.',
+      '3. **Start small:** run the five example abstracts and inspect the extracted pairs before adding more data.',
       '',
-      'Shall I add these two nodes to the canvas? I will ask again before running Generate on the 5 abstracts.',
+      'I can help you set up evaluation against reviewed pairs next. No model run has been started.',
     ].join('\n'),
   },
 ];
 
 window.fixture = {
-  ABSTRACTS, REFERENCE, PROMPT_TEXT, OUTPUT_FORMAT, SCORE_MAPPING, PROCESS_CODE, OLD_SENTENCE, NEW_SENTENCE,
+  ABSTRACTS, REFERENCE, PROMPT_TEXT, OUTPUT_FORMAT, SCORE_MAPPING, PROCESS_CODE, OLD_SENTENCE, NEW_SENTENCE, HOME_REVIEW_PROTOCOL,
   dataset: table(['ID', 'Title', 'Abstract'], ABSTRACTS, 'abstract'),
   reference: table(['ID', 'Gene', 'Disease'], REFERENCE, 'reference'),
 };
@@ -159,6 +183,29 @@ function runResultsFor(body) {
 }
 
 function reviewEvents() {
+  if (params.has('evidence-review')) {
+    const protocol = HOME_REVIEW_PROTOCOL;
+    return [
+      { type: 'plan', summary: 'Review assertion scope and entity normalization in the failed examples.', diagnosis_total: 2 },
+      { type: 'diagnosis_row', input_index: 2, row_indices: [3, 4], done: 1, total: 2,
+        opinion: { card_title: 'Assertion scope and allele identity',
+          issue_summary: 'The APOE record combines a positive allele association with an explicit negative CLU result. CLU should not become a positive relation; APOE and its allele must remain distinguishable.',
+          rough_modification_opinion: 'Require affirmative study findings and separate gene identity from variant context.', problem_category_hint: 'scope-and-normalization', gt_suspect_note: '' } },
+      { type: 'diagnosis_row', input_index: 4, row_indices: [6], done: 2, total: 2,
+        opinion: { card_title: 'Variant emitted as a gene identifier',
+          issue_summary: 'LRRK2 G2019S was emitted as the gene. The reference expects LRRK2, while the variant belongs in the source evidence.',
+          rough_modification_opinion: 'Normalize only when the gene is unambiguous; preserve the full variant wording in the quotation.', problem_category_hint: 'entity-normalization', gt_suspect_note: '' } },
+      { type: 'suggestions', suggestions: [
+        { name: 'Assertion scope', old_sentence: protocol.scopeBefore, new_sentence: protocol.scopeAfter,
+          reason: 'CLU was extracted despite an explicit negative finding. Require affirmative study evidence and exclude background or speculative claims.',
+          phase1_addresses: ['Assertion scope and allele identity'], target_score_row_indices: [4], row_indices: [4], issue_cluster_index: 0, issue_cluster_label: 'assertion-scope' },
+        { name: 'Entity normalization', old_sentence: protocol.entitiesBefore, new_sentence: protocol.entitiesAfter,
+          reason: 'APOE allele and LRRK2 variant names appeared in the gene field. Separate gene identity from variant context without losing the original evidence.',
+          phase1_addresses: ['Assertion scope and allele identity', 'Variant emitted as a gene identifier'], target_score_row_indices: [3, 6], row_indices: [3, 6], issue_cluster_index: 1, issue_cluster_label: 'entity-normalization' },
+      ] },
+      { type: 'done' },
+    ];
+  }
   return [
     { type: 'plan', summary: 'Analyzing 2 papers with unmatched rows.', diagnosis_total: 2 },
     {
@@ -234,7 +281,7 @@ window.fetch = async (url, opts = {}) => {
   ];
   else if (u.includes('/agent-conversations')) body = {
     format_version: 2, activeConversationId: 'guide',
-    conversations: [{ id: 'guide', title: 'Gene\u2013disease pipeline', updatedAt: Date.now(), messages: AGENT_MESSAGES, unsentDraft: '' }],
+    conversations: [{ id: 'guide', title: params.has('welcome') ? 'New Agent' : 'Gene\u2013disease pipeline', updatedAt: Date.now(), messages: params.has('welcome') ? [] : AGENT_MESSAGES, unsentDraft: '' }],
   };
   else if (u.includes('agent-hints')) body = {};
   else if (u.includes('/api/agent/context')) body = { context_window: 128000 };
@@ -256,12 +303,18 @@ window.fetch = async (url, opts = {}) => {
 
 // ---- Application shell ---------------------------------------------------------------------
 
-const params = new URLSearchParams(location.search);
 if (params.has('desktop')) {
   window.electronAPI = {
     platform: 'win32',
     isWindowMaximized: async () => false,
     onWindowMaximizedChanged: () => {},
+    loadAgentConversations: async () => ({
+      format_version: 2, activeConversationId: 'guide',
+      conversations: [{ id: 'guide', title: params.has('welcome') ? 'New Agent' : 'Gene\u2013disease pipeline', updatedAt: Date.now(), messages: params.has('welcome') ? [] : AGENT_MESSAGES, unsentDraft: '' }],
+    }),
+    saveAgentConversations: async () => {},
+    getBackendLog: async () => [],
+    onBackendLog: () => () => {},
   };
 }
 localStorage.clear();
@@ -273,7 +326,7 @@ initModalDrag();
 initModalMaximize();
 setCurrentProjectId(PROJECT_ID);
 
-const canvas = buildWorkflowCanvas(document.querySelector('#surface'), { getCurrentProjectPath: () => PROJECT_ID, isElectron: false });
+const canvas = buildWorkflowCanvas(document.querySelector('#surface'), { getCurrentProjectPath: () => PROJECT_ID, isElectron: params.has('desktop') });
 const top = buildTopBar(document.querySelector('#bar'), {
   openAddPromptModal: () => openAddPromptModal(canvas),
   openAddDatasetModal: () => openAddDatasetModal(canvas),

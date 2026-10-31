@@ -129,11 +129,30 @@ export const scenes = [
       await buildBase(ctx);
       await evaluate(`window.app.node('abstracts').click(); return true;`);
       await wait(700);
-      // The widths a user would drag to: a narrow ID column and a wide Abstract column.
+      // Maximize the real table and resize through the same handles a reader can drag.
       await evaluate(`
-        const cols = document.querySelectorAll('.modal-overlay colgroup col');
-        [40, 56, 380, 583].forEach((w, i) => { if (cols[i]) cols[i].style.width = w + 'px'; });
+        document.querySelector('.modal-overlay .modal-maximize').click();
         return true;`);
+      await wait(150);
+      await evaluate(`
+        const wrap = document.querySelector('.working-dataset-table-wrap');
+        const style = getComputedStyle(wrap);
+        const available = wrap.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+        const widths = [60, 300, Math.floor(available) - 400];
+        const handles = [...document.querySelectorAll('.wd-header-row .wd-col-resize-handle')];
+        handles.forEach((handle, i) => {
+          handle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 100 }));
+          document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 100 + widths[i] - 140 }));
+          document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+        });
+        for (const row of document.querySelectorAll('.wd-tbody tr')) {
+          const height = row.querySelector('.wd-cell-textarea').offsetHeight;
+          row.querySelector('.wd-row-resize-handle').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientY: 100 }));
+          document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientY: 100 + 68 - height }));
+          document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+        }
+        return true;`);
+      await wait(300);
       await shot('dataset-table');
     },
   },
@@ -145,6 +164,8 @@ export const scenes = [
       await buildBase(ctx);
       await evaluate(`window.app.node('prompt').click(); return true;`);
       await wait(700);
+      await evaluate(`document.querySelector('.modal-overlay .modal-maximize').click(); return true;`);
+      await wait(150);
       await shot('add-prompt-modal');
     },
   },
@@ -266,87 +287,43 @@ export const scenes = [
   },
   {
     name: 'home-pipeline',
-    async run({ open, evaluate, wait, shot }) {
-      await open('?desktop=1&title=Evidence%20Synthesis%20Pipeline');
+    viewport: { width: 1180, height: 760 },
+    async run(ctx) {
+      const { open, evaluate, until, wait, shot } = ctx;
+      await open('?title=Gene%E2%80%93Disease%20Evidence');
       await evaluate(`
         const f = window.fixture;
-        const relationFormat = {
-          returnShape: 'table',
-          fields: [
-            { key: 'gene', type: 'str', description: 'HGNC gene symbol.', examples: ['BRCA1'] },
-            { key: 'disease', type: 'str', description: 'Associated disease.', examples: ['breast cancer'] },
-            { key: 'evidence', type: 'str', description: 'Supporting quotation.', examples: [] },
-          ],
-        };
-        const studyFormat = {
-          returnShape: 'single',
-          fields: [
-            { key: 'study_design', type: 'str', description: 'Study design.', examples: ['cohort study'] },
-            { key: 'sample_size', type: 'float', description: 'Reported sample size.', examples: [412] },
-          ],
-        };
-        const relationPrompt = [
-          'Extract asserted gene and disease associations from {title} and {abstract}.',
-          'Return the HGNC symbol, disease, and supporting evidence.',
-        ].join('\\n');
-        const studyPrompt = [
-          'Classify the study design in {title} and {abstract}.',
-          'Return the study design and reported sample size.',
-        ].join('\\n');
-        const normalizeCode = [
-          'def process(df):',
-          '    out = df.copy()',
-          '    out["gene"] = out["gene"].str.upper()',
-          '    return out.drop_duplicates()',
-        ].join('\\n');
-        const metadataCode = [
-          'def process(df):',
-          '    return df[["Input: ID", "Output: study_design", "Output: sample_size"]]',
-        ].join('\\n');
-        const provenanceCode = [
-          'def process(df):',
-          '    return df[["ID", "Title"]].rename(columns={"ID": "paper"})',
-        ].join('\\n');
-        const mergeCode = [
-          'def process(df_relations, df_metadata, df_provenance):',
-          '    out = df_relations.merge(df_metadata, on="paper", how="left")',
-          '    return out.merge(df_provenance, on="paper", how="left")',
-        ].join('\\n');
         await window.app.load({
-          schemaVersion: 3, version: 3, historyVersion: 1, zoomLevel: 0.78,
+          schemaVersion: 3, version: 3, historyVersion: 1, zoomLevel: 1,
           nodes: [
-            { type: 'dataset', nodeId: 'papers', name: 'Biomedical literature', note: '2,480 screened records', left: 50, top: 390, colorIndex: 1, datasetContent: f.dataset },
-
-            { type: 'prompt', nodeId: 'relation-prompt', name: 'Extract associations', note: 'Gene, disease, and evidence', left: 330, top: 45, colorIndex: 0, text: relationPrompt, outputFormat: relationFormat, inputTypes: {} },
-            { type: 'run', nodeId: 'relations', runName: 'Extract relations', left: 350, top: 220, runCredentialId: 'cred-demo', runInputToColumn: JSON.stringify({ title: 'Title', abstract: 'Abstract' }) },
-            { type: 'process', nodeId: 'normalize', name: 'Normalize entities', note: 'HGNC symbols and unique pairs', left: 690, top: 220, activeMode: 'df', dfCode: normalizeCode },
-
-            { type: 'prompt', nodeId: 'study-prompt', name: 'Classify study design', note: 'Design and cohort size', left: 330, top: 735, colorIndex: 2, text: studyPrompt, outputFormat: studyFormat, inputTypes: {} },
-            { type: 'run', nodeId: 'studies', runName: 'Classify studies', left: 350, top: 510, runCredentialId: 'cred-demo', runInputToColumn: JSON.stringify({ title: 'Title', abstract: 'Abstract' }) },
-            { type: 'process', nodeId: 'metadata', name: 'Select study metadata', note: 'Design and sample size', left: 690, top: 510, activeMode: 'df', dfCode: metadataCode },
-
-            { type: 'process', nodeId: 'provenance', name: 'Attach provenance', note: 'Paper ID and source title', left: 690, top: 755, activeMode: 'df', dfCode: provenanceCode },
-            { type: 'process', nodeId: 'merge', name: 'Merge annotations', note: 'One review table', left: 1060, top: 390, activeMode: 'df', dfCode: mergeCode },
-            { type: 'process', nodeId: 'quality', name: 'Quality control', note: 'Flag incomplete records', left: 1370, top: 390, activeMode: 'df', dfCode: 'def process(df):\\n    return df.dropna(subset=["gene", "disease", "evidence"])' },
+            { type: 'prompt', nodeId: 'prompt', name: 'Extract associations', note: 'Gene, disease, and evidence', left: 64, top: 82, colorIndex: 0, text: f.PROMPT_TEXT.replace(f.OLD_SENTENCE, f.NEW_SENTENCE), outputFormat: f.OUTPUT_FORMAT, inputTypes: {} },
+            { type: 'dataset', nodeId: 'abstracts', name: 'Biomedical abstracts', note: 'Five example research records', left: 64, top: 342, colorIndex: 1, datasetContent: f.dataset },
+            { type: 'run', nodeId: 'generate', runName: 'Extract relations', left: 365, top: 205, runCredentialId: 'cred-demo', runInputToColumn: JSON.stringify({ title: 'Title', abstract: 'Abstract' }) },
+            { type: 'process', nodeId: 'process', name: 'Tidy extracted pairs', left: 735, top: 205, activeMode: 'df', dfCode: f.PROCESS_CODE },
+            { type: 'dataset', nodeId: 'reference', name: 'Reviewed pairs', note: 'Curator-checked reference data', left: 365, top: 500, colorIndex: 3, datasetContent: f.reference },
+            { type: 'score', nodeId: 'evaluate', scoreName: 'Evaluate extraction', left: 735, top: 460, scoreGroundTruthId: 'reference', scoreMapping: JSON.stringify(f.SCORE_MAPPING), reviewMethod: 'issue_analysis_suggestions', reviewCredentialId: 'cred-demo' },
           ],
           connections: [
-            { type: 'prompt-to-run', fromId: 'relation-prompt', toId: 'relations' },
-            { type: 'data', fromId: 'papers', fromPort: 'result', toId: 'relations' },
-            { type: 'data', fromId: 'relations', fromPort: 'result', toId: 'normalize', alias: 'df' },
-
-            { type: 'prompt-to-run', fromId: 'study-prompt', toId: 'studies' },
-            { type: 'data', fromId: 'papers', fromPort: 'result', toId: 'studies' },
-            { type: 'data', fromId: 'studies', fromPort: 'result', toId: 'metadata', alias: 'df' },
-
-            { type: 'data', fromId: 'papers', fromPort: 'result', toId: 'provenance', alias: 'df' },
-            { type: 'data', fromId: 'normalize', fromPort: 'result', toId: 'merge', alias: 'df_relations' },
-            { type: 'data', fromId: 'metadata', fromPort: 'result', toId: 'merge', alias: 'df_metadata' },
-            { type: 'data', fromId: 'provenance', fromPort: 'result', toId: 'merge', alias: 'df_provenance' },
-            { type: 'data', fromId: 'merge', fromPort: 'result', toId: 'quality', alias: 'df' },
+            { type: 'prompt-to-run', fromId: 'prompt', toId: 'generate' },
+            { type: 'data', fromId: 'abstracts', fromPort: 'result', toId: 'generate' },
+            { type: 'data', fromId: 'generate', fromPort: 'result', toId: 'process', alias: 'df' },
+            { type: 'run-to-score', fromId: 'generate', toId: 'evaluate' },
           ],
         });
         return true;`);
-      await wait(1200);
+      await runGenerate(ctx);
+      await evaluate(`await window.app.canvas.runProcessNode('process'); return true;`);
+      await until(`window.app.records.some(r => r.kind === 'process' && r.status === 'completed')`);
+      await runEvaluate(ctx);
+      await evaluate(`window.app.closeDialogs(); return true;`);
+      await wait(500);
+      await evaluate(`
+        const clipped = [...document.querySelectorAll('.workflow-node')].filter(n => {
+          const r = n.getBoundingClientRect();
+          return r.left < 20 || r.right > innerWidth - 20 || r.top < 64 || r.bottom > innerHeight - 20;
+        }).map(n => n.dataset.nodeId);
+        if (clipped.length) throw new Error('Clipped home nodes: ' + clipped.join(', '));
+        return true;`);
       await shot('home-pipeline');
     },
   },
@@ -360,3 +337,150 @@ export const scenes = [
     },
   },
 ];
+
+
+// The home carousel uses a consistent, closer viewport; guide figures retain their wider context.
+scenes.push({
+  name: 'home-prompt',
+  viewport: { width: 1180, height: 760 },
+  async run({ open, evaluate, wait, shot }) {
+    await open('?title=Biomedical%20Evidence%20Curation');
+    await evaluate(`
+      const text = [
+        'Task',
+        'Curate gene-disease associations for a systematic evidence review using only the supplied record.',
+        '',
+        'Source record',
+        'Record ID: {record_id}',
+        'Title: {title}',
+        'Abstract: {abstract}',
+        '',
+        'Annotation rules',
+        '1. Extract study findings; exclude background mentions, negated associations, and speculative hypotheses.',
+        '2. Use an HGNC symbol only when unambiguous from the text. Keep variant and allele names in evidence; never invent identifiers.',
+        '3. Preserve the reported disease and population/model context. Distinguish association from explicitly supported causal, susceptibility, or protective relations.',
+        '4. Quote supporting text verbatim. Flag unresolved entity mapping or contradictory findings in review_note; use null when no review is needed.',
+        '',
+        'Output contract',
+        'Return one row per distinct, directly supported gene-disease pair using the configured schema. Include gene, disease, relation, evidence, and review_note. Return an empty table when no pair qualifies.',
+      ].join('\\n');
+      await window.app.load({
+        schemaVersion: 3, version: 3, historyVersion: 1, zoomLevel: 1,
+        nodes: [{ type: 'prompt', nodeId: 'evidence-protocol', name: 'Curate gene-disease evidence', left: 64, top: 82, colorIndex: 0, text,
+          outputFormat: { returnShape: 'table', fields: [
+            { key: 'gene', type: 'str', description: 'Supported HGNC symbol or reported gene mention.', examples: ['BRCA1'] },
+            { key: 'disease', type: 'str', description: 'Disease or phenotype as reported.', examples: ['breast cancer'] },
+            { key: 'relation', type: 'str', description: 'association, causal, susceptibility, or protective.', examples: ['association'] },
+            { key: 'evidence', type: 'str', description: 'Verbatim supporting quote with reported context.', examples: [] },
+            { key: 'review_note', type: 'str', allowNone: true, description: 'Unresolved ambiguity; null when no review is needed.', examples: [] },
+          ] }, inputTypes: {} }],
+        connections: [],
+      });
+      window.app.node('evidence-protocol').click();
+      return true;`);
+    await wait(700);
+    await evaluate(`document.querySelector('.modal-overlay .modal-maximize').click(); return true;`);
+    await wait(150);
+    await shot('home-prompt');
+  },
+});
+
+scenes.push({
+  name: 'home-dataset',
+  viewport: { width: 1180, height: 760 },
+  async run({ open, evaluate, wait, shot }) {
+    await open('?title=Biomedical%20Evidence%20Review');
+    await evaluate(`
+      const contexts = ['Early-onset cases; n=412', 'CF registry; n=1,150', 'APOE allele; PET imaging', 'HTT repeats; n=287', 'Familial PD; 600 families'];
+      const rows = window.fixture.ABSTRACTS.map((row, i) => [
+        'EX-' + String(i + 1).padStart(3, '0'), contexts[i], row[1], row[2],
+      ]);
+      await window.app.load({
+        schemaVersion: 3, version: 3, historyVersion: 1, zoomLevel: 1,
+        nodes: [{ type: 'dataset', nodeId: 'evidence-corpus', name: 'Gene-disease evidence corpus', note: 'Synthetic study records for evidence curation', left: 64, top: 82, colorIndex: 1,
+          datasetContent: { schemaVersion: 2, headers: ['record_id', 'study_context', 'title', 'abstract'], columnTypes: ['text', 'text', 'text', 'text'], rowIds: rows.map((_, i) => 'evidence-' + i), rows } }],
+        connections: [],
+      });
+      window.app.node('evidence-corpus').click();
+      return true;`);
+    await wait(600);
+    await evaluate(`document.querySelector('.modal-overlay .modal-maximize').click(); return true;`);
+    await wait(150);
+    await evaluate(`
+      const wrap = document.querySelector('.working-dataset-table-wrap');
+      const style = getComputedStyle(wrap);
+      const available = wrap.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      const widths = [88, 160, 255, Math.floor(available) - 543];
+      [...document.querySelectorAll('.wd-header-row .wd-col-resize-handle')].forEach((handle, i) => {
+        handle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 100 }));
+        document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 100 + widths[i] - 140 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      });
+      for (const row of document.querySelectorAll('.wd-tbody tr')) {
+        const height = row.querySelector('.wd-cell-textarea').offsetHeight;
+        row.querySelector('.wd-row-resize-handle').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientY: 100 }));
+        document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientY: 100 + 70 - height }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      }
+      return true;`);
+    await wait(250);
+    await shot('home-dataset');
+  },
+});
+
+scenes.push({
+  name: 'home-optimize',
+  viewport: { width: 1180, height: 760 },
+  async run(ctx) {
+    const { open, evaluate, wait, click, shot } = ctx;
+    await open('?evidence-review=1&title=Evidence-guided%20Prompt%20Revision');
+    await evaluate(`window.fixture.PROMPT_TEXT = window.fixture.HOME_REVIEW_PROTOCOL.prompt; return true;`);
+    await buildBase(ctx);
+    await runGenerate(ctx);
+    await addEvaluate(ctx);
+    await runEvaluate(ctx);
+    await runOptimize(ctx);
+    await evaluate(`
+      const state = window.app.state();
+      state.nodes.find(n => n.nodeId === window.app.optimizeId).promptReviewName = 'Evidence-guided revision';
+      await window.app.load(state);
+      return true;`);
+    await openOptimize(ctx, 'Suggested changes');
+    await evaluate(`document.querySelector('.modal-overlay .modal-maximize').click(); return true;`);
+    for (let i = 0; i < 2; i++) {
+      await click('.review-detail-accept-btn:not(.review-detail-accept-btn--revert)');
+      await wait(250);
+    }
+    await evaluate(`
+      if (document.querySelectorAll('.review-detail-accept-btn--revert').length !== 2) throw new Error('Both protocol edits must be selected.');
+      return true;`);
+    await shot('home-optimize');
+  },
+});
+
+for (const [name, source] of [
+  ['home-evaluation', 'review-method-picker'],
+  ['home-agent', 'agent-assistant'],
+]) {
+  const scene = scenes.find(item => item.name === source);
+  scenes.push({
+    name,
+    viewport: { width: 1180, height: 760 },
+    run: ctx => scene.run({ ...ctx, shot: async () => {
+      if (name === 'home-evaluation') {
+        await ctx.click('.modal-overlay .modal-maximize');
+        await ctx.wait(200);
+      }
+      await ctx.shot(name);
+    } }),
+  });
+}
+
+scenes.push({
+  name: 'agent-welcome',
+  async run(ctx) {
+    await ctx.open('?agent=1&welcome=1');
+    await ctx.until(`document.querySelector('.agent-window__welcome')`);
+    await ctx.shot('agent-welcome');
+  },
+});

@@ -448,6 +448,7 @@ GUIDE_IMAGES = {
     "review-method-picker": "review-method-picker.png",
     "llm-settings": "llm-settings.png",
     "agent-assistant": "agent-assistant.png",
+    "agent-welcome": "agent-welcome.png",
     "process-node": "process-node.png",
     "dataset-table": "dataset-table.png",
     "pipeline-overview": "pipeline-overview.png",

@@ -375,7 +375,13 @@ the Agent can inspect exposed node and task information, but it cannot read the 
         ("agent-workflow", "Give a task, review the proposal, check the result", lambda: f"""
 <p>Use the side-bar button in the top bar (labelled <strong>Toggle Agent Side Bar</strong>) to open the
 <strong>Agent Assistant</strong>, then choose or add a conversation. It uses the Agent model configured
-in LLM settings. In the browser, open a project before using it.</p>
+in LLM settings. You can start a conversation before opening a project and ask the Agent to help create
+one when your task needs it.</p>
+<p>An empty conversation shows a welcome card with four starting points: learn AnnoBio, find data,
+build a pipeline, or improve a prompt. Choose one to fill the message draft, edit it, and send when
+ready. The close button dismisses the card for that conversation. On desktop, you can also drag local
+files or folders into the chat.</p>
+{fig("agent-welcome", "Start from a suggested task or describe your own. Choosing an example fills the draft; it does not send a message.")}
 <h3>1. Describe a concrete task</h3>
 <p>Name the relevant Dataset or node, define the unit of analysis and output fields, and state
 inclusion, exclusion, and evidence requirements. Ask the Agent to show its proposed structure before
@@ -383,7 +389,7 @@ running a model or changing project content. For example:</p>
 <blockquote class="docs-request">Use disease_abstracts to extract gene–disease pairs. Read Title and
 Abstract and return gene, disease, and a short evidence quote. One abstract may contain several pairs.
 Show me the proposed nodes before running anything.</blockquote>
-{fig("agent-assistant", "The Agent answers with a plan: the Prompt and Generate it would add, and how it would map the columns. Nothing changes until you confirm.")}
+{fig("agent-assistant", "Ask the Agent to explain an existing pipeline, check its input mappings and output fields, and help plan the next step before running it.")}
 <h3>2. Inspect the proposed changes</h3>
 <p>The Agent can read project information to plan its work. Changes to project content are presented
 as proposals for you to review and confirm. Check the affected nodes, Prompt wording, schema, input

@@ -60,7 +60,7 @@
   .hero h1 {
     max-width: 690px;
     margin: 0 0 24px;
-    font-size: clamp(54px, 6.2vw, 86px);
+    font-size: clamp(54px, 4.8vw, 72px);
     font-weight: 650;
     line-height: 0.98;
     letter-spacing: -0.045em;
@@ -210,7 +210,7 @@
   }
   .step-number {
     display: block;
-    margin-bottom: 45px;
+    margin-bottom: 16px;
     color: var(--landing-green);
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 11px;
@@ -271,7 +271,7 @@
     .workflow-grid { grid-template-columns: 1fr; }
     .workflow-step,
     .workflow-step:nth-child(2) { min-height: 0; }
-    .step-number { margin-bottom: 24px; }
+    .step-number { margin-bottom: 16px; }
   }
 
   @media (prefers-reduced-motion: no-preference) {
@@ -301,12 +301,11 @@
 <main class="landing-main">
   <section class="hero">
     <div class="hero-copy">
-      <p class="hero-eyebrow">LLM workflows for biomedical research</p>
-      <h1>Build reproducible <em>biomedical annotation pipelines.</em></h1>
+      <p class="hero-eyebrow">AI tools for biomedical research</p>
+      <h1>Build <em>biomedical AI workflows</em> visually.</h1>
       <p class="lead">
-        Extract, classify, normalize, and evaluate biomedical records in one inspectable workspace.
-        Keep source evidence, Process code, reference annotations, execution history, and Prompt
-        versions connected throughout the study.
+        Find biomedical data, extract structured information, and evaluate and improve prompts
+        in one workspace. Connect steps on the canvas, or describe your task to the Agent.
       </p>
       <div class="hero-ctas">
         <a class="btn btn-primary btn-lg" href="{{PRIMARY_CTA_HREF}}">{{PRIMARY_CTA_LABEL}}</a>
@@ -318,42 +317,42 @@
     <div class="hero-product" aria-label="AnnoBio interface examples">
       <div class="product-window">
         <figure class="product-slide is-active" data-product-slide="0">
-          <img src="/guide/images/home-pipeline.png" alt="AnnoBio for Windows showing a biomedical literature Dataset branching into relation extraction, study classification, and provenance processing before merging into a review table">
+          <img src="/guide/images/home-pipeline.png" alt="AnnoBio workspace showing biomedical abstracts connected to an extraction prompt, Generate, Process, and evaluation against reviewed reference pairs">
           <figcaption role="button" tabindex="0" data-product-next aria-label="Show next interface example">
             <span class="product-slide-label">Reproducible workflow design</span>
-            <strong>Build explicit pipelines that branch, transform, and recombine research data.</strong>
+            <strong>Connect research data, extraction, processing, and evaluation in one visible workflow.</strong>
           </figcaption>
         </figure>
         <figure class="product-slide" data-product-slide="1">
-          <img src="/guide/images/dataset-table.png" alt="AnnoBio Dataset window showing stable paper identifiers, titles, and abstract text">
+          <img src="/guide/images/home-dataset.png" alt="AnnoBio Dataset window showing stable paper identifiers, titles, and abstract text">
           <figcaption role="button" tabindex="0" data-product-next aria-label="Show next interface example">
             <span class="product-slide-label">Research data with provenance</span>
             <strong>Inspect records, identifiers, and source content before any model run.</strong>
           </figcaption>
         </figure>
         <figure class="product-slide" data-product-slide="2">
-          <img src="/guide/images/add-prompt-modal.png" alt="AnnoBio Prompt window defining instructions, input placeholders, and a structured output schema">
+          <img src="/guide/images/home-prompt.png" alt="AnnoBio Prompt window defining instructions, input placeholders, and a structured output schema">
           <figcaption role="button" tabindex="0" data-product-next aria-label="Show next interface example">
             <span class="product-slide-label">Structured annotation protocol</span>
             <strong>Define reusable instructions, input mappings, output fields, and evidence requirements.</strong>
           </figcaption>
         </figure>
         <figure class="product-slide" data-product-slide="3">
-          <img src="/guide/images/review-method-picker.png" alt="AnnoBio Evaluate window comparing extracted gene and disease associations with curated reference annotations">
+          <img src="/guide/images/home-evaluation.png" alt="AnnoBio Evaluate window comparing extracted gene and disease associations with curated reference annotations">
           <figcaption role="button" tabindex="0" data-product-next aria-label="Show next interface example">
             <span class="product-slide-label">Transparent evaluation</span>
             <strong>Compare structured outputs with curated references and inspect every mismatch.</strong>
           </figcaption>
         </figure>
         <figure class="product-slide" data-product-slide="4">
-          <img src="/guide/images/agent-assistant.png" alt="AnnoBio Agent Assistant proposing a Prompt and Generate workflow from a natural language request">
+          <img src="/guide/images/home-agent.png" alt="AnnoBio Agent Assistant explaining an extraction pipeline, input mappings, and checks before execution">
           <figcaption role="button" tabindex="0" data-product-next aria-label="Show next interface example">
             <span class="product-slide-label">Natural language collaboration</span>
             <strong>Ask the Agent to build, explain, and revise the workflow while you retain control.</strong>
           </figcaption>
         </figure>
         <figure class="product-slide" data-product-slide="5">
-          <img src="/guide/images/optimize-suggestion.png" alt="AnnoBio Prompt optimization window showing a targeted revision derived from evaluation failures">
+          <img src="/guide/images/home-optimize.png" alt="AnnoBio Prompt optimization window showing a targeted revision derived from evaluation failures">
           <figcaption role="button" tabindex="0" data-product-next aria-label="Show next interface example">
             <span class="product-slide-label">Prompt optimization</span>
             <strong>Diagnose failures, review targeted changes, and preserve each Prompt version.</strong>
@@ -365,36 +364,36 @@
 
   <section class="workflow-section" aria-labelledby="workflow-title">
     <div class="workflow-heading">
-      <h2 id="workflow-title">One workspace for the complete biomedical annotation workflow.</h2>
-      <p>Bring research records into explicit pipelines, evaluate their outputs, improve Prompts with
-      human oversight, and carry the resulting workflow into a reproducible Python project.</p>
+      <h2 id="workflow-title">From biomedical data to workflows you can inspect and improve.</h2>
+      <p>Find relevant data, build and run pipelines, and compare results. Keep sources and prompt
+      versions connected as you refine your workflow.</p>
     </div>
     <div class="workflow-grid">
       <article class="workflow-step">
-        <span class="step-number">01 / PIPELINE</span>
-        <h3>Build reproducible pipelines</h3>
-        <p>Connect generation and processing steps to structure research data. Branch and merge workflows, preserve run history, and export runnable Python projects.</p>
+        <span class="step-number">01 / DATA</span>
+        <h3>Find relevant data</h3>
+        <p>Search and import records from PubMed, ClinicalTrials.gov, ChEMBL, UniProt, and other biomedical sources. Keep source identifiers and metadata with your data.</p>
       </article>
       <article class="workflow-step">
-        <span class="step-number">02 / AGENT</span>
-        <h3>Design through conversation</h3>
-        <p>Describe your research task and let the Agent propose Prompts, data mappings, and workflow steps. Review and approve changes before applying them.</p>
+        <span class="step-number">02 / WORKFLOWS</span>
+        <h3>Build visual workflows</h3>
+        <p>Connect data, prompts, and processing steps on the canvas. Branch and merge pipelines, inspect run history, and export runnable Python projects.</p>
       </article>
       <article class="workflow-step">
-        <span class="step-number">03 / CONNECT</span>
-        <h3>Bring biomedical evidence together</h3>
-        <p>Search and import biomedical records from PubMed, ClinicalTrials.gov, ChEMBL, UniProt, and more, while preserving source identifiers and metadata.</p>
+        <span class="step-number">03 / EVALUATION</span>
+        <h3>Evaluate and improve</h3>
+        <p>Compare outputs with reference data and inspect mismatches. Optimize prompts using evaluation results, review proposed changes, and track every version.</p>
       </article>
       <article class="workflow-step">
-        <span class="step-number">04 / OPTIMIZE</span>
-        <h3>Improve and version Prompts</h3>
-        <p>Improve Prompts using evaluation results. Automate optimization or review proposed revisions, with a version history to track every change.</p>
+        <span class="step-number">04 / AGENT</span>
+        <h3>Work with the Agent</h3>
+        <p>Describe your task and let the Agent help find data, build pipelines, and explain results. Review and approve proposed workflow changes before applying them.</p>
       </article>
     </div>
   </section>
 
   <section class="final-cta" aria-labelledby="final-cta-title">
-    <h2 id="final-cta-title">Use AnnoBio in the browser or on your desktop.</h2>
+    <h2 id="final-cta-title">AnnoBio for web and desktop.</h2>
     <p>Start in the online workspace with no installation, or use the desktop app for local project
     files, attachments, and folder access.</p>
     <div class="final-cta-actions">
