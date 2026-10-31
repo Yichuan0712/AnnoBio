@@ -1660,7 +1660,21 @@ html.dark .pill-select__pill--warning { background: rgba(202, 138, 4, 0.28); }
   font-size: 12px;
 }
 .settings-free-allowance[hidden] { display: none; }
-.settings-free-allowance-text { margin: 6px 0 0; line-height: 1.5; color: var(--text-muted); }
+.settings-free-allowance-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.settings-free-allowance-used { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+/* Today's share of the free allowance: accent, amber from 80%, red once used up. */
+.settings-free-allowance-bar {
+  height: 6px;
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--hover);
+}
+.settings-free-allowance-bar[hidden] { display: none; }
+.settings-free-allowance-fill { height: 100%; width: 0; border-radius: inherit; background: var(--accent, #2563eb); transition: width 0.3s ease; }
+.settings-free-allowance-bar--high .settings-free-allowance-fill { background: #d97706; }
+.settings-free-allowance-bar--full .settings-free-allowance-fill { background: #e05252; }
+.settings-free-allowance-text { margin: 8px 0 0; line-height: 1.5; color: var(--text-muted); }
 .credentials-managed-label { color: var(--text-muted); font-size: 12px; }
 
 .credentials-add-btn {

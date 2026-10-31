@@ -713,7 +713,7 @@ export function openSettingsModal() {
               <h3 id="model-settings-col-credentials-title" class="model-settings-col-heading model-settings-col-heading--credentials">Credentials</h3>
               <h3 id="model-settings-col-settings-title" class="model-settings-col-heading model-settings-col-heading--settings">Settings</h3>
               <aside class="model-settings-col model-settings-col-left" aria-labelledby="model-settings-col-credentials-title">
-                ${isDesktop ? '' : '<section class="settings-free-allowance" hidden aria-live="polite"><strong>Free allowance</strong><p class="settings-free-allowance-text"></p></section>'}
+                ${isDesktop ? '' : '<section class="settings-free-allowance" hidden aria-live="polite"><div class="settings-free-allowance-head"><strong>Free allowance</strong><span class="settings-free-allowance-used"></span></div><div class="settings-free-allowance-bar" role="progressbar" aria-label="Free allowance used" aria-valuemin="0" aria-valuemax="100"><div class="settings-free-allowance-fill"></div></div><p class="settings-free-allowance-text"></p></section>'}
                 <div id="model-settings-credentials-root"></div>
               </aside>
               <div class="model-settings-col model-settings-col-right" aria-labelledby="model-settings-col-settings-title">
@@ -1085,6 +1085,14 @@ export function openSettingsModal() {
     }
   }
 
+  /** "in 3 h 12 min" / "in 25 min" until the daily reset; "soon" once it has passed. */
+  function resetsIn(when) {
+    const minutes = Math.ceil((when.getTime() - Date.now()) / 60000);
+    if (!(minutes > 0)) return 'soon';
+    const hours = Math.floor(minutes / 60);
+    return hours ? `in ${hours} h ${minutes % 60} min` : `in ${minutes} min`;
+  }
+
   async function loadFreeAllowance() {
     const section = overlay.querySelector('.settings-free-allowance');
     if (!section) return;
@@ -1095,17 +1103,30 @@ export function openSettingsModal() {
       if (!allowance.enabled) return;
       section.hidden = false;
       const text = section.querySelector('.settings-free-allowance-text');
+      const bar = section.querySelector('.settings-free-allowance-bar');
+      const usedLabel = section.querySelector('.settings-free-allowance-used');
       const ownModel = 'add an OpenRouter credential under New credential';
       if (!allowance.available) {
+        bar.hidden = true;
+        usedLabel.textContent = '';
         text.textContent = `The free model is temporarily unavailable. To use your own model, ${ownModel}.`;
       } else {
-        const reset = allowance.resets_at ? ` Resets ${new Date(allowance.resets_at).toLocaleString()}.` : '';
-        text.textContent = allowance.remaining > 0
-          ? `${Number(allowance.remaining).toLocaleString()} of ${Number(allowance.limit).toLocaleString()} daily tokens remaining.${reset}`
-          : `Your daily free token allowance has been reached.${reset}`;
-        if (allowance.reserved) text.textContent += ' Active requests are using part of this allowance.';
-        if (allowance.estimated) text.textContent += ' Interrupted requests include estimated usage.';
-        text.textContent += ` To use your own model, ${ownModel}.`;
+        // A share of the day's allowance, like other providers' usage meters, not token counts.
+        // Running requests' reservations count as used, the same way the Hub admits requests.
+        const limit = Number(allowance.limit) || 0;
+        const percent = limit > 0 ? Math.min(100, Math.max(0, Math.round(((limit - Number(allowance.remaining)) / limit) * 100))) : 100;
+        const exhausted = !(allowance.remaining > 0);
+        bar.hidden = false;
+        bar.setAttribute('aria-valuenow', String(percent));
+        bar.classList.toggle('settings-free-allowance-bar--high', !exhausted && percent >= 80);
+        bar.classList.toggle('settings-free-allowance-bar--full', exhausted);
+        bar.querySelector('.settings-free-allowance-fill').style.width = `${exhausted ? 100 : percent}%`;
+        usedLabel.textContent = exhausted ? 'Used up' : `${percent}% used`;
+        const reset = allowance.resets_at ? ` Resets ${resetsIn(new Date(allowance.resets_at))}.` : '';
+        text.textContent = (exhausted ? "Today's free allowance is used up." : '') + reset;
+        if (allowance.reserved) text.textContent += ' Includes requests still running.';
+        if (allowance.estimated) text.textContent += ' Includes estimated usage from interrupted requests.';
+        text.textContent = `${text.textContent.trim()} To use your own model, ${ownModel}.`;
       }
     } catch { /* The rest of Settings stays available during a usage-service outage. */ }
   }
