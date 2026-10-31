@@ -55,13 +55,13 @@ module.exports = {
   packagerConfig: {
     asar: true,
     icon: path.join(__dirname, 'assets', 'icon'),
-    // electron-packager names the packaged output dir `${name}-${platform}-${arch}`,
-    // and infers `name` from package.json's `productName` ("AnnoBio") when this
-    // isn't set - producing `out/AnnoBio-win32-x64`. The `dist`/`dist:mac` npm
-    // scripts and electron-builder.yml's `--pd` flag hardcode `out/app-<platform>-<arch>`,
-    // so without this override electron-builder was always pointed at a directory that
-    // never existed - the real root cause of every NSIS/dmg build failure so far.
-    name: 'app',
+    // Also names the packaged output dir `${name}-${platform}-${arch}`, which the `dist`
+    // npm script and CI pass to electron-builder as `--pd out/AnnoBio-<platform>-<arch>`.
+    // electron-builder ships a --pd app as-is, so this is the name users see: the
+    // Windows .exe, the macOS .app, its menu bar and its helper processes.
+    name: 'AnnoBio',
+    // Same as appId in electron-builder.yml; otherwise macOS gets com.electron.app.
+    appBundleId: 'com.digitalbiologylab.promptstudio',
   },
   rebuildConfig: {},
   hooks: {

@@ -1,5 +1,5 @@
-# 使用方式: 先 npm run package，再对本脚本用 --pd 指向 out/app-win32-x64
-# 即: npm run dist 会执行 package && electron-builder --win --pd out/app-win32-x64
+# 使用方式: 先 npm run package，再对本脚本用 --pd 指向 out/AnnoBio-win32-x64
+# 即: npm run dist 会执行 package && electron-builder --win --pd out/AnnoBio-win32-x64
 appId: com.digitalbiologylab.promptstudio
 productName: AnnoBio
 directories:
