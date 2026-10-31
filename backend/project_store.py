@@ -38,7 +38,7 @@ from asset_store import create_session, detect_image_mime, detect_pdf_mime, is_a
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
-DATA_DIR = Path(__file__).resolve().parent / "data"
+from data_dir import DATA_DIR  # backend/data, or ANNOBIO_DATA_DIR in installed desktop builds
 PROJECTS_DIR = DATA_DIR / "projects"
 MAX_IMAGE_BYTES = 30 * 1024 * 1024
 MAX_PDF_BYTES = 50 * 1024 * 1024  # matches asset_store.py's limit

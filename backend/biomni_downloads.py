@@ -11,6 +11,7 @@ from pathlib import Path
 import shutil
 import threading
 
+from data_dir import DATA_DIR
 from database_availability import require_data_lake
 
 MANIFEST = json.loads((Path(__file__).parent / "biomni_manifest.json").read_text(encoding="utf-8"))
@@ -23,7 +24,7 @@ _ACTIVE = {}
 
 
 def cache_directory():
-    return Path(os.environ.get("ANNOBIO_BIOMNI_CACHE_DIR") or Path(__file__).parent / "data" / "biomni-cache").resolve()
+    return Path(os.environ.get("ANNOBIO_BIOMNI_CACHE_DIR") or DATA_DIR / "biomni-cache").resolve()
 
 
 def _filename(filename):

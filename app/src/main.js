@@ -346,12 +346,24 @@ function getBackendCwd() {
   return path.join(getRepoRoot(), 'backend');
 }
 
+// The backend's data folder (credentials, settings, projects, run history, caches), passed to it
+// as ANNOBIO_DATA_DIR. Packaged: the OS per-user app-data folder (%APPDATA%\AnnoBio,
+// ~/Library/Application Support/AnnoBio), so data survives upgrades and is never written into
+// the installed app, which on macOS is a signed bundle replaced wholesale on update.
+// Dev: backend/data in the repo.
+function getDataDir() {
+  if (app.isPackaged) {
+    return path.join(app.getPath('userData'), 'data');
+  }
+  return path.join(getBackendCwd(), 'data');
+}
+
 function getDatasetDownloadsDirectory() {
-  return path.resolve(process.env.ANNOBIO_BIOMNI_CACHE_DIR || path.join(getBackendCwd(), 'data', 'biomni-cache'));
+  return path.resolve(process.env.ANNOBIO_BIOMNI_CACHE_DIR || path.join(getDataDir(), 'biomni-cache'));
 }
 
 function getAgentSessionsDir() {
-  return path.join(getBackendCwd(), 'data', 'agent_sessions');
+  return path.join(getDataDir(), 'agent_sessions');
 }
 
 function getAgentSessionFile(projectPath) {
@@ -507,7 +519,11 @@ function startPythonBackendInner() {
     env: {
       ...process.env,
       PROMPT_STUDIO_ASSET_TOKEN: assetToken,
+      ANNOBIO_DATA_DIR: getDataDir(),
       ANNOBIO_BIOMNI_CACHE_DIR: getDatasetDownloadsDirectory(),
+      // Packaged macOS: write Python's bytecode cache outside the signed app bundle.
+      ...(app.isPackaged && process.platform === 'darwin'
+        ? { PYTHONPYCACHEPREFIX: path.join(app.getPath('userData'), 'pycache') } : {}),
       PYTHONUNBUFFERED: '1',
       PYTHONUTF8: '1',
       PYTHONIOENCODING: 'utf-8',

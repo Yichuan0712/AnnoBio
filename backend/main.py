@@ -147,7 +147,7 @@ async def _reconfigure_stdio_after_uvicorn() -> None:
 
 
 # Credential storage path (not committed to git)
-DATA_DIR = Path(__file__).resolve().parent / "data"
+from data_dir import DATA_DIR  # backend/data, or ANNOBIO_DATA_DIR in installed desktop builds
 CREDENTIALS_FILE = DATA_DIR / "credentials.json"
 RUN_JOBS_FILE = DATA_DIR / "run_jobs.json"
 SETTINGS_FILE = DATA_DIR / "settings.json"

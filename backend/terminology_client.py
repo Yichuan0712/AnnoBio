@@ -52,7 +52,7 @@ MEDICAL_CONCEPT_MATCH_SOURCES = ("auto", "rxnorm", "mesh", "hgnc", "pubchem", "g
 
 _TIMEOUT = 15.0
 
-DATA_DIR = Path(__file__).resolve().parent / "data"
+from data_dir import DATA_DIR  # backend/data, or ANNOBIO_DATA_DIR in installed desktop builds
 TERMINOLOGY_CACHE_FILE = DATA_DIR / "terminology_cache.json"
 
 _cache_lock = threading.Lock()
