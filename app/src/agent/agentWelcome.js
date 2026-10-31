@@ -1,12 +1,22 @@
 /** Lightweight empty-chat guidance; examples become drafts, never automatic requests. */
-export function createAgentWelcome({ projectOpen, hasNodes, onChoose }) {
+export function createAgentWelcome({ projectOpen, hasNodes, onChoose, onDismiss }) {
   const element = document.createElement('section');
   element.className = 'agent-window__welcome';
   element.setAttribute('aria-label', 'What the Agent can help with');
 
+  const header = document.createElement('div');
+  header.className = 'agent-window__welcome-header';
   const title = document.createElement('h3');
   title.className = 'agent-window__welcome-title';
   title.textContent = 'What would you like to do?';
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'agent-window__welcome-close';
+  close.textContent = '\u00d7';
+  close.title = 'Dismiss suggestions';
+  close.setAttribute('aria-label', 'Dismiss Agent suggestions');
+  close.addEventListener('click', () => onDismiss?.());
+  header.append(title, close);
   const description = document.createElement('p');
   description.className = 'agent-window__welcome-description';
   description.textContent = 'I can help you learn AnnoBio, find biomedical data, build pipelines, and improve prompts.';
@@ -35,6 +45,6 @@ export function createAgentWelcome({ projectOpen, hasNodes, onChoose }) {
   const hint = document.createElement('p');
   hint.className = 'agent-window__welcome-hint';
   hint.textContent = 'Choose an example to edit, or describe your task below.';
-  element.append(title, description, examples, hint);
+  element.append(header, description, examples, hint);
   return element;
 }

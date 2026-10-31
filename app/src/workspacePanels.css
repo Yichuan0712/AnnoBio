@@ -131,7 +131,7 @@
 .workspace-dock .agent-window__sidebar-header { display: none; }
 .workspace-dock .agent-window__chat-list { padding: 8px; }
 .workspace-dock .agent-window__conversation { padding: 14px; }
-.workspace-dock .agent-window__messages:has(> .agent-window__welcome) { padding-top: 0; }
+.workspace-dock .agent-window__messages { padding-top: 0; }
 .workspace-dock .agent-window__composer { padding: 12px; }
 
 .workspace-panel-resizer { position: absolute; z-index: 20; touch-action: none; }

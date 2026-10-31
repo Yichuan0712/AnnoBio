@@ -177,17 +177,58 @@
 }
 
 .agent-window__welcome {
+  box-sizing: border-box;
+  width: 100%;
   max-width: 480px;
-  padding: 0 0 4px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
   min-width: 0;
 }
 
+.agent-window__welcome-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
 .agent-window__welcome-title {
-  margin: 0 0 8px;
+  margin: 0;
   color: var(--text);
   font-size: 16px;
   font-weight: 600;
   line-height: 1.4;
+}
+
+.agent-window__welcome-close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.agent-window__welcome-close:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.agent-window__welcome-close:focus-visible {
+  outline: 2px solid var(--text-muted);
+  outline-offset: 2px;
 }
 
 .agent-window__welcome-description,

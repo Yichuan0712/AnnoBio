@@ -68,6 +68,15 @@ test('web empty-chat examples fill a saved draft without sending and stay out of
       assert.equal(changed, 1);
       assert.equal(inputEl.focused, true);
       assert.equal(chat.messages.length, 0);
+      welcome.querySelector('.agent-window__welcome-close').listeners.get('click')();
+      assert.equal(chat.welcomeDismissed, true);
+      assert.equal(changed, 2);
+      assert.equal(chat.unsentDraft, inputEl.value);
+      assert.equal(chat.messages.length, 0);
+      assert.equal(messagesEl.querySelector('.agent-window__welcome'), null);
+      // Rendering the same conversation again must not bring dismissed suggestions back.
+      session.setConversation(chat);
+      assert.equal(messagesEl.querySelector('.agent-window__welcome'), null);
       chat.messages.push({ role: 'user', content: 'Hello' },
         { role: 'tool', name: 'web_search', label: 'Searched the web', content: JSON.stringify({ results: [
           { title: 'Official source', url: 'https://example.org/' },

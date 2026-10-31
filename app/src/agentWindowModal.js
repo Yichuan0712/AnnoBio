@@ -174,6 +174,7 @@ function normalizeStoredChats(data) {
           pending: chat.pending === true,
           pendingStatus: String(chat.pendingStatus || '').trim(),
           unsentDraft: String(chat.unsentDraft || ''),
+          welcomeDismissed: chat.welcomeDismissed === true,
           unsentAttachments: normalizeStoredAttachments(chat.unsentAttachments),
           messages: Array.isArray(chat.messages)
             ? chat.messages

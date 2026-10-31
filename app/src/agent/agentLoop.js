@@ -220,7 +220,7 @@ export async function runAgentLoop({ messages, credentialId, runtime, workspaceS
   const startedAt = Date.now();
   let toolCallCount = 0;
   const webCalls = { web_search: 0, read_webpage: 0 };
-  const webLimits = { web_search: 2, read_webpage: 3 };
+  const webLimits = { web_search: 4, read_webpage: 6 };
   let budgetSpent = false;
   const progress = (p) => { if (onProgress) onProgress(p); };
   const projectOpen = runtime.projectOpen !== false;

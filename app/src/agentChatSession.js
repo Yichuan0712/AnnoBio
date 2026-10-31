@@ -618,10 +618,16 @@ export function mountAgentChatSession({
     messagesEl.innerHTML = '';
     const messages = ensureConversationMessages(conversation);
     const busy = conversation?.pending || sendInFlight;
-    if (conversation && !messages.length && !busy && !window.electronAPI) {
+    if (conversation && !conversation.welcomeDismissed && !messages.length && !busy && !window.electronAPI) {
       messagesEl.appendChild(createAgentWelcome({
         projectOpen: workspace.hasProject?.() !== false,
         hasNodes: Boolean(workspace.getCanvasState?.()?.nodes?.length),
+        onDismiss: () => {
+          conversation.welcomeDismissed = true;
+          notifyConversationDraftChanged(conversation);
+          renderActiveConversation();
+          inputEl.focus();
+        },
         onChoose: (prompt) => {
           // Keep any existing draft or attachments; choosing an example does not send it.
           const draft = String(inputEl.value || '').trim();

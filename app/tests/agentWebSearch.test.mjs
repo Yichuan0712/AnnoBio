@@ -27,8 +27,8 @@ test('web lookup limits stop repeated model calls while preserving sources and a
     }
     assert.ok(url.endsWith('/api/agent/turn'));
     turns += 1;
-    const calls = [...Array.from({ length: 4 }, (_, i) => ({ id: `s${i}`, name: 'web_search', arguments: '{"query":"example"}' })),
-      ...Array.from({ length: 5 }, (_, i) => ({ id: `r${i}`, name: 'read_webpage', arguments: '{"url":"https://example.org/"}' }))];
+    const calls = [...Array.from({ length: 6 }, (_, i) => ({ id: `s${i}`, name: 'web_search', arguments: '{"query":"example"}' })),
+      ...Array.from({ length: 8 }, (_, i) => ({ id: `r${i}`, name: 'read_webpage', arguments: '{"url":"https://example.org/"}' }))];
     const events = turns === 1 ? [{ type: 'tool_calls', tool_calls: calls }, { type: 'done', finish_reason: 'tool_calls' }]
       : [{ type: 'text', delta: 'Evidence: [Example](https://example.org/)' }, { type: 'done', finish_reason: 'stop' }];
     return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''));
@@ -36,8 +36,8 @@ test('web lookup limits stop repeated model calls while preserving sources and a
   const messages = [{ role: 'user', content: 'Look this up' }];
   const progress = [];
   assert.equal(await runAgentLoop({ messages, credentialId: 'model', runtime: { projectOpen: false }, workspaceSummary: '', onProgress: p => progress.push(p.status) }), 'answered');
-  assert.equal(requests.filter(url => url.endsWith('web-search')).length, 2);
-  assert.equal(requests.filter(url => url.endsWith('webpage')).length, 3);
+  assert.equal(requests.filter(url => url.endsWith('web-search')).length, 4);
+  assert.equal(requests.filter(url => url.endsWith('webpage')).length, 6);
   assert.equal(messages.filter(m => m.role === 'tool' && !m.ok).length, 4);
   assert.ok(messages.some(m => m.role === 'tool' && m.content.includes('Source evidence')));
   assert.ok(messages.at(-1).content.includes('https://example.org/'));
