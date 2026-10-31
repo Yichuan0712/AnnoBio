@@ -96,7 +96,24 @@ function credentialStatusButton(c) {
   return `<button type="button" class="credentials-status-btn credentials-status-btn--${kind}" data-status-id="${c.id}" title="${escapeHtml(title)}">${STATUS_TEXT[kind]}</button>`;
 }
 
-const TRASH_ICON = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4M6.6 6.5v4.5M9.4 6.5v4.5"/></svg>';
+// Whose servers a LiteLLM credential without a Base URL calls.
+const DEFAULT_ENDPOINT_LABELS = {
+  openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Google Gemini', deepseek: 'DeepSeek', bedrock: 'AWS Bedrock',
+};
+
+/** The API Base cell: AnnoBio's model, OpenRouter, a provider's default endpoint, or a custom URL. */
+function credentialEndpointCell(c) {
+  if (c.builtin) return 'Provided by AnnoBio';
+  if (c.provider === 'openrouter') return 'openrouter.ai';
+  const url = (c.base_url || '').trim();
+  if (!url) {
+    const owner = DEFAULT_ENDPOINT_LABELS[c.provider];
+    return `<span class="credentials-endpoint-default">${owner ? `${escapeHtml(owner)} default` : 'Provider default'}</span>`;
+  }
+  return `<span title="${escapeHtml(url)}">${escapeHtml(url.replace(/^https?:\/\//i, '').replace(/\/+$/, ''))}</span>`;
+}
+
+const TRASH_ICON ='<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4M6.6 6.5v4.5M9.4 6.5v4.5"/></svg>';
 
 // The web app never shows stored API keys, so its table has no API key column.
 const showKeyColumn = () => Boolean(window.electronAPI);
@@ -120,7 +137,7 @@ function renderCredentialsTable(scope, list) {
   tbody.innerHTML = list.map((c) => `
     <tr data-credential-id="${c.id}">
       <td class="cred-col-model">${escapeHtml(credentialModelLabel(c))} ${credentialSourceBadge(c)}</td>
-      <td class="cred-col-base credentials-provider-cell">${c.builtin ? 'Provided by AnnoBio' : escapeHtml(c.base_url || 'Default')}</td>${keyCell(c)}
+      <td class="cred-col-base credentials-provider-cell">${credentialEndpointCell(c)}</td>${keyCell(c)}
       <td class="cred-col-status">${credentialStatusButton(c)}</td>
       <td class="cred-col-delete">${c.builtin ? '' : `<button type="button" class="credentials-delete-btn" data-id="${c.id}" aria-label="Delete ${escapeHtml(credentialModelLabel(c))}" title="Delete">${TRASH_ICON}</button>`}</td>
     </tr>

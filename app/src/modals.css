@@ -1568,6 +1568,11 @@ html.dark .credential-source-badge--litellm { color: #93c5fd; background: rgba(5
 }
 html.dark .pill-select__pill--warning { background: rgba(202, 138, 4, 0.28); }
 
+/* API Base: a provider's own default endpoint, as opposed to a URL the user entered. */
+.credentials-endpoint-default {
+  color: var(--text-muted);
+}
+
 /* The Status column: the last test's result, clicked to test again (settingsModal.js). */
 .credentials-status-btn {
   padding: 0;
