@@ -232,6 +232,33 @@
   font-size: 12px;
 }
 
+.agent-web-link {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+
+.agent-web-link:hover {
+  color: var(--text-muted);
+}
+
+.agent-window__web-sources {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  margin: 6px 0 2px;
+  font-size: 12px;
+}
+
+.agent-window__web-error {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .agent-window__pending {
   display: flex;
   flex-direction: column;

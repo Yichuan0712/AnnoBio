@@ -68,9 +68,19 @@ test('web empty-chat examples fill a saved draft without sending and stay out of
       assert.equal(changed, 1);
       assert.equal(inputEl.focused, true);
       assert.equal(chat.messages.length, 0);
-      chat.messages.push({ role: 'user', content: 'Hello' });
+      chat.messages.push({ role: 'user', content: 'Hello' },
+        { role: 'tool', name: 'web_search', label: 'Searched the web', content: JSON.stringify({ results: [
+          { title: 'Official source', url: 'https://example.org/' },
+          { title: 'Unsafe source', url: 'javascript:alert(1)' },
+        ] }) },
+        { role: 'tool', name: 'read_webpage', label: 'Read a webpage', ok: false, content: '{"error":"The website blocked this request."}' });
       session.setConversation(chat);
       assert.equal(messagesEl.querySelector('.agent-window__welcome'), null);
+      const sources = messagesEl.querySelector('.agent-window__web-sources');
+      assert.equal(sources.children.length, 1);
+      assert.equal(sources.children[0].href, 'https://example.org/');
+      assert.equal(sources.children[0].textContent, 'Official source');
+      assert.equal(messagesEl.querySelector('.agent-window__web-error').textContent, 'The website blocked this request.');
     }
     await tick();
   }

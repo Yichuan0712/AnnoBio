@@ -14,7 +14,7 @@ import { createBackendLog } from './backendLog.js';
 import { createFolderAccessStore, listFolder } from './agent/attachments/folderAccess.js';
 import { APP_NAME, WINDOWS_APP_ID, windowsTaskbarDetails } from './appIdentity.js';
 import { IMAGE_FILE_EXTENSIONS } from './fileTypes.js';
-import { allowedExternalUrl } from './externalLinks.js';
+import { allowedExternalUrl, allowedWebSourceUrl } from './externalLinks.js';
 
 if (process.platform === 'win32') app.setAppUserModelId(WINDOWS_APP_ID);
 
@@ -764,6 +764,13 @@ ipcMain.handle('backend-log:renderer-error', (_event, entry) => {
 ipcMain.handle('shell:open-external', async (_e, url) => {
   const allowed = allowedExternalUrl(url);
   if (!allowed) return { error: 'This external link is not supported.' };
+  await shell.openExternal(allowed);
+  return { ok: true };
+});
+
+ipcMain.handle('shell:open-web-source', async (_e, url) => {
+  const allowed = allowedWebSourceUrl(url);
+  if (!allowed) return { error: 'Only public HTTP or HTTPS source links can be opened.' };
   await shell.openExternal(allowed);
   return { ok: true };
 });

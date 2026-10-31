@@ -15,6 +15,7 @@ import { iconFileText, iconFolder, iconX } from './icons.js';
 import { findPathCandidates } from './agent/attachments/pathMentions.js';
 import { createLocalFolderRuntime } from './agent/attachments/localFolderRuntime.js';
 import { createAgentWelcome } from './agent/agentWelcome.js';
+import { allowedWebSourceUrl, attachWebSourceLinks } from './externalLinks.js';
 
 const API_BASE = BACKEND_API_BASE;
 const TITLE_SUMMARY_MAX_ROUNDS = 3;
@@ -161,6 +162,7 @@ function createAssistantTextNode(text) {
   contentEl.className = 'agent-window__message-content';
   contentEl.innerHTML = formatAgentText(text);
   bubbleEl.appendChild(contentEl);
+  attachWebSourceLinks(wrapper);
   return wrapper;
 }
 
@@ -173,6 +175,34 @@ function createActivityNode(items) {
     const isCheck = (item.name === PROPOSE_CHANGES_TOOL || item.name === RUN_NODES_TOOL) && !item.outcome;
     itemEl.className = `agent-window__activity-item${isCheck ? ' is-check' : item.ok === false ? ' is-error' : ''}`;
     itemEl.textContent = item.label || item.name;
+    if (item.name === 'web_search' || item.name === 'read_webpage') {
+      let result;
+      try { result = JSON.parse(item.content || '{}'); } catch (_) {}
+      const sources = result?.error ? [] : item.name === 'web_search' ? result?.results || []
+        : result?.url ? [{ url: result.url, title: result.title }] : [];
+      if (sources.length) {
+        const links = document.createElement('div');
+        links.className = 'agent-window__web-sources';
+        for (const source of sources.slice(0, 5)) {
+          const url = allowedWebSourceUrl(source.url);
+          if (!url) continue;
+          const link = document.createElement('a');
+          link.className = 'agent-web-link';
+          link.href = url;
+          link.textContent = source.title || new URL(url).hostname;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          links.appendChild(link);
+        }
+        attachWebSourceLinks(links);
+        itemEl.appendChild(links);
+      } else if (result?.error) {
+        const failure = document.createElement('div');
+        failure.className = 'agent-window__web-error';
+        failure.textContent = result.error;
+        itemEl.appendChild(failure);
+      }
+    }
     listEl.appendChild(itemEl);
   }
   return listEl;

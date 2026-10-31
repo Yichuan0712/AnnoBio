@@ -32,7 +32,7 @@ const toolNames = (request) => request.tools.map((definition) => definition.func
 test('with no project open only the tools that need no canvas, and create_project, are offered', async () => {
   await withBackend(() => ({ text: 'Tell me about your data.' }), async (requests) => {
     await runAgentLoop({ messages: [{ role: 'user', content: 'Hi' }], credentialId: 'c', runtime: { projectOpen: false }, workspaceSummary: 'No project is open.' });
-    assert.deepEqual(toolNames(requests[0]), ['ask_user', 'create_project', 'inspect_source', 'list_models', 'read_guide', 'search_source']);
+    assert.deepEqual(toolNames(requests[0]), ['ask_user', 'create_project', 'inspect_source', 'list_models', 'read_guide', 'read_webpage', 'search_source', 'web_search']);
     assert.equal(requests[0].project_open, false);
   });
 });

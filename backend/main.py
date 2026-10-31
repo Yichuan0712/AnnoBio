@@ -64,6 +64,7 @@ from agent.system_prompt import (
     list_guides as list_agent_guides,
     read_guide as read_agent_guide,
 )
+from agent.web_search_routes import router as agent_web_router
 from llm import (
     chat as llm_chat,
     is_tools_unsupported_error,
@@ -97,6 +98,7 @@ from project_store import (
 app = FastAPI()
 app.include_router(asset_router)
 app.include_router(project_router)
+app.include_router(agent_web_router)
 
 BACKEND_HOST = os.environ.get("PROMPT_STUDIO_BACKEND_HOST", "127.0.0.1")
 BACKEND_PORT = int(os.environ.get("PROMPT_STUDIO_BACKEND_PORT", "8000"))

@@ -219,6 +219,8 @@ export function resolveFolderAccess(messages, request, result) {
 export async function runAgentLoop({ messages, credentialId, runtime, workspaceSummary, contextSummary = null, signal, onProgress, onMessage, onSummary }) {
   const startedAt = Date.now();
   let toolCallCount = 0;
+  const webCalls = { web_search: 0, read_webpage: 0 };
+  const webLimits = { web_search: 2, read_webpage: 3 };
   let budgetSpent = false;
   const progress = (p) => { if (onProgress) onProgress(p); };
   const projectOpen = runtime.projectOpen !== false;
@@ -364,8 +366,16 @@ export async function runAgentLoop({ messages, credentialId, runtime, workspaceS
       } else {
         toolCallCount += 1;
         const label = describeToolCall(call.name, args, runtime);
-        progress({ status: `${label}...` });
-        result = { ...(await executeAgentTool(call.name, args, { ...runtime, signal })), label };
+        if (call.name in webCalls && webCalls[call.name] >= webLimits[call.name]) {
+          result = { ok: false, content: JSON.stringify({ error: `The ${call.name} limit for this message is reached. Answer with available sources and explain what could not be checked.` }), label: 'Web lookup limit reached' };
+        } else {
+          if (call.name in webCalls) webCalls[call.name] += 1;
+          progress({ status: call.name === 'web_search' ? 'Searching the web...' : call.name === 'read_webpage' ? 'Reading the webpage...' : `${label}...` });
+          const outcome = await executeAgentTool(call.name, args, { ...runtime, signal });
+          const activityLabel = !outcome.ok && call.name === 'web_search' ? 'Web search unavailable'
+            : !outcome.ok && call.name === 'read_webpage' ? 'Webpage could not be read' : label;
+          result = { ...outcome, label: activityLabel };
+        }
       }
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       messages.push({
