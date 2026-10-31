@@ -176,6 +176,78 @@
   gap: 8px;
 }
 
+.agent-window__welcome {
+  max-width: 480px;
+  padding: 12px 0 4px;
+  min-width: 0;
+}
+
+.agent-window__welcome-title {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.agent-window__welcome-description,
+.agent-window__welcome-hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.agent-window__welcome-examples {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 16px 0 12px;
+}
+
+.agent-window__welcome-example {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.agent-window__welcome-example:hover {
+  background: var(--hover);
+}
+
+.agent-window__welcome-example:focus-visible {
+  outline: 2px solid var(--text-muted);
+  outline-offset: 2px;
+}
+
+.agent-window__welcome-hint {
+  font-size: 12px;
+}
+
+.agent-window__pending {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16px;
+  min-width: 0;
+}
+
+.agent-window__pending > .agent-window__message {
+  align-self: stretch;
+}
+
+.agent-window__pending > [hidden] {
+  display: none;
+}
+
 .agent-window__message-action {
   position: absolute;
   right: 12px;

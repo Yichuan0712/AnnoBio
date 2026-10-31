@@ -505,10 +505,10 @@ async def _fetch_user_projects(user_id: int) -> list[dict]:
     without needing an inbound Request to forward since this is a plain GET with no body/headers
     of its own."""
     try:
-        name = containers.ensure_running(user_id)
+        name = await asyncio.to_thread(containers.ensure_running, user_id)
     except containers.BackendUnavailable:
         return []
-    db.touch_container(user_id)
+    await asyncio.to_thread(db.touch_container, user_id)
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.get(f"http://{name}:{containers.BACKEND_PORT}/api/projects")
@@ -897,7 +897,12 @@ async def no_cache_for_pages(request: Request, call_next):
     response = await call_next(request)
     if request.url.path in ("/images/logo_name_nav.webp", "/images/logo_nav.webp") and response.status_code == 200:
         response.headers["Cache-Control"] = "public, max-age=86400"
-    elif not request.url.path.startswith("/app/assets/"):
+    elif request.url.path.startswith("/app/assets/"):
+        # Vite includes a content hash in these URLs. Reopening a workspace can
+        # reuse the bundle without a download or a validation round trip.
+        if response.status_code in (200, 304):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    else:
         response.headers["Cache-Control"] = "no-store, must-revalidate"
     return response
 

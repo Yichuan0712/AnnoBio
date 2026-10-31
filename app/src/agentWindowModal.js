@@ -6,6 +6,7 @@ import { iconCollapse } from './modalMaximize.js';
 import { normalizeStoredAttachments } from './agent/attachments/attachmentTypes.js';
 import { attachmentsSupported } from './agent/attachments/desktopAttachments.js';
 import { iconPaperclip } from './icons.js';
+import { createConversationSaver } from './agent/conversationSaver.js';
 
 // Web fallback for the electronAPI methods this module relies on: same two method names,
 // backed by backend/project_store.py's REST endpoints instead of local-file IPC, keyed by
@@ -14,7 +15,7 @@ import { iconPaperclip } from './icons.js';
 const webAgentStorageApi = {
   async loadAgentConversations(projectId) {
     const res = await fetch(`${BACKEND_API_BASE}/api/projects/${projectId}/agent-conversations`);
-    if (!res.ok) return { activeConversationId: '', conversations: [] };
+    if (!res.ok) throw new Error('Could not load agent conversations.');
     return res.json();
   },
   async saveAgentConversations(projectId, payload) {
@@ -310,6 +311,15 @@ export async function openAgentWindowModal(options = {}) {
   }
   let chatSession = null;
   let saveChain = Promise.resolve();
+  const saver = createConversationSaver(async () => {
+    if (loadFailed || !storageApi?.saveAgentConversations) return;
+    try {
+      await saveChain;
+      await storageApi.saveAgentConversations(projectPath, buildSavePayload());
+    } catch (error) {
+      console.error('Save agent conversations:', error);
+    }
+  });
 
   function buildSavePayload(list = chats, activeId = activeChatId) {
     return {
@@ -329,15 +339,7 @@ export async function openAgentWindowModal(options = {}) {
 
   function saveConversations() {
     if (loadFailed || !storageApi?.saveAgentConversations) return;
-    const payload = buildSavePayload();
-    const targetStorage = storageApi;
-    const targetProject = projectPath;
-    saveChain = saveChain
-      .catch(() => {})
-      .then(() => targetStorage.saveAgentConversations(targetProject, payload))
-      .catch((error) => {
-        console.error('Save agent conversations:', error);
-      });
+    saver.schedule();
   }
 
   /**
@@ -348,6 +350,8 @@ export async function openAgentWindowModal(options = {}) {
    * in neither.
    */
   async function adoptProject(nextPath, conversationId) {
+    // Finish writes to the old store before moving the chat to its new project.
+    await saver.flush();
     const chat = chats.find((item) => item.id === conversationId);
     const remaining = chats.filter((item) => item !== chat);
     const globalPayload = buildSavePayload(remaining, remaining[0]?.id || '');
@@ -417,8 +421,12 @@ export async function openAgentWindowModal(options = {}) {
     chatSession?.stopAssistant?.();
     chatSession?.destroy?.();
     chatSession = null;
+    void saver.flush();
+    window.removeEventListener('pagehide', flushConversations);
     overlay.remove();
   }
+  function flushConversations() { void saver.flush(); }
+  window.addEventListener('pagehide', flushConversations);
   overlay.destroyAgentWindow = destroy;
 
   const closeButton = overlay.querySelector('.modal-close');

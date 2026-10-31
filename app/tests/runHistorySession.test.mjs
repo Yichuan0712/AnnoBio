@@ -38,6 +38,15 @@ test('opening a new empty project marks it as using History', async () => {
   assert.deepEqual(opened.state.nodes, []);
 });
 
+test('opening a project reads the history index only once when no interrupted evaluation needs repair', async () => {
+  let loads = 0;
+  const session = new RunHistorySession({
+    loadIndex: async () => { loads += 1; return { version: 1, records: [] }; },
+  });
+  await session.open('project', { historyVersion: 1, nodes: [], connections: [] });
+  assert.equal(loads, 1);
+});
+
 test('opening a canvas that already uses History does not save it again', async () => {
   const recorded = await recordGraph(graph);
   const { session, savedCanvases } = memorySession(recorded.records);

@@ -47,13 +47,17 @@ export class RunHistorySession {
     if (!projectId) throw new Error('Open a project before using history.');
     this.projectId = projectId;
     this.index = await this.storage.loadIndex(projectId);
+    let repaired = false;
     // Evaluate runs are owned by this renderer. A prior renderer cannot finish these attempts.
     for (const entry of this.index.records.filter(item => item.kind === 'score' && item.status === 'running')) {
       const record = await this.storage.loadRecord(projectId, entry.id);
-      if (record?.evaluationVersion === 1) await this.storage.saveRecord(projectId, { ...record,
-        status: 'stopped', updatedAt: this.now?.() || new Date().toISOString(), error: 'Evaluation was interrupted. Run Evaluate again.' });
+      if (record?.evaluationVersion === 1) {
+        await this.storage.saveRecord(projectId, { ...record,
+          status: 'stopped', updatedAt: this.now?.() || new Date().toISOString(), error: 'Evaluation was interrupted. Run Evaluate again.' });
+        repaired = true;
+      }
     }
-    this.index = await this.storage.loadIndex(projectId);
+    if (repaired) this.index = await this.storage.loadIndex(projectId);
     let canvas = state;
     if (state?.historyVersion !== 1) {
       canvas = { ...state, historyVersion: 1 };

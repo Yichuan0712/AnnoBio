@@ -1,6 +1,7 @@
 """Reverse proxy: an authenticated request for /api/* is forwarded to the requesting user's own
 backend container (see containers.py) — the Hub has no run/review/credential logic of its own.
 """
+import asyncio
 from urllib.parse import quote
 
 import httpx
@@ -15,7 +16,9 @@ import db
 async def proxy_request(request: Request, user: dict) -> Response:
     user_id = int(user["id"])
     try:
-        name = containers.ensure_running(user_id)
+        # Docker inspection/startup and readiness polling are blocking. Keep them off
+        # the event loop so opening a workspace cannot stall other users' token streams.
+        name = await asyncio.to_thread(containers.ensure_running, user_id)
     except containers.CapacityExceeded as e:
         # A distinct, JSON body (rather than BackendUnavailable's plain text below) so the web
         # app can recognize this specific case and point the user at /download instead of just
@@ -23,7 +26,7 @@ async def proxy_request(request: Request, user: dict) -> Response:
         return JSONResponse({"error": "capacity_exceeded", "detail": str(e)}, status_code=503)
     except containers.BackendUnavailable as e:
         return Response(content=str(e), status_code=503)
-    db.touch_container(user_id)
+    await asyncio.to_thread(db.touch_container, user_id)
 
     target_url = f"http://{name}:{containers.BACKEND_PORT}{request.url.path}"
     if request.url.query:

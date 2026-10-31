@@ -7,6 +7,7 @@ just restarts the same container and volume rather than recreating anything.
 """
 import os
 import socket
+import threading
 import time
 
 import docker
@@ -36,6 +37,9 @@ MAX_ACTIVE_CONTAINERS = os.environ.get("PROMPT_STUDIO_MAX_ACTIVE_CONTAINERS")
 _CONTAINER_NAME_PREFIX = "promptstudio-user-"
 
 _client = None
+_start_locks: dict[int, threading.Lock] = {}
+_start_locks_guard = threading.Lock()
+_capacity_lock = threading.Lock()
 
 
 class BackendUnavailable(Exception):
@@ -87,6 +91,15 @@ def _wait_until_ready(name: str, timeout: float = 20.0, interval: float = 0.3) -
 
 
 def ensure_running(user_id: int) -> str:
+    # Several startup API requests can arrive together. Only one may create/start
+    # this user's container; followers also wait for it to become ready.
+    with _start_locks_guard:
+        lock = _start_locks.setdefault(user_id, threading.Lock())
+    with lock:
+        return _ensure_running(user_id)
+
+
+def _ensure_running(user_id: int) -> str:
     """Starts (or reuses) this user's backend container. Returns its container name, which is
     also its resolvable hostname on NETWORK_NAME — Docker's embedded DNS resolves container
     names for containers sharing a user-defined network."""
@@ -100,34 +113,32 @@ def ensure_running(user_id: int) -> str:
                 container.start()
                 just_started = True
         except NotFound:
-            if MAX_ACTIVE_CONTAINERS and _count_running_backend_containers() >= int(MAX_ACTIVE_CONTAINERS):
-                raise CapacityExceeded(
-                    "The server is at capacity right now. Please try again in a few minutes, "
-                    "or use the desktop app instead."
+            # Reserve capacity and create atomically across different users, now
+            # that requests can start containers from multiple worker threads.
+            with _capacity_lock:
+                if MAX_ACTIVE_CONTAINERS and _count_running_backend_containers() >= int(MAX_ACTIVE_CONTAINERS):
+                    raise CapacityExceeded(
+                        "The server is at capacity right now. Please try again in a few minutes, "
+                        "or use the desktop app instead."
+                    )
+                c.containers.run(
+                    BACKEND_IMAGE,
+                    name=name,
+                    detach=True,
+                    network=NETWORK_NAME,
+                    volumes={volume_name(user_id): {"bind": "/app/backend/data", "mode": "rw"}},
+                    environment={
+                        "PROMPT_STUDIO_PUBLIC_BASE_URL": PUBLIC_BASE_URL,
+                        "ANNOBIO_HOSTED_MODE": "1",
+                        "ANNOBIO_HOSTED_GATEWAY_URL": "http://hub:8080/internal/hosted-model",
+                        "ANNOBIO_HOSTED_TOKEN": account_token(user_id),
+                    },
+                    # 512m was too tight even at rest: uvicorn's baseline RSS was
+                    # already ~510MB. The PDF worker has its own RLIMIT_AS cap.
+                    mem_limit="1024m",
+                    nano_cpus=1_000_000_000,  # 1 CPU, bounds runaway Process scripts.
+                    restart_policy={"Name": "unless-stopped"},
                 )
-            c.containers.run(
-                BACKEND_IMAGE,
-                name=name,
-                detach=True,
-                network=NETWORK_NAME,
-                volumes={volume_name(user_id): {"bind": "/app/backend/data", "mode": "rw"}},
-                environment={
-                    "PROMPT_STUDIO_PUBLIC_BASE_URL": PUBLIC_BASE_URL,
-                    "ANNOBIO_HOSTED_MODE": "1",
-                    "ANNOBIO_HOSTED_GATEWAY_URL": "http://hub:8080/internal/hosted-model",
-                    "ANNOBIO_HOSTED_TOKEN": account_token(user_id),
-                },
-                # 512m was too tight even at rest: with dspy/langchain/boto3/fastembed/etc. all
-                # loaded, uvicorn's own baseline RSS was already ~510MB, so any extra memory
-                # pressure (e.g. PyMuPDF/pdfplumber parsing an image-heavy PDF) tipped the whole
-                # container over its cgroup limit and got uvicorn itself OOM-killed by the kernel
-                # — not a crash isolation problem, since a SIGKILL from outside the process can't
-                # be caught no matter how the work inside is isolated. See also the PDF worker's
-                # own RLIMIT_AS cap (main.py) as a second line of defense for any one file.
-                mem_limit="1024m",
-                nano_cpus=1_000_000_000,  # 1 CPU — cheap hardening against a runaway Process-node script.
-                restart_policy={"Name": "unless-stopped"},
-            )
             just_started = True
     except DockerException as e:
         raise BackendUnavailable(f"Could not start your workspace container: {e}") from e

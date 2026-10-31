@@ -14,6 +14,7 @@ import { attachmentsSupported } from './agent/attachments/desktopAttachments.js'
 import { iconFileText, iconFolder, iconX } from './icons.js';
 import { findPathCandidates } from './agent/attachments/pathMentions.js';
 import { createLocalFolderRuntime } from './agent/attachments/localFolderRuntime.js';
+import { createAgentWelcome } from './agent/agentWelcome.js';
 
 const API_BASE = BACKEND_API_BASE;
 const TITLE_SUMMARY_MAX_ROUNDS = 3;
@@ -330,8 +331,11 @@ function createSummaryDividerNode(text) {
 }
 
 function createPendingNode({ text, status, onStop }) {
-  const fragment = document.createDocumentFragment();
-  if (text) fragment.appendChild(createAssistantTextNode(text));
+  const element = document.createElement('div');
+  element.className = 'agent-window__pending';
+  const assistantEl = createAssistantTextNode('');
+  const contentEl = assistantEl.querySelector('.agent-window__message-content');
+  element.appendChild(assistantEl);
   const statusEl = document.createElement('div');
   statusEl.className = 'agent-window__status';
   const spinnerEl = document.createElement('span');
@@ -350,8 +354,22 @@ function createPendingNode({ text, status, onStop }) {
     onStop();
   });
   statusEl.append(spinnerEl, statusTextEl, stopBtn);
-  fragment.appendChild(statusEl);
-  return fragment;
+  element.appendChild(statusEl);
+  let previousText;
+  let previousStatus;
+  function update(nextText, nextStatus) {
+    if (nextText !== previousText) {
+      assistantEl.hidden = !nextText;
+      contentEl.innerHTML = formatAgentText(nextText);
+      previousText = nextText;
+    }
+    if (nextStatus !== previousStatus) {
+      statusTextEl.textContent = nextStatus || 'Thinking...';
+      previousStatus = nextStatus;
+    }
+  }
+  update(text, status);
+  return { element, update };
 }
 
 function createEditingMessageNode(content, options = {}) {
@@ -495,6 +513,7 @@ export function mountAgentChatSession({
   let editingMessageIndex = -1;
   let editingDraft = '';
   let renderScheduled = false;
+  let pendingView = null;
   // Why the last files offered to the tray were not attached; shown under it.
   let attachmentError = '';
   const titleRequestSerialByConversation = new Map();
@@ -544,7 +563,16 @@ export function mountAgentChatSession({
     renderScheduled = true;
     requestAnimationFrame(() => {
       renderScheduled = false;
-      if (isActive(conversation)) renderActiveConversation();
+      if (isActive(conversation)) {
+        // Tokens change only the live response. Keep history nodes (including
+        // expensive proposal diffs and the user's expanded cards) in place.
+        if (pendingView && conversation.pending) {
+          pendingView.update(conversation.streamingText || '', conversation.pendingStatus);
+          scrollToBottom();
+        } else {
+          renderActiveConversation();
+        }
+      }
     });
   }
 
@@ -556,9 +584,23 @@ export function mountAgentChatSession({
 
   function renderActiveConversation() {
     const conversation = getActiveConversation();
+    pendingView = null;
     messagesEl.innerHTML = '';
     const messages = ensureConversationMessages(conversation);
     const busy = conversation?.pending || sendInFlight;
+    if (conversation && !messages.length && !busy && !window.electronAPI) {
+      messagesEl.appendChild(createAgentWelcome({
+        projectOpen: workspace.hasProject?.() !== false,
+        hasNodes: Boolean(workspace.getCanvasState?.()?.nodes?.length),
+        onChoose: (prompt) => {
+          // Keep any existing draft or attachments; choosing an example does not send it.
+          const draft = String(inputEl.value || '').trim();
+          inputEl.value = draft ? `${draft}\n\n${prompt}` : prompt;
+          handleInput();
+          inputEl.focus();
+        },
+      }));
+    }
     const pendingInteraction = busy ? null : findPendingInteraction(messages);
     const responses = new Map(messages.filter((m) => m.role === 'tool' && USER_TOOLS.has(m.name)).map((m) => [m.toolCallId, m]));
     const summary = conversation?.contextSummary;
@@ -657,11 +699,12 @@ export function mountAgentChatSession({
     flushActivity();
 
     if (conversation?.pending) {
-      messagesEl.appendChild(createPendingNode({
+      pendingView = createPendingNode({
         text: conversation.streamingText || '',
         status: conversation.pendingStatus,
         onStop: stopAssistant,
-      }));
+      });
+      messagesEl.appendChild(pendingView.element);
     }
     scrollToBottom();
   }
