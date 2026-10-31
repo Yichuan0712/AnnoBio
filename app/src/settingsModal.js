@@ -96,10 +96,28 @@ function credentialStatusButton(c) {
   return `<button type="button" class="credentials-status-btn credentials-status-btn--${kind}" data-status-id="${c.id}" title="${escapeHtml(title)}">${STATUS_TEXT[kind]}</button>`;
 }
 
-// Whose servers a LiteLLM credential without a Base URL calls.
-const DEFAULT_ENDPOINT_LABELS = {
-  openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Google Gemini', deepseek: 'DeepSeek', bedrock: 'AWS Bedrock',
+// Whose servers a LiteLLM credential without a Base URL calls: the stored provider (backend
+// spellings, e.g. LEGACY_MODEL_PROVIDER_HINTS' "google") or LiteLLM's "<prefix>/model" prefix.
+const ENDPOINT_OWNERS = {
+  openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Google Gemini', google: 'Google Gemini',
+  vertex_ai: 'Google Vertex AI', deepseek: 'DeepSeek', bedrock: 'AWS Bedrock', 'amazon-bedrock': 'AWS Bedrock',
+  azure: 'Azure OpenAI', mistral: 'Mistral', groq: 'Groq', xai: 'xAI', cohere: 'Cohere',
+  together_ai: 'Together AI', fireworks_ai: 'Fireworks AI', perplexity: 'Perplexity', ollama: 'Ollama',
 };
+// An empty provider means LiteLLM routes by the bare model name; these are the families it knows.
+const MODEL_NAME_OWNERS = [
+  [/^(gpt-|chatgpt-|o\d)/i, 'OpenAI'], [/^claude/i, 'Anthropic'], [/^gemini/i, 'Google'],
+  [/^deepseek/i, 'DeepSeek'], [/^(mistral|codestral|ministral|magistral)/i, 'Mistral'],
+  [/^grok/i, 'xAI'], [/^command/i, 'Cohere'],
+];
+
+function endpointOwner(c) {
+  if (ENDPOINT_OWNERS[c.provider]) return ENDPOINT_OWNERS[c.provider];
+  const model = credentialModelLabel(c);
+  const prefix = model.includes('/') ? model.split('/')[0].toLowerCase() : '';
+  if (ENDPOINT_OWNERS[prefix]) return ENDPOINT_OWNERS[prefix];
+  return MODEL_NAME_OWNERS.find(([pattern]) => pattern.test(model))?.[1] || '';
+}
 
 /** The API Base cell: AnnoBio's model, OpenRouter, a provider's default endpoint, or a custom URL. */
 function credentialEndpointCell(c) {
@@ -107,7 +125,7 @@ function credentialEndpointCell(c) {
   if (c.provider === 'openrouter') return 'openrouter.ai';
   const url = (c.base_url || '').trim();
   if (!url) {
-    const owner = DEFAULT_ENDPOINT_LABELS[c.provider];
+    const owner = endpointOwner(c);
     return `<span class="credentials-endpoint-default">${owner ? `${escapeHtml(owner)} default` : 'Provider default'}</span>`;
   }
   return `<span title="${escapeHtml(url)}">${escapeHtml(url.replace(/^https?:\/\//i, '').replace(/\/+$/, ''))}</span>`;
