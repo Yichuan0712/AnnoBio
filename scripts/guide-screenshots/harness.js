@@ -159,6 +159,29 @@ const AGENT_MESSAGES = [
   },
 ];
 
+// README screenshot (?hero): matches OUTPUT_V1 / OUTPUT_V2 scored against REFERENCE.
+const HERO_MESSAGES = [
+  {
+    role: 'user',
+    content: 'Compare the two Prompt versions against the reviewed pairs. Is v2 ready for the full corpus?',
+  },
+  {
+    role: 'assistant',
+    content: [
+      '**v2 matches all 6 reviewed pairs.** v1 matched 4 and added 3 rows the curator did not expect.',
+      '',
+      'The Optimize edit fixed both failure types:',
+      '',
+      '1. **Gene symbols:** `APOE \u03b54` and `LRRK2 G2019S` are now `APOE` and `LRRK2`; the variants stay in `evidence`.',
+      '2. **Negative findings:** CLU, which the abstract reports as not associated, is no longer extracted.',
+      '',
+      'Five abstracts is a small sample. Before the full corpus, evaluate v2 on reviewed records that Optimize did not see. I can draft that split for your approval.',
+    ].join('\n'),
+  },
+];
+const agentMessages = params.has('hero') ? HERO_MESSAGES : params.has('welcome') ? [] : AGENT_MESSAGES;
+const agentTitle = params.has('hero') ? 'Compare Prompt versions' : params.has('welcome') ? 'New Agent' : 'Gene\u2013disease pipeline';
+
 window.fixture = {
   ABSTRACTS, REFERENCE, PROMPT_TEXT, OUTPUT_FORMAT, SCORE_MAPPING, PROCESS_CODE, OLD_SENTENCE, NEW_SENTENCE, HOME_REVIEW_PROTOCOL,
   dataset: table(['ID', 'Title', 'Abstract'], ABSTRACTS, 'abstract'),
@@ -281,7 +304,7 @@ window.fetch = async (url, opts = {}) => {
   ];
   else if (u.includes('/agent-conversations')) body = {
     format_version: 2, activeConversationId: 'guide',
-    conversations: [{ id: 'guide', title: params.has('welcome') ? 'New Agent' : 'Gene\u2013disease pipeline', updatedAt: Date.now(), messages: params.has('welcome') ? [] : AGENT_MESSAGES, unsentDraft: '' }],
+    conversations: [{ id: 'guide', title: agentTitle, updatedAt: Date.now(), messages: agentMessages, unsentDraft: '' }],
   };
   else if (u.includes('agent-hints')) body = {};
   else if (u.includes('/api/agent/context')) body = { context_window: 128000 };
@@ -310,7 +333,7 @@ if (params.has('desktop')) {
     onWindowMaximizedChanged: () => {},
     loadAgentConversations: async () => ({
       format_version: 2, activeConversationId: 'guide',
-      conversations: [{ id: 'guide', title: params.has('welcome') ? 'New Agent' : 'Gene\u2013disease pipeline', updatedAt: Date.now(), messages: params.has('welcome') ? [] : AGENT_MESSAGES, unsentDraft: '' }],
+      conversations: [{ id: 'guide', title: agentTitle, updatedAt: Date.now(), messages: agentMessages, unsentDraft: '' }],
     }),
     saveAgentConversations: async () => {},
     getBackendLog: async () => [],
@@ -319,7 +342,7 @@ if (params.has('desktop')) {
 }
 localStorage.clear();
 localStorage.setItem('annobio.workspacePanels.v1', JSON.stringify({
-  agent: params.has('agent'), pipeline: params.has('panel'), height: 300, width: 460, tab: params.get('panel') || 'pipeline',
+  agent: params.has('agent'), pipeline: params.has('panel'), height: Number(params.get('panelHeight')) || 300, width: 460, tab: params.get('panel') || 'pipeline',
 }));
 setTheme('light');
 initModalDrag();

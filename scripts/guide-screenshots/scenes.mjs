@@ -484,3 +484,57 @@ scenes.push({
     await ctx.shot('agent-welcome');
   },
 });
+
+// README hero (not a guide figure): the full evaluate -> optimize -> re-evaluate loop, with the
+// Agent comparing versions and the Prompt version chain below. To refresh the README image:
+//   node scripts/guide-screenshots/capture.mjs --out <tmp> readme-hero, then copy readme-hero.png
+//   to images/screenshot.png.
+scenes.push({
+  name: 'readme-hero',
+  viewport: { width: 1920, height: 940 },
+  async run(ctx) {
+    const { open, evaluate, wait, click, until, shot } = ctx;
+    await open('?agent=1&hero=1&panel=optimization&panelHeight=230&title=Gene%E2%80%93Disease%20Evidence%20Curation');
+    await buildBase(ctx, { zoom: 0.66 });
+    await runGenerate(ctx);
+    await addProcess(ctx);
+    await addEvaluate(ctx);
+    await runEvaluate(ctx);
+    await runOptimize(ctx);
+    await openOptimize(ctx, 'Suggested changes');
+    await acceptSuggestion(ctx);
+    await click('.review-detail-export-btn');
+    await until(`window.app.state().nodes.some(n => n.type === 'prompt' && n.nodeId !== 'prompt')`);
+    await wait(500);
+    await evaluate(`
+      const s = window.app.state();
+      const v2 = s.nodes.find(n => n.type === 'prompt' && n.nodeId !== 'prompt');
+      window.app.v2Id = v2.nodeId;
+      s.nodes.push({ type: 'run', nodeId: 'generate2', runName: 'Generate v2', left: 0, top: 0, runCredentialId: 'cred-demo', runInputToColumn: JSON.stringify({ title: 'Title', abstract: 'Abstract' }) });
+      s.nodes.push({ type: 'score', nodeId: 'evaluate2', scoreName: 'Evaluate v2', left: 0, top: 0, scoreGroundTruthId: 'reference', scoreMapping: JSON.stringify(window.fixture.SCORE_MAPPING), reviewMethod: 'issue_analysis_suggestions', reviewCredentialId: 'cred-demo' });
+      s.connections.push({ type: 'prompt-to-run', fromId: v2.nodeId, toId: 'generate2' });
+      s.connections.push({ type: 'data', fromId: 'abstracts', fromPort: 'result', toId: 'generate2' });
+      s.connections.push({ type: 'run-to-score', fromId: 'generate2', toId: 'evaluate2' });
+      await window.app.load(s);
+      return true;`);
+    await runGenerate(ctx, 'generate2');
+    await runEvaluate(ctx, 'evaluate2', 2);
+    await evaluate(`window.app.closeDialogs(); return true;`);
+    await wait(500);
+    await evaluate(`
+      const s = window.app.state();
+      const at = {
+        prompt: [30, 50], abstracts: [30, 450], reference: [340, 660],
+        generate: [340, 220], process: [650, 30], evaluate: [650, 300],
+        [window.app.optimizeId]: [960, 300], [window.app.v2Id]: [1270, 320],
+        generate2: [1580, 570], evaluate2: [1890, 570],
+      };
+      for (const n of s.nodes) if (at[n.nodeId]) [n.left, n.top] = at[n.nodeId];
+      s.nodes.find(n => n.nodeId === 'generate').runName = 'Generate v1';
+      s.nodes.find(n => n.nodeId === 'evaluate').scoreName = 'Evaluate v1';
+      await window.app.load(s);
+      return true;`);
+    await wait(1200);
+    await shot('readme-hero');
+  },
+});
