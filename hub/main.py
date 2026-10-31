@@ -11,7 +11,6 @@ import asyncio
 import datetime
 import mimetypes
 import os
-import time
 from html import escape
 from pathlib import Path
 
@@ -371,48 +370,18 @@ def whoami(request: Request):
     }
 
 
-GITHUB_LATEST_DOWNLOAD = "https://github.com/Yichuan0712/AnnoBio/releases/latest/download/"
-# Installer file name on the GitHub release (see app/electron-builder.yml) -> Google Drive copy.
-INSTALLERS = {
-    "AnnoBio-Setup-x64.exe": "https://drive.google.com/file/d/1BoNqaCO4QrfS6XlvbVhRjaF9RLkZ17Ly/view?usp=drive_link",
-    "AnnoBio-arm64.dmg": "https://drive.google.com/file/d/17tZiG-wMFrAlmfw7S96BQs0mhJfb5_-f/view?usp=drive_link",
-}
-_INSTALLER_CHECK_TTL_SEC = 600
-_installer_check: dict = {"at": 0.0, "public": set()}
-
-
-async def _installer_urls() -> dict[str, str]:
-    """Each installer's GitHub latest-release link once anyone can download it, else its Google
-    Drive copy. The repo is private for now and private release assets 404 for visitors, so this
-    asks GitHub without credentials, at most every 10 minutes: making the repo public (with a
-    non-prerelease release) switches the page over with no edit or deploy. A failed check keeps
-    the previous answer."""
-    now = time.time()
-    if now - _installer_check["at"] > _INSTALLER_CHECK_TTL_SEC:
-        try:
-            async with httpx.AsyncClient(timeout=3.0, follow_redirects=True) as client:
-                public = set()
-                for name in INSTALLERS:
-                    # Followed to the end: a public repo redirects latest/ even for a missing
-                    # file, which only 404s on the next hop; a private one 404s straight away.
-                    response = await client.head(GITHUB_LATEST_DOWNLOAD + name)
-                    if response.status_code == 200:
-                        public.add(name)
-            _installer_check["public"] = public
-        except httpx.HTTPError:
-            pass
-        _installer_check["at"] = now
-    return {name: GITHUB_LATEST_DOWNLOAD + name if name in _installer_check["public"] else drive
-            for name, drive in INSTALLERS.items()}
+# The newest non-prerelease GitHub release; file names are fixed in app/electron-builder.yml.
+# These only work for visitors once the repo is public.
+WINDOWS_INSTALLER_URL = "https://github.com/Yichuan0712/AnnoBio/releases/latest/download/AnnoBio-Setup-x64.exe"
+MAC_INSTALLER_URL = "https://github.com/Yichuan0712/AnnoBio/releases/latest/download/AnnoBio-arm64.dmg"
 
 
 @app.get("/download")
-async def download_page(request: Request):
-    """Public page for the two desktop installers (built by .github/workflows/build-desktop.yml,
-    linked from GitHub releases once public, Google Drive until then — see _installer_urls)."""
+def download_page(request: Request):
+    """Public page for the two desktop installers (built by .github/workflows/build-desktop.yml
+    and published as GitHub releases)."""
     user = current_user(request)
     browser_href = "/app" if user else "/login"
-    urls = await _installer_urls()
     body = f"""
       <h1>Download AnnoBio</h1>
       <p class="page-sub">The desktop app for Windows and macOS.</p>
@@ -420,12 +389,12 @@ async def download_page(request: Request):
         <div class="download-card">
           <h3>Windows</h3>
           <p>.exe installer</p>
-          <a class="btn btn-primary" href="{urls['AnnoBio-Setup-x64.exe']}" target="_blank" rel="noopener">Download</a>
+          <a class="btn btn-primary" href="{WINDOWS_INSTALLER_URL}" target="_blank" rel="noopener">Download</a>
         </div>
         <div class="download-card">
           <h3>macOS</h3>
           <p>.dmg installer, Apple Silicon</p>
-          <a class="btn btn-primary" href="{urls['AnnoBio-arm64.dmg']}" target="_blank" rel="noopener">Download</a>
+          <a class="btn btn-primary" href="{MAC_INSTALLER_URL}" target="_blank" rel="noopener">Download</a>
         </div>
       </div>
       <p class="download-note">
