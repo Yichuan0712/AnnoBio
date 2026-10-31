@@ -71,6 +71,30 @@ class ContainerStartupTests(unittest.TestCase):
         self.assertEqual((successes, rejected), (1, 1))
         docker_containers.run.assert_called_once()
 
+    def test_auto_capacity_fits_one_gigabyte_workspaces_after_host_reserve(self):
+        gib = 1024 ** 3
+        client = SimpleNamespace(info=mock.Mock(return_value={'MemTotal': int(7.7 * gib)}))
+        with mock.patch.object(self.module, 'client', return_value=client), \
+                mock.patch.object(self.module, 'MAX_ACTIVE_CONTAINERS', 'auto'):
+            self.assertEqual(self.module._capacity(), 5)
+            self.assertEqual(self.module._capacity(), 5)
+        client.info.assert_called_once()
+
+    def test_auto_capacity_never_drops_below_one(self):
+        client = SimpleNamespace(info=mock.Mock(return_value={'MemTotal': 1024 ** 3}))
+        with mock.patch.object(self.module, 'client', return_value=client), \
+                mock.patch.object(self.module, 'MAX_ACTIVE_CONTAINERS', ''):
+            self.assertEqual(self.module._capacity(), 1)
+
+    def test_explicit_and_off_settings_skip_detection(self):
+        client = SimpleNamespace(info=mock.Mock())
+        with mock.patch.object(self.module, 'client', return_value=client):
+            with mock.patch.object(self.module, 'MAX_ACTIVE_CONTAINERS', '12'):
+                self.assertEqual(self.module._capacity(), 12)
+            with mock.patch.object(self.module, 'MAX_ACTIVE_CONTAINERS', 'off'):
+                self.assertIsNone(self.module._capacity())
+        client.info.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

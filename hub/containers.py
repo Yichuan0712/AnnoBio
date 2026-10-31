@@ -26,20 +26,27 @@ IDLE_TIMEOUT_SEC = int(os.environ.get("PROMPT_STUDIO_IDLE_TIMEOUT_SEC", "1800"))
 PUBLIC_BASE_URL = os.environ.get("PROMPT_STUDIO_PUBLIC_BASE_URL", "")
 BACKEND_PORT = 8000
 
+# 512m was too tight even at rest: uvicorn's baseline RSS was already ~510MB. The PDF worker
+# has its own RLIMIT_AS cap.
+CONTAINER_MEM_BYTES = 1024 * 1024 * 1024
+# Left out of the auto-sized cap for the OS, Docker, the Hub and Caddy themselves.
+HOST_RESERVED_BYTES = 2 * 1024 * 1024 * 1024
+
 # Caps how many per-user backend containers (see mem_limit/nano_cpus below) can run at once,
-# so a burst of new web sessions can't overwhelm the host the Hub itself is running on. Unset by
-# default — this box's capacity depends entirely on its actual RAM/CPU, and there's no default
-# that's safe to guess, so an admin opts in with a number sized to their own host (roughly host
-# RAM ÷ 1GB, minus a bit of headroom for the Hub/Caddy/OS themselves). Only ever checked when a
-# user's container doesn't exist yet (see ensure_running) — a session already running is never
-# interrupted just because the host later fills up.
-MAX_ACTIVE_CONTAINERS = os.environ.get("PROMPT_STUDIO_MAX_ACTIVE_CONTAINERS")
+# so a burst of new web sessions can't overwhelm the host the Hub itself is running on. "auto"
+# (the default, also used when unset/empty) sizes it from the Docker host's RAM — see _capacity;
+# a number fixes it; "off" removes the cap. Memory, not CPU, sets it: an over-full box OOM-kills
+# workspaces, while shared CPU only slows them. Only ever checked when a user's container doesn't
+# exist yet (see ensure_running) — a session already running is never interrupted just because
+# the host later fills up.
+MAX_ACTIVE_CONTAINERS = os.environ.get("PROMPT_STUDIO_MAX_ACTIVE_CONTAINERS", "auto")
 _CONTAINER_NAME_PREFIX = "promptstudio-user-"
 
 _client = None
 _start_locks: dict[int, threading.Lock] = {}
 _start_locks_guard = threading.Lock()
 _capacity_lock = threading.Lock()
+_detected_capacity: int | None = None
 
 
 class BackendUnavailable(Exception):
@@ -60,6 +67,25 @@ def client():
         except DockerException as e:
             raise BackendUnavailable(f"Docker is not reachable: {e}") from e
     return _client
+
+
+def _capacity() -> int | None:
+    """The running-container cap, or None for no cap. In auto mode, asks Docker for the host's
+    total RAM once — the Hub reaches the host daemon through docker.sock, so this is the host's
+    memory, not the Hub container's — and fits as many CONTAINER_MEM_BYTES workspaces as remain
+    after HOST_RESERVED_BYTES, never fewer than one."""
+    global _detected_capacity
+    setting = (MAX_ACTIVE_CONTAINERS or "auto").strip().lower()
+    if setting == "off":
+        return None
+    if setting != "auto":
+        return int(setting)
+    if _detected_capacity is None:
+        total = client().info()["MemTotal"]
+        _detected_capacity = max(1, (total - HOST_RESERVED_BYTES) // CONTAINER_MEM_BYTES)
+        print(f"[containers] Auto-sized the running-workspace cap to {_detected_capacity} "
+              f"from {total / 1024 ** 3:.1f} GiB host RAM", flush=True)
+    return _detected_capacity
 
 
 def _count_running_backend_containers() -> int:
@@ -116,7 +142,8 @@ def _ensure_running(user_id: int) -> str:
             # Reserve capacity and create atomically across different users, now
             # that requests can start containers from multiple worker threads.
             with _capacity_lock:
-                if MAX_ACTIVE_CONTAINERS and _count_running_backend_containers() >= int(MAX_ACTIVE_CONTAINERS):
+                cap = _capacity()
+                if cap is not None and _count_running_backend_containers() >= cap:
                     raise CapacityExceeded(
                         "The server is at capacity right now. Please try again in a few minutes, "
                         "or use the desktop app instead."
@@ -133,9 +160,7 @@ def _ensure_running(user_id: int) -> str:
                         "ANNOBIO_HOSTED_GATEWAY_URL": "http://hub:8080/internal/hosted-model",
                         "ANNOBIO_HOSTED_TOKEN": account_token(user_id),
                     },
-                    # 512m was too tight even at rest: uvicorn's baseline RSS was
-                    # already ~510MB. The PDF worker has its own RLIMIT_AS cap.
-                    mem_limit="1024m",
+                    mem_limit=CONTAINER_MEM_BYTES,
                     nano_cpus=1_000_000_000,  # 1 CPU, bounds runaway Process scripts.
                     restart_policy={"Name": "unless-stopped"},
                 )

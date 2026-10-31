@@ -42,8 +42,8 @@ services:
       PROMPT_STUDIO_IDLE_TIMEOUT_SEC: ${PROMPT_STUDIO_IDLE_TIMEOUT_SEC:-1800}
       # How many per-user backend containers (1GB RAM / 1 CPU each — see containers.py) this host
       # allows running at once before new web sessions get turned away and pointed at the desktop
-      # app instead. Unset (the default) means no cap at all — size it to this host's actual RAM
-      # once you know it, e.g. a 8GB box might set 6 to leave headroom for the Hub/Caddy/OS.
+      # app instead. Unset (the default) or "auto" sizes it from the host's RAM: (RAM − 2GB) ÷ 1GB,
+      # e.g. 6 on an 8GB box. A number overrides that; "off" removes the cap.
       PROMPT_STUDIO_MAX_ACTIVE_CONTAINERS: ${PROMPT_STUDIO_MAX_ACTIVE_CONTAINERS:-}
       # Outbound mail for password-reset links (see hub/mailer.py) — an SES SMTP credential pair,
       # not a raw AWS access key/secret (those aren't interchangeable). Unset SMTP_PASSWORD just
