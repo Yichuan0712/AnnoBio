@@ -190,8 +190,9 @@ setting. The main ones:
 | `PROMPT_STUDIO_IDLE_TIMEOUT_SEC` | Stop a workspace after this many idle seconds. Default `1800`. |
 | `ANNOBIO_HOSTED_DAILY_TOKENS` | Daily free-model allowance per account. Default `50000`. |
 
-The free model's providers and keys are configured in `hub/hosted_model_config.py`; see
-[docs/HOSTED_MODEL.md](docs/HOSTED_MODEL.md).
+The free model is configured in `hub/hosted_model_config.py`. `MODEL_CREDENTIALS` names each
+provider, model ID and Base URL, with its API key referenced by environment variable, never
+committed. `ROLE_MODELS` picks a credential for Generate, Optimize and the Agent.
 
 # Repository Layout
 
@@ -201,7 +202,7 @@ The free model's providers and keys are configured in `hub/hosted_model_config.p
 | `backend/` | Python API used by both the desktop app and the online workspaces |
 | `hub/` | Online workspace server: accounts, public pages, per-user containers |
 | `python/` | `annobio-optimize`, a standalone library for the default optimization method |
-| `docs/` | Feature documentation; design notes are in `docs/design/` |
+| `scripts/` | Build helpers and the screenshot generator for the user guide and this README |
 
 # Contact
 

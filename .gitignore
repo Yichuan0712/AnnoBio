@@ -116,3 +116,6 @@ Desktop.ini
 
 # Local example projects and their backups; they change on every save in the app
 examples/
+
+# Internal design notes, plans and paper drafts; kept locally, not published
+docs/
