@@ -83,24 +83,26 @@ function credentialSourceBadge(c) {
   return `<span class="credential-source-badge credential-source-badge--${kind}">${label}</span>`;
 }
 
-function credentialStatusIcon(c) {
-  if (c.builtin) return '';
-  if (c.last_check_ok === true) {
-    const label = PROVIDER_LABELS[c.provider] || c.provider || 'Verified';
-    return `<span class="credential-status-icon credential-status-icon--ok" data-status-icon="${c.id}" title="Verified: ${escapeHtml(label)}">✓</span>`;
-  }
-  if (c.last_check_ok === false) {
-    const msg = c.last_check_error || 'Verification failed';
-    return `<span class="credential-status-icon credential-status-icon--error" data-status-icon="${c.id}" title="${escapeHtml(msg)}">✗</span>`;
-  }
-  return `<span class="credential-status-icon" data-status-icon="${c.id}" title="Not verified yet — click Test"></span>`;
+const STATUS_TEXT = { ok: '✓ Verified', error: '✗ Failed', pending: 'Testing…', none: 'Test' };
+const retestHint = (message) => `${String(message).replace(/[.\s]+$/, '')}. Click to test again.`;
+
+/** The Status cell: the last test's result, which is also the control that tests again. */
+function credentialStatusButton(c) {
+  if (c.builtin) return '<span class="credentials-managed-label">Managed</span>';
+  const kind = c.last_check_ok === true ? 'ok' : c.last_check_ok === false ? 'error' : 'none';
+  const title = kind === 'ok' ? retestHint(`Verified: ${PROVIDER_LABELS[c.provider] || c.provider || 'provider'}`)
+    : kind === 'error' ? retestHint(c.last_check_error || 'Verification failed')
+      : 'Not tested yet. Click to test.';
+  return `<button type="button" class="credentials-status-btn credentials-status-btn--${kind}" data-status-id="${c.id}" title="${escapeHtml(title)}">${STATUS_TEXT[kind]}</button>`;
 }
+
+const TRASH_ICON = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4M6.6 6.5v4.5M9.4 6.5v4.5"/></svg>';
 
 // The web app never shows stored API keys, so its table has no API key column.
 const showKeyColumn = () => Boolean(window.electronAPI);
 
 function credentialsMessageRow(text) {
-  return `<tr class="credentials-table-empty"><td colspan="${showKeyColumn() ? 4 : 3}">${text}</td></tr>`;
+  return `<tr class="credentials-table-empty"><td colspan="${showKeyColumn() ? 5 : 4}">${text}</td></tr>`;
 }
 
 function renderCredentialsTable(scope, list) {
@@ -112,19 +114,15 @@ function renderCredentialsTable(scope, list) {
   }
   const maskedPlaceholder = '••••••••';
   const keyCell = (c) => (showKeyColumn() ? `
-      <td class="${c.builtin ? 'credentials-managed-cell' : 'credentials-key-cell'}">
+      <td class="cred-col-key ${c.builtin ? 'credentials-managed-cell' : 'credentials-key-cell'}">
         ${c.builtin ? '<span>Included</span>' : `<code class="credentials-key-value">${maskedPlaceholder}</code>`}
       </td>` : '');
   tbody.innerHTML = list.map((c) => `
     <tr data-credential-id="${c.id}">
-      <td>${escapeHtml(credentialModelLabel(c))} ${credentialSourceBadge(c)} ${credentialStatusIcon(c)}</td>
-      <td class="credentials-provider-cell">${c.builtin ? 'Provided by AnnoBio' : escapeHtml(c.base_url || 'Default')}</td>${keyCell(c)}
-      <td class="credentials-actions-cell">
-        ${c.builtin ? '<span class="credentials-managed-label">Managed</span>' : `<div class="credentials-actions-inline">
-          <button type="button" class="credentials-action-link credentials-test-btn" data-id="${c.id}">Test</button>
-          <button type="button" class="credentials-action-link credentials-delete-btn" data-id="${c.id}">Delete</button>
-        </div>`}
-      </td>
+      <td class="cred-col-model">${escapeHtml(credentialModelLabel(c))} ${credentialSourceBadge(c)}</td>
+      <td class="cred-col-base credentials-provider-cell">${c.builtin ? 'Provided by AnnoBio' : escapeHtml(c.base_url || 'Default')}</td>${keyCell(c)}
+      <td class="cred-col-status">${credentialStatusButton(c)}</td>
+      <td class="cred-col-delete">${c.builtin ? '' : `<button type="button" class="credentials-delete-btn" data-id="${c.id}" aria-label="Delete ${escapeHtml(credentialModelLabel(c))}" title="Delete">${TRASH_ICON}</button>`}</td>
     </tr>
   `).join('');
 }
@@ -211,57 +209,51 @@ function bindCredKeyCellClick(scope) {
   });
 }
 
-function setCredentialStatusIcon(scope, id, { symbol, title, kind }) {
-  const icon = scope.querySelector(`[data-status-icon="${id}"]`);
-  if (!icon) return;
-  icon.textContent = symbol;
-  icon.title = title || '';
-  icon.classList.toggle('credential-status-icon--ok', kind === 'ok');
-  icon.classList.toggle('credential-status-icon--error', kind === 'error');
-  icon.classList.toggle('credential-status-icon--pending', kind === 'pending');
+function setCredentialStatus(scope, id, { title, kind }) {
+  const btn = scope.querySelector(`[data-status-id="${id}"]`);
+  if (!btn) return;
+  btn.textContent = STATUS_TEXT[kind];
+  btn.title = title || '';
+  btn.className = `credentials-status-btn credentials-status-btn--${kind}`;
+  btn.disabled = kind === 'pending';
 }
 
 /**
  * The one real check: sends a minimal chat completion under candidate provider
  * interpretations (see backend verify_credential) and, if one succeeds, corrects the
- * credential's stored provider. Used by both the table's Test button and the
+ * credential's stored provider. Used by both the table's Status control and the
  * fire-and-forget check that runs right after Add -- same endpoint, same result rendering
- * (a green check or red cross right after the model name).
+ * (Verified or Failed in the Status column).
  */
 async function runCredentialCheck(scope, id) {
-  setCredentialStatusIcon(scope, id, { symbol: '', title: 'Checking…', kind: 'pending' });
+  setCredentialStatus(scope, id, { title: 'Testing this credential…', kind: 'pending' });
   try {
     const res = await fetch(`${API_BASE}/api/credentials/${id}/test`, { method: 'POST' });
     const data = await res.json().catch(() => ({}));
     if (res.ok && data.ok) {
-      const label = PROVIDER_LABELS[data.provider] || data.provider || 'Verified';
-      setCredentialStatusIcon(scope, id, { symbol: '✓', title: `Verified: ${label}`, kind: 'ok' });
+      const label = PROVIDER_LABELS[data.provider] || data.provider || 'provider';
+      setCredentialStatus(scope, id, { title: retestHint(`Verified: ${label}`), kind: 'ok' });
       return true;
     } else {
       const msg = typeof data.detail === 'string' ? data.detail : (data.error || 'Failed');
-      setCredentialStatusIcon(scope, id, { symbol: '✗', title: msg, kind: 'error' });
+      setCredentialStatus(scope, id, { title: retestHint(msg), kind: 'error' });
       return false;
     }
   } catch (e) {
-    setCredentialStatusIcon(scope, id, { symbol: '✗', title: (e && e.message) || 'Network error', kind: 'error' });
+    setCredentialStatus(scope, id, { title: retestHint((e && e.message) || 'Network error'), kind: 'error' });
     return false;
   }
 }
 
 function bindCredTestButtons(scope) {
-  scope.querySelectorAll('.credentials-test-btn').forEach((btn) => {
+  scope.querySelectorAll('.credentials-status-btn').forEach((btn) => {
     btn.replaceWith(btn.cloneNode(true));
   });
-  scope.querySelectorAll('.credentials-test-btn').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const id = btn.getAttribute('data-id');
-      if (!id) return;
-      btn.disabled = true;
-      try {
-        await runCredentialCheck(scope, id);
-      } finally {
-        btn.disabled = false;
-      }
+  scope.querySelectorAll('.credentials-status-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-status-id');
+      // runCredentialCheck disables the control while the test runs.
+      if (id) runCredentialCheck(scope, id);
     });
   });
 }
@@ -345,10 +337,11 @@ function mountCredentialsTableHost(tableHost, options = {}) {
           <table class="credentials-table${showKeyColumn() ? '' : ' credentials-table--no-key'}" aria-label="Model credentials">
             <thead>
               <tr>
-                <th>Model</th>
-                <th>API Base</th>
-                ${showKeyColumn() ? '<th>API key</th>' : ''}
-                <th>Actions</th>
+                <th class="cred-col-model">Model</th>
+                <th class="cred-col-base">API Base</th>
+                ${showKeyColumn() ? '<th class="cred-col-key">API key</th>' : ''}
+                <th class="cred-col-status">Status</th>
+                <th class="cred-col-delete" aria-label="Delete"></th>
               </tr>
             </thead>
             <tbody>${credentialsMessageRow('No credentials added yet.')}</tbody>
@@ -374,7 +367,7 @@ function mountCredentialsTableHost(tableHost, options = {}) {
  * - On blur: a free, unauthoritative probe (/api/credentials/detect) that only lists models
  *   for the Model ID autocomplete dropdown. It can't prove anything (some list endpoints,
  *   like OpenRouter's, don't even require a valid key), so it never decides what gets saved.
- * - Right after a successful save: the same real check as the table's Test button
+ * - Right after a successful save: the same real check as the table's Status control
  *   (runCredentialCheck, POST /api/credentials/{id}/test), fired in the background so it
  *   never blocks Add, with its result rendered in the credentials table's Status column --
  *   not here in the add form -- so there is exactly one place that shows "is this really
@@ -691,7 +684,7 @@ export function openSettingsModal() {
                   <div class="review-detail-tab-panels model-settings-tab-panels">
                     <div class="review-detail-tab-panel review-detail-tab-panel--active" id="settings-panel-credentials" role="tabpanel" aria-labelledby="settings-tab-credentials" data-panel="credentials">
                       <div class="defaults-page-scroll settings-credentials-tab-body">
-                        <p class="settings-tab-intro">${isDesktop ? 'A credential is a model ID plus the API key that pays for it. Add one through LiteLLM, which reaches most providers and your own server through Base URL, or connect an OpenRouter account. Credentials appear on the left, where Test checks them, and can then be used by Generate nodes, Optimize nodes and the Agent.' : 'AnnoBio AI is included for text prompts and selected by default. Its daily token allowance is shared by Generate, Optimize and Agent. Connect OpenRouter to use your own models and continue after the free allowance is used. The desktop app also supports LiteLLM and custom endpoints.'}</p>
+                        <p class="settings-tab-intro">${isDesktop ? 'A credential is a model ID plus the API key that pays for it. Add one through LiteLLM, which reaches most providers and your own server through Base URL, or connect an OpenRouter account. Credentials appear on the left, where clicking a Status tests them, and can then be used by Generate nodes, Optimize nodes and the Agent.' : 'AnnoBio AI is included for text prompts and selected by default. Its daily token allowance is shared by Generate, Optimize and Agent. Connect OpenRouter to use your own models and continue after the free allowance is used. The desktop app also supports LiteLLM and custom endpoints.'}</p>
                         <div id="model-settings-credentials-add" class="model-settings-credentials-add">
                           <div class="credentials-add-method-row">
                             <label class="dataset-meta-label" for="credentials-add-method-select">Add credential</label>
