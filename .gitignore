@@ -114,5 +114,5 @@ Desktop.ini
 # 本地覆盖配置
 *.local
 
-# Example projects change on every save in the app
-examples/*.yc
+# Local example projects and their backups; they change on every save in the app
+examples/
