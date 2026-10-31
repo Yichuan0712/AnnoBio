@@ -1666,7 +1666,7 @@ html.dark .pill-select__pill--warning { background: rgba(202, 138, 4, 0.28); }
   font-size: 12px;
 }
 .settings-free-allowance[hidden] { display: none; }
-.settings-free-allowance-text { margin: 6px 0 10px; line-height: 1.5; color: var(--text-muted); }
+.settings-free-allowance-text { margin: 6px 0 0; line-height: 1.5; color: var(--text-muted); }
 .credentials-managed-label { color: var(--text-muted); font-size: 12px; }
 
 .credentials-add-btn {

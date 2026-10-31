@@ -671,7 +671,7 @@ export function openSettingsModal() {
               <h3 id="model-settings-col-credentials-title" class="model-settings-col-heading model-settings-col-heading--credentials">Credentials</h3>
               <h3 id="model-settings-col-settings-title" class="model-settings-col-heading model-settings-col-heading--settings">Settings</h3>
               <aside class="model-settings-col model-settings-col-left" aria-labelledby="model-settings-col-credentials-title">
-                ${isDesktop ? '' : '<section class="settings-free-allowance" hidden aria-live="polite"><strong>Free allowance</strong><p class="settings-free-allowance-text"></p><button type="button" class="btn btn-secondary settings-connect-openrouter">Connect OpenRouter</button></section>'}
+                ${isDesktop ? '' : '<section class="settings-free-allowance" hidden aria-live="polite"><strong>Free allowance</strong><p class="settings-free-allowance-text"></p></section>'}
                 <div id="model-settings-credentials-root"></div>
               </aside>
               <div class="model-settings-col model-settings-col-right" aria-labelledby="model-settings-col-settings-title">
@@ -1053,22 +1053,20 @@ export function openSettingsModal() {
       if (!allowance.enabled) return;
       section.hidden = false;
       const text = section.querySelector('.settings-free-allowance-text');
+      const ownModel = 'add an OpenRouter credential under New credential';
       if (!allowance.available) {
-        text.textContent = 'The free model is temporarily unavailable. Connect OpenRouter to use your own model.';
+        text.textContent = `The free model is temporarily unavailable. To use your own model, ${ownModel}.`;
       } else {
         const reset = allowance.resets_at ? ` Resets ${new Date(allowance.resets_at).toLocaleString()}.` : '';
         text.textContent = allowance.remaining > 0
           ? `${Number(allowance.remaining).toLocaleString()} of ${Number(allowance.limit).toLocaleString()} daily tokens remaining.${reset}`
-          : `Your daily free token allowance has been reached. Connect OpenRouter to continue.${reset}`;
+          : `Your daily free token allowance has been reached.${reset}`;
         if (allowance.reserved) text.textContent += ' Active requests are using part of this allowance.';
         if (allowance.estimated) text.textContent += ' Interrupted requests include estimated usage.';
+        text.textContent += ` To use your own model, ${ownModel}.`;
       }
     } catch { /* The rest of Settings stays available during a usage-service outage. */ }
   }
-  overlay.querySelector('.settings-connect-openrouter')?.addEventListener('click', () => {
-    activateSettingsTab('credentials');
-    overlay.querySelector('.credentials-openrouter-link')?.click();
-  });
 
   async function loadReviewMethodOptions() {
     try {
