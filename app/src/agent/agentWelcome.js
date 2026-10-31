@@ -9,18 +9,19 @@ export function createAgentWelcome({ projectOpen, hasNodes, onChoose }) {
   title.textContent = 'What would you like to do?';
   const description = document.createElement('p');
   description.className = 'agent-window__welcome-description';
-  description.textContent = 'I can help you find biomedical data, build annotation pipelines, and evaluate or improve prompts.';
+  description.textContent = 'I can help you learn AnnoBio, find biomedical data, build pipelines, and improve prompts.';
 
   const examples = document.createElement('div');
   examples.className = 'agent-window__welcome-examples';
   const suggestions = [
-    hasNodes
-      ? ['Explain this workspace', 'Explain the pipeline in this workspace and suggest what I should do next.']
-      : ['Find biomedical data', 'Help me find biomedical data for an annotation task. Ask me about the topic and data source first.'],
-    projectOpen
-      ? ['Build an annotation pipeline', 'Help me build an annotation pipeline. Ask me about my data and the fields I want to extract.']
-      : ['Start a workspace', 'Help me create a workspace for a biomedical annotation task. Ask me about my data and goals first.'],
-    ['Evaluate and improve a prompt', 'Help me set up prompt evaluation using ground-truth data, then improve the prompt.'],
+    ['Show me how to use AnnoBio', hasNodes
+      ? 'Show me how to use AnnoBio step by step, using this workspace as an example. Explain the next action and guide me one step at a time.'
+      : 'Show me how to use AnnoBio step by step. Help me choose a first task and guide me one step at a time.'],
+    ['Help me find relevant data', 'Help me find relevant biomedical data. Ask me about my research topic and goals, then help me choose a source and import the data.'],
+    ['Help me build a pipeline', projectOpen
+      ? 'Help me build a pipeline. Ask me about my data and the steps I want to perform, then guide me through setting it up.'
+      : 'Help me build a pipeline in a new workspace. Ask me about my data and goals first, then help me create the workspace and set up the pipeline.'],
+    ['Help me improve a prompt', 'Help me improve a prompt. Ask me about my task, current prompt, and expected output. Help me evaluate it if I have ground-truth data.'],
   ];
   for (const [label, prompt] of suggestions) {
     const button = document.createElement('button');
