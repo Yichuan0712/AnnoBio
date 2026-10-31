@@ -151,7 +151,7 @@ export function openDatasetDetailModal({ node, getContent, saveContent, readOnly
                 <div class="working-dataset-detail-footer__actions">
                   <button type="button" class="btn btn-secondary working-dataset-export-local" title="Save dataset as a file">Save as file</button>
                   <button type="button" class="btn btn-secondary working-dataset-sample">Create Sample</button>
-                  <button type="button" class="btn btn-secondary working-dataset-process">Create Process</button>
+                  <button type="button" class="btn btn-primary working-dataset-process">Create Process</button>
                 </div>
               </div>
             </div>

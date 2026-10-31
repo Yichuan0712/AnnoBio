@@ -76,7 +76,7 @@ function credentialModelLabel(credential) {
 }
 
 function credentialSourceBadge(c) {
-  if (c.builtin) return '<span class="credential-source-badge">Included</span>';
+  if (c.builtin) return '<span class="credential-source-badge">Free</span>';
   const isOpenRouter = c.provider === 'openrouter';
   const label = isOpenRouter ? 'OpenRouter' : 'LiteLLM';
   const kind = isOpenRouter ? 'openrouter' : 'litellm';
@@ -160,7 +160,7 @@ function renderCredentialsTable(scope, list) {
   const maskedPlaceholder = '••••••••';
   const keyCell = (c) => (showKeyColumn() ? `
       <td class="cred-col-key ${c.builtin ? 'credentials-managed-cell' : 'credentials-key-cell'}">
-        ${c.builtin ? '<span>Included</span>' : `<code class="credentials-key-value">${maskedPlaceholder}</code>`}
+        ${c.builtin ? '<span>Free</span>' : `<code class="credentials-key-value">${maskedPlaceholder}</code>`}
       </td>` : '');
   tbody.innerHTML = list.map((c) => `
     <tr data-credential-id="${c.id}">
