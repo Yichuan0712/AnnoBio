@@ -731,13 +731,13 @@ export function openSettingsModal() {
                       <div class="defaults-page-scroll settings-credentials-tab-body">
                         <p class="settings-tab-intro">${isDesktop ? 'A credential is a model ID plus the API key that pays for it. Add one through LiteLLM, which reaches most providers and your own server through Base URL, or connect an OpenRouter account. Credentials appear on the left, where clicking a Status tests them, and can then be used by Generate nodes, Optimize nodes and the Agent.' : 'AnnoBio AI is included for text prompts and selected by default. Its daily token allowance is shared by Generate, Optimize and Agent. Connect OpenRouter to use your own models and continue after the free allowance is used. The desktop app also supports LiteLLM and custom endpoints.'}</p>
                         <div id="model-settings-credentials-add" class="model-settings-credentials-add">
-                          <div class="credentials-add-method-row">
+                          ${isDesktop ? `<div class="credentials-add-method-row">
                             <label class="dataset-meta-label" for="credentials-add-method-select">Add credential</label>
                             <select id="credentials-add-method-select" class="dataset-meta-input credentials-add-method-select" aria-label="Add credential method">
-                              ${isDesktop ? '<option value="litellm" selected>Via LiteLLM</option>' : ''}
-                              <option value="openrouter" ${isDesktop ? '' : 'selected'}>Via OpenRouter</option>
+                              <option value="litellm" selected>Via LiteLLM</option>
+                              <option value="openrouter">Via OpenRouter</option>
                             </select>
-                          </div>
+                          </div>` : ''}
                           <div class="credentials-add-tab-panels">
                             ${isDesktop ? `<div class="credentials-add-tab-panel credentials-add-tab-panel--active" id="credentials-add-panel-litellm" data-panel="litellm">
                               <div class="credentials-add-row">
@@ -1398,7 +1398,8 @@ export function openSettingsModal() {
       onSwitchTo: (name) => { if (name === 'openrouter') openRouterConnect?.checkExistingConnection(); },
     });
     footerAdd?.addEventListener('click', () => {
-      if (addMethodSelect?.value === 'openrouter') openRouterConnect?.submit();
+      // The web offers only OpenRouter, so it has no method picker.
+      if (!isDesktop || addMethodSelect?.value === 'openrouter') openRouterConnect?.submit();
       else liteLlmAdd?.submit();
     });
     const [credentials, settings, reviewMethods] = await Promise.all([
