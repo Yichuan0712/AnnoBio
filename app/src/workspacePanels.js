@@ -11,12 +11,14 @@ const STORAGE_KEY = 'annobio.workspacePanels.v1';
 export function createWorkspacePanels(root, canvas, onChange, {
   bottomTabs = [{ id: 'pipeline', label: 'Pipeline' }],
   onCollapse = () => {},
+  // Panels that start open on every load, whatever was saved when they were last closed.
+  openOnLoad = [],
 } = {}) {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch (_) {}
   const state = {
-    pipeline: saved.pipeline !== false,
-    agent: saved.agent !== false,
+    pipeline: openOnLoad.includes('pipeline') || saved.pipeline !== false,
+    agent: openOnLoad.includes('agent') || saved.agent !== false,
     height: Number(saved.height) || 230,
     width: Number(saved.width) || 380,
     tab: bottomTabs.some((tab) => tab.id === saved.tab) ? saved.tab : bottomTabs[0].id,

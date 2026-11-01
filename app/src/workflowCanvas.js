@@ -3515,6 +3515,7 @@ export function buildWorkflowCanvas(root, options = {}) {
       }
       panelProjectPath = projectPath;
       workspacePanels.pipelineHost.querySelector('.pipeline-overview-overlay')?.destroyPipelineOverview?.();
+      if (!isElectron) workspacePanels.show('agent');
     }
     workspacePanels.setEnabled(true);
     return adoption;
@@ -6356,6 +6357,8 @@ export function buildWorkflowCanvas(root, options = {}) {
       ...(isElectron ? [{ id: 'log', label: 'Log' }] : []),
     ],
     onCollapse: () => currentPipelineBtn.focus(),
+    // On the web the Agent Assistant is the main way in, so it is open each time a workspace opens.
+    openOnLoad: isElectron ? [] : ['agent'],
   });
   optimizationPanel = mountPromptOptimizationPanel(workspacePanels.tabHost('optimization'), {
     getCanvasState,
