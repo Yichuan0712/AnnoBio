@@ -360,9 +360,10 @@ html.top-bar-web {
   cursor: pointer;
 }
 .top-bar-panel-toggle:hover { background: var(--hover); }
-/* Panel open: a pressed toggle in the accent color, so one icon serves both states. */
-.top-bar-panel-toggle.is-open { color: var(--accent); background: var(--primary-btn-bg); }
-.top-bar-panel-toggle.is-open:hover { background: var(--primary-btn-bg); filter: brightness(0.96); }
+/* Web panel open: a pressed toggle in the accent color, so one icon serves both states.
+   Desktop instead fills the panel region of its layout icon (workflowCanvas.js). */
+.top-bar--web .top-bar-panel-toggle.is-open { color: var(--accent); background: var(--primary-btn-bg); }
+.top-bar--web .top-bar-panel-toggle.is-open:hover { background: var(--primary-btn-bg); filter: brightness(0.96); }
 .top-bar-panel-toggle__icon { display: inline-flex; }
 .top-bar-panel-toggle:focus-visible { outline: 2px solid var(--primary-btn-text, #2563eb); outline-offset: -2px; }
 .top-bar-panel-toggle svg { display: block; }

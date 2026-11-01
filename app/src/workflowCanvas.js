@@ -3375,10 +3375,13 @@ export function buildWorkflowCanvas(root, options = {}) {
   `;
   const [currentPipelineBtn, agentAssistantBtn] = panelToggles.querySelectorAll('.top-bar-panel-toggle');
   const [pipelineToggleIcon, agentToggleIcon] = panelToggles.querySelectorAll('.top-bar-panel-toggle__icon');
-  // Desktop uses window-layout icons; web uses a bottom-dock toggle and an Agent chat icon. Each
-  // keeps one icon; the button's pressed look (.is-open, topBar.css) shows whether its panel is open.
-  pipelineToggleIcon.replaceChildren(isElectron ? iconLayoutPanel(false) : iconBottomPanel(18));
-  agentToggleIcon.replaceChildren(isElectron ? iconLayoutSidebarRight(false) : iconAgentAssistant(18));
+  // Desktop uses window-layout icons whose panel region fills in while open (syncPanelButtons).
+  // Web keeps one bottom-dock and one Agent chat icon; an open panel's button is drawn pressed
+  // (.top-bar--web .is-open, topBar.css).
+  if (!isElectron) {
+    pipelineToggleIcon.replaceChildren(iconBottomPanel(18));
+    agentToggleIcon.replaceChildren(iconAgentAssistant(18));
+  }
   // Uncaught errors land in the bottom panel's Log tab (desktop); this keeps them noticeable
   // while that panel is collapsed or showing another tab.
   const panelErrorBadge = document.createElement('span');
@@ -6311,6 +6314,10 @@ export function buildWorkflowCanvas(root, options = {}) {
     }
     panelErrorBadge.hidden = !appErrorCount;
     panelErrorBadge.textContent = appErrorCount > 99 ? '99+' : String(appErrorCount);
+    if (isElectron) {
+      pipelineToggleIcon.replaceChildren(iconLayoutPanel(panelVisibility.pipeline));
+      agentToggleIcon.replaceChildren(iconLayoutSidebarRight(panelVisibility.agent));
+    }
   }
   function renamePipeline(nameKey, name) {
     const trimmed = String(name || '').trim();
