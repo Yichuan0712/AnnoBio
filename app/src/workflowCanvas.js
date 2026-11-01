@@ -6281,12 +6281,13 @@ export function buildWorkflowCanvas(root, options = {}) {
     emptyState.className = 'workflow-empty-state';
     emptyState.innerHTML = `
       <div class="workflow-empty-state__box">
-        <p class="workflow-empty-state__title">Nothing here yet</p>
+        <p class="workflow-empty-state__title">Start your pipeline</p>
         <p class="workflow-empty-state__body">
-          Use the icons in the top bar to create a prompt or dataset, connect them on the canvas, then run.
+          Describe your task to the Agent Assistant on the right and it will build the pipeline with you.
+          Or add a Dataset and a Prompt from the top bar and connect them yourself.
         </p>
         <p class="workflow-empty-state__link">
-          <a href="/guide" target="_blank" rel="noopener">Read the full walkthrough &rarr;</a>
+          <a href="/guide" target="_blank" rel="noopener">Open the User Guide &rarr;</a>
         </p>
       </div>
     `;
