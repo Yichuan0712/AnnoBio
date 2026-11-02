@@ -1,13 +1,12 @@
 # annobio-optimize
 
-Licensed under the [AnnoBio Software Non-Commercial License Agreement](LICENSE),
-adapted from Rosetta's non-commercial license. Use and modification are free solely
-for internal non-commercial purposes, subject to the license's conditions.
-Commercial use requires a separate commercial license agreement and a fee; contact
-[Yichuan Zhang](mailto:yichuan@usf.edu) or [Duolin Wang](mailto:duolinwang@usf.edu).
-Publications must acknowledge the software and cite appropriate references when
-available. Preserve notices and use the official repository/forks as described in
-the license. See [NOTICE](NOTICE) for attribution and license provenance.
+AnnoBio is source-available for internal non-commercial use.
+Commercial use requires prior authorization.
+
+Publications using AnnoBio must acknowledge the software and cite appropriate
+references when available. Third-party software and data retain their own licenses.
+
+[View Licence](LICENSE) · [NOTICE](NOTICE)
 
 ## Paper
 

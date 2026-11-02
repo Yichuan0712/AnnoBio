@@ -438,22 +438,12 @@ def about_page(request: Request):
       <p class="about-contact-line">Yichuan Zhang (<a class="link" href="mailto:yichuan@usf.edu">yichuan@usf.edu</a>)</p>
       <p class="about-contact-line">Duolin Wang (<a class="link" href="mailto:duolinwang@usf.edu">duolinwang@usf.edu</a>)</p>
       <h2 id="license" class="about-heading">License</h2>
-      <p>AnnoBio's original code is source-available under the
-        <a class="link" href="https://github.com/Yichuan0712/AnnoBio/blob/main/LICENSE">AnnoBio Software Non-Commercial License Agreement</a>,
-        adapted from Rosetta's non-commercial license. Non-commercial users may run,
-        copy, use, and modify it free of charge solely for internal non-commercial purposes.
-        Commercial use, including fee-based service projects, requires a separate commercial
-        license agreement and a fee; contact
-        <a class="link" href="mailto:yichuan@usf.edu">yichuan@usf.edu</a> or
-        <a class="link" href="mailto:duolinwang@usf.edu">duolinwang@usf.edu</a>.</p>
-      <p>Refer other users to the official repository. Forks on the same hosting platform
-        must retain the license restrictions and notices. Publications using AnnoBio must
-        acknowledge its contribution and cite appropriate references when available.
-        See the full license and
-        <a class="link" href="https://github.com/Yichuan0712/AnnoBio/blob/main/NOTICE">NOTICE</a> for details.
-        Third-party software and data retain their own licenses.</p>
-      <p>Previously distributed copies retain their original license terms.
-        This change does not retroactively withdraw permissions already granted for those copies.</p>
+      <p>AnnoBio is source-available for internal non-commercial use.
+        Commercial use requires prior authorization.</p>
+      <p>Publications using AnnoBio must acknowledge the software and cite appropriate
+        references when available. Third-party software and data retain their own licenses.</p>
+      <p><a class="link" href="https://github.com/Yichuan0712/AnnoBio/blob/main/LICENSE">View Licence</a>
+        &middot; <a class="link" href="https://github.com/Yichuan0712/AnnoBio/blob/main/NOTICE">NOTICE</a></p>
       <h2 id="paper" class="about-heading">Paper</h2>
       <p>Paper coming soon.</p>
     """

@@ -213,22 +213,13 @@ For questions about AnnoBio data, methods, website feedback, or collaboration:
 
 # License
 
-AnnoBio's original code is source-available under the
-[AnnoBio Software Non-Commercial License Agreement](LICENSE), adapted from
-[Rosetta's non-commercial license](https://github.com/RosettaCommons/rosetta/blob/7ba83c14239587804d34238b68c3f624d4a1b3be/LICENSE.md).
-Non-commercial users may run, copy, use, and modify the software free of charge
-solely for internal non-commercial purposes. Refer other users to the official
-repository; forks on the same hosting platform must retain the license restrictions
-and notices. See the full license for its conditions.
+AnnoBio is source-available for internal non-commercial use.
+Commercial use requires prior authorization.
 
-Publications using AnnoBio must acknowledge its contribution and cite appropriate
-references listed below when available. Commercial use, including fee-based service
-projects, requires a separate commercial license agreement and a fee; contact
-[Yichuan Zhang](mailto:yichuan@usf.edu) or [Duolin Wang](mailto:duolinwang@usf.edu).
+Publications using AnnoBio must acknowledge the software and cite appropriate
+references when available. Third-party software and data retain their own licenses.
 
-See [NOTICE](NOTICE) for attribution and license provenance. Third-party software
-and data retain their own licenses. Previously distributed copies retain the terms
-under which they were provided; this change does not retroactively withdraw permissions.
+[View Licence](LICENSE) · [NOTICE](NOTICE)
 
 # Paper
 
