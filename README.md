@@ -24,7 +24,7 @@
 [release-date-shield]: https://img.shields.io/github/release-date/Yichuan0712/AnnoBio
 [downloads-shield]: https://img.shields.io/github/downloads/Yichuan0712/AnnoBio/total
 [release-url]: https://github.com/Yichuan0712/AnnoBio/releases
-[license-shield]: https://img.shields.io/badge/license-MIT-blue
+[license-shield]: https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue
 
 AnnoBio lets you classify documents, extract entities and fields, and curate literature into
 structured records. You connect Datasets, Prompts, and processing steps on a canvas, run them,
@@ -213,4 +213,17 @@ For questions about AnnoBio data, methods, website feedback, or collaboration:
 
 # License
 
-AnnoBio is released under the [MIT License](LICENSE).
+AnnoBio's original code is source-available under the
+[PolyForm Noncommercial License 1.0.0](LICENSE). Use, modification, and redistribution
+are permitted for purposes allowed by that license. Commercial uses outside those
+permissions require a separate license; contact [Yichuan Zhang](mailto:yichuan@usf.edu)
+or [Duolin Wang](mailto:duolinwang@usf.edu).
+
+Redistributions must include the license text or its URL and preserve the
+`Required Notice:` lines in [NOTICE](NOTICE). Third-party software and data retain
+their own licenses. Versions previously distributed under MIT retain their original
+terms; this change does not retroactively replace licenses already granted.
+
+Please cite AnnoBio when using it in research; see [CITATION.cff](CITATION.cff).
+Paper details will be added when available. This citation request is separate from
+the license's redistribution requirements.

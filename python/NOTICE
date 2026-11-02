@@ -1,0 +1,21 @@
+AnnoBio — Required Notices
+
+Required Notice: Copyright (c) 2026 Yichuan Zhang.
+Required Notice: AnnoBio — a visual workspace for biomedical AI workflows. https://annobio.org ; source: https://github.com/Yichuan0712/AnnoBio
+
+AnnoBio's original code is licensed under the PolyForm Noncommercial License 1.0.0.
+When distributing any part of the software, provide the license text or its URL
+and preserve all plain-text lines beginning with "Required Notice:" above.
+License: https://polyformproject.org/licenses/noncommercial/1.0.0
+
+For commercial licensing, contact yichuan@usf.edu or duolinwang@usf.edu.
+
+Third-party software, data, and other materials retain their respective licenses
+and notices. This license does not replace their terms.
+
+CITATION.cff provides the suggested software citation. Please cite AnnoBio when
+using it in research; this request does not add a publication-citation condition
+to the license. A paper citation will be added when publication details are available.
+
+Versions previously distributed under MIT remain subject to their original terms;
+this change does not retroactively replace licenses already granted for those copies.

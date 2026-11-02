@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+type: software
+message: "If you use AnnoBio in research, please cite this software record. A preferred paper citation will be added when publication details are available."
+title: "AnnoBio: a visual workspace for biomedical AI workflows"
+authors:
+  - family-names: Zhang
+    given-names: Yichuan
+    affiliation: "Digital Biology Lab, Health Informatics Institute, Morsani College of Medicine, University of South Florida"
+    email: yichuan@usf.edu
+url: "https://annobio.org"
+repository-code: "https://github.com/Yichuan0712/AnnoBio"
+license: PolyForm-Noncommercial-1.0.0

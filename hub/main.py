@@ -433,6 +433,22 @@ def about_page(request: Request):
       <p class="page-sub about-contact-intro">For questions about AnnoBio data, methods, website feedback, or collaboration, please contact:</p>
       <p class="about-contact-line">Yichuan Zhang (<a class="link" href="mailto:yichuan@usf.edu">yichuan@usf.edu</a>)</p>
       <p class="about-contact-line">Duolin Wang (<a class="link" href="mailto:duolinwang@usf.edu">duolinwang@usf.edu</a>)</p>
+      <h2 id="license" class="about-heading">License</h2>
+      <p>AnnoBio's original code is source-available under the
+        <a class="link" href="https://polyformproject.org/licenses/noncommercial/1.0.0">PolyForm Noncommercial License 1.0.0</a>.
+        Use, modification, and redistribution are permitted for purposes allowed by the license.
+        Commercial uses outside those permissions require a separate license; contact
+        <a class="link" href="mailto:yichuan@usf.edu">yichuan@usf.edu</a> or
+        <a class="link" href="mailto:duolinwang@usf.edu">duolinwang@usf.edu</a>.</p>
+      <p>Redistributions must include the license or its URL and preserve the
+        <code>Required Notice:</code> lines in the project's
+        <a class="link" href="https://github.com/Yichuan0712/AnnoBio/blob/main/NOTICE">NOTICE</a> file.
+        Third-party software and data retain their own licenses.</p>
+      <p>Versions previously distributed under MIT retain their original terms.
+        This change does not retroactively replace licenses already granted for those copies.</p>
+      <p>Please cite AnnoBio when using it in research; see
+        <a class="link" href="https://github.com/Yichuan0712/AnnoBio/blob/main/CITATION.cff">CITATION.cff</a>.
+        Paper details will be added when available.</p>
     """
     extra_css = """
       .about-heading { font-size: 18px; margin: 32px 0 12px; }
