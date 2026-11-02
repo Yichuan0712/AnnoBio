@@ -439,17 +439,21 @@ def about_page(request: Request):
       <p class="about-contact-line">Duolin Wang (<a class="link" href="mailto:duolinwang@usf.edu">duolinwang@usf.edu</a>)</p>
       <h2 id="license" class="about-heading">License</h2>
       <p>AnnoBio's original code is source-available under the
-        <a class="link" href="https://polyformproject.org/licenses/noncommercial/1.0.0">PolyForm Noncommercial License 1.0.0</a>.
-        Use, modification, and redistribution are permitted for purposes allowed by the license.
-        Commercial uses outside those permissions require a separate license; contact
+        <a class="link" href="https://github.com/Yichuan0712/AnnoBio/blob/main/LICENSE">AnnoBio Software Non-Commercial License Agreement</a>,
+        adapted from Rosetta's non-commercial license. Non-commercial users may run,
+        copy, use, and modify it free of charge solely for internal non-commercial purposes.
+        Commercial use, including fee-based service projects, requires a separate commercial
+        license agreement and a fee; contact
         <a class="link" href="mailto:yichuan@usf.edu">yichuan@usf.edu</a> or
         <a class="link" href="mailto:duolinwang@usf.edu">duolinwang@usf.edu</a>.</p>
-      <p>Redistributions must include the license or its URL and preserve the
-        <code>Required Notice:</code> lines in the project's
-        <a class="link" href="https://github.com/Yichuan0712/AnnoBio/blob/main/NOTICE">NOTICE</a> file.
+      <p>Refer other users to the official repository. Forks on the same hosting platform
+        must retain the license restrictions and notices. Publications using AnnoBio must
+        acknowledge its contribution and cite appropriate references when available.
+        See the full license and
+        <a class="link" href="https://github.com/Yichuan0712/AnnoBio/blob/main/NOTICE">NOTICE</a> for details.
         Third-party software and data retain their own licenses.</p>
-      <p>Versions previously distributed under MIT retain their original terms.
-        This change does not retroactively replace licenses already granted for those copies.</p>
+      <p>Previously distributed copies retain their original license terms.
+        This change does not retroactively withdraw permissions already granted for those copies.</p>
       <h2 id="paper" class="about-heading">Paper</h2>
       <p>Paper coming soon.</p>
     """

@@ -1,131 +1,43 @@
-# PolyForm Noncommercial License 1.0.0
+# AnnoBio licensing
 
-<https://polyformproject.org/licenses/noncommercial/1.0.0>
+## Preamble
 
-## Acceptance
+This preamble is explanatory in nature, and is not part of the license agreement.
 
-In order to get any license under these terms, you must agree
-to them as both strict obligations and conditions to all
-your licenses.
+a. While the AnnoBio source code is published on GitHub, it is not "Open Source" (according to the OSI definition). Use of AnnoBio is governed by the license agreement -- either the one below or a separate commercial agreement obtained through the AnnoBio copyright holders.
 
-## Copyright License
+b. Use for commercial purposes is not permitted under the following license. To obtain a commercial/for-profit license (or for questions about whether your use is considered commercial), please contact the AnnoBio copyright holders (yichuan@usf.edu or duolinwang@usf.edu). If you and your organization have a commercial license or another written licensing agreement for AnnoBio from the Licensors, the terms of that license supersede the ones below.
 
-The licensor grants you a copyright license for the
-software to do everything you might do with the software
-that would otherwise infringe the licensor's copyright
-in it for any permitted purpose.  However, you may
-only distribute the software according to [Distribution
-License](#distribution-license) and make changes or new works
-based on the software according to [Changes and New Works
-License](#changes-and-new-works-license).
+c. All forks of the AnnoBio code must maintain the current licensing restrictions.
 
-## Distribution License
+d. Modifications and improvements to the AnnoBio code are encouraged. Please see README.md for more details.
 
-The licensor grants you an additional copyright license
-to distribute copies of the software.  Your license
-to distribute covers distributing the software with
-changes and new works permitted by [Changes and New Works
-License](#changes-and-new-works-license).
+# AnnoBio Software Non-Commercial License Agreement
 
-## Notices
+The AnnoBio software ("Software") has been developed by the contributing researchers and developers of the AnnoBio project ("Developers") and published/made publicly available via GitHub. This publication status does not constitute a waiver of copyright, patent, or other intellectual property rights. Licensing of the Software is managed by its copyright holders ("Licensors"). For more information about AnnoBio, please see https://annobio.org. For licensing inquiries, contact yichuan@usf.edu or duolinwang@usf.edu.
 
-You must ensure that anyone who gets a copy of any part of
-the software from you also gets a copy of these terms or the
-URL for them above, as well as copies of any plain-text lines
-beginning with `Required Notice:` that the licensor provided
-with the software.  For example:
+“Non-Commercial User” means 1) employees of not-for-profit research institutions, government laboratories, and universities conducting research excluding (a) commercial service; or (b) contract research or services for a for profit company where the intellectual property resulting from such research or service is owned by the for-profit company , and 2) individuals excluding (a) any use by, for, or on behalf of an entity organized for profit; or (b) any use intended for or directed toward commercial advantage or monetary compensation.
 
-> Required Notice: Copyright Yoyodyne, Inc. (http://example.com)
+“Software” includes both source and executable copies of the AnnoBio software as distributed by the AnnoBio project.
 
-## Changes and New Works License
+Licensors and the Developers allow Non-Commercial Users (“You”) to run, display, copy, use and modify Software free of charge solely for internal Non-Commercial purposes, subject to the following conditions:
 
-The licensor grants you an additional copyright license to
-make changes and new works based on the software for any
-permitted purpose.
+1. You agree to refer other Non-Commercial Users interested in the Software to Github to download the Software to ensure quality control, and so that they agree to these license terms. You may fork official AnnoBio project repositories and make modifications to the source code in such forks on the same version control platform on which those official repositories are hosted.
 
-## Patent License
+2. You agree to acknowledge the contribution of the Developers and the Software make to your research, and cite appropriate references about the Software in your publications (see the Paper section of README.md).
 
-The licensor grants you a patent license for the software that
-covers patent claims the licensor can license, or becomes able
-to license, that you would infringe by using the software.
+3. If You wish to use Software for any commercial purposes, including fee-based service projects, you will need to execute a separate commercial license agreement with the Licensors and pay a fee. In that case, please contact: yichuan@usf.edu or duolinwang@usf.edu.  Similarly, You agree to refer potential commercial users of the Software to Licensors (yichuan@usf.edu or duolinwang@usf.edu) so they can execute a commercial license for the Software.
 
-## Noncommercial Purposes
+4. You retain in Software and any modifications to Software, all copyright, trademark, or other notices pertaining to Software as provided by Licensors and Developers.
 
-Any noncommercial purpose is a permitted purpose.
+5. If you institute litigation against any entity (including a cross-claim or counterclaim in a lawsuit) alleging that the Software or any part of the Software constitutes direct or contributory patent infringement, then any license granted to you herein shall terminate as of the date such litigation is filed.
 
-## Personal Uses
+6. You acknowledge that the Developers, Licensors and its licensees may develop modifications to Software that may be substantially similar to Your modifications of Software, and that the Developers, Licensors and its licensees shall not be constrained in any way by You in Developer's, Licensors's or its licensees' use or management of such modifications. You acknowledge the right of the Developers and Licensors to prepare and publish modifications to Software that may be substantially similar or functionally equivalent to Your modifications and improvements, and if You obtain patent protection for any modification or improvement to Software You agree not to allege or enjoin infringement of Your patent by the Developers, Licensors or by any of Licensors's licensees obtaining modifications or improvements to Software from the Licensors or the Developers.
 
-Personal use for research, experiment, and testing for
-the benefit of public knowledge, personal study, private
-entertainment, hobby projects, amateur pursuits, or religious
-observance, without any anticipated commercial application,
-is use for a permitted purpose.
+7. You agree to comply with all applicable laws, and shall not take any action that would cause Licensors to be in violation of any applicable export control or OFAC sanctions law or regulation.  You shall not use the Software in the design, development, production, operation, installation, maintenance, repair, overhaul, or refurbishing of chemical or biological weapons.
 
-## Noncommercial Organizations
+8. Any risk associated with using the Software at your institution is with You and Your institution. Software is experimental in nature and is made available as a research courtesy "AS IS," without obligation by Licensors or Developers to provide accompanying services or support.
 
-Use by any charitable organization, educational institution,
-public research organization, public safety or health
-organization, environmental protection organization,
-or government institution is use for a permitted purpose
-regardless of the source of funding or obligations resulting
-from the funding.
+9. Licensors, in sole discretion may terminate this license agreement upon notice i) if You are in material breach of this license agreement or ii) fail to comply with applicable U.S. or other laws including but not limited to U.S. export control or OFAC sanctions laws. The termination shall be effective 30 days from the date of notice. If the specified breach is cured before the effective date of termination the license agreement shall not be terminated and the notice thereof shall have no effect.
 
-## Fair Use
-
-You may have "fair use" rights for the software under the
-law. These terms do not limit them.
-
-## No Other Rights
-
-These terms do not allow you to sublicense or transfer any of
-your licenses to anyone else, or prevent the licensor from
-granting licenses to anyone else.  These terms do not imply
-any other licenses.
-
-## Patent Defense
-
-If you make any written claim that the software infringes or
-contributes to infringement of any patent, your patent license
-for the software granted under these terms ends immediately. If
-your company makes such a claim, your patent license ends
-immediately for work on behalf of your company.
-
-## Violations
-
-The first time you are notified in writing that you have
-violated any of these terms, or done anything with the software
-not covered by your licenses, your licenses can nonetheless
-continue if you come into full compliance with these terms,
-and take practical steps to correct past violations, within
-32 days of receiving notice.  Otherwise, all your licenses
-end immediately.
-
-## No Liability
-
-***As far as the law allows, the software comes as is, without
-any warranty or condition, and the licensor will not be liable
-to you for any damages arising out of these terms or the use
-or nature of the software, under any kind of legal claim.***
-
-## Definitions
-
-The **licensor** is the individual or entity offering these
-terms, and the **software** is the software the licensor makes
-available under these terms.
-
-**You** refers to the individual or entity agreeing to these
-terms.
-
-**Your company** is any legal entity, sole proprietorship,
-or other kind of organization that you work for, plus all
-organizations that have control over, are under the control of,
-or are under common control with that organization.  **Control**
-means ownership of substantially all the assets of an entity,
-or the power to direct its management and policies by vote,
-contract, or otherwise.  Control can be direct or indirect.
-
-**Your licenses** are all the licenses granted to you for the
-software under these terms.
-
-**Use** means anything you do with the software requiring one
-of your licenses.
+10. Licensors AND THE DEVELOPERS EXPRESSLY DISCLAIM ANY AND ALL WARRANTIES REGARDING THE SOFTWARE, WHETHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES PERTAINING TO NON-INFRINGEMENT, MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE. IN NO EVENT SHALL THE Licensors OR DEVELOPERS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

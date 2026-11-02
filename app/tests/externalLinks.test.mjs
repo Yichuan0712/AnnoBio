@@ -6,11 +6,11 @@ const screenUrl = 'https://console.wenglab.org/docs/getting-started/auth';
 
 test('About links are permitted without opening unrelated repository or license URLs', () => {
   for (const url of ['https://annobio.org/', 'https://github.com/Yichuan0712/AnnoBio',
-    'https://github.com/Yichuan0712/AnnoBio/releases', 'https://polyformproject.org/licenses/noncommercial/1.0.0']) {
+    'https://github.com/Yichuan0712/AnnoBio/releases', 'https://github.com/Yichuan0712/AnnoBio/blob/main/LICENSE']) {
     assert.equal(allowedExternalUrl(url), url);
   }
   for (const url of ['https://github.com/other/project', 'https://annobio.org.evil.test/',
-    'https://polyformproject.org/licenses/other', 'https://user:pass@annobio.org/']) {
+    'https://github.com/other/project/blob/main/LICENSE', 'https://user:pass@annobio.org/']) {
     assert.equal(allowedExternalUrl(url), null);
   }
 });

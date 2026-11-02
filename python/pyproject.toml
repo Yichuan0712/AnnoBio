@@ -7,7 +7,7 @@ name = "annobio-optimize"
 version = "0.1.0"
 description = "Error-guided local prompt optimization with user-defined prediction and evaluation"
 readme = "README.md"
-license = "PolyForm-Noncommercial-1.0.0"
+license = "LicenseRef-AnnoBio-NonCommercial"
 license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.10"
 dependencies = []

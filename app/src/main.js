@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain, dialog, screen, nativeImage, shell, Menu } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, screen, nativeImage, shell, Menu, clipboard } from 'electron';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -15,6 +16,7 @@ import { createFolderAccessStore, listFolder } from './agent/attachments/folderA
 import { APP_NAME, WINDOWS_APP_ID, windowsTaskbarDetails } from './appIdentity.js';
 import { IMAGE_FILE_EXTENSIONS } from './fileTypes.js';
 import { allowedExternalUrl, allowedWebSourceUrl } from './externalLinks.js';
+import { formatAppInfo } from './aboutInfo.js';
 
 if (process.platform === 'win32') app.setAppUserModelId(WINDOWS_APP_ID);
 
@@ -772,7 +774,23 @@ ipcMain.handle('fs:write-file', async (_e, filePath, data, encoding) => {
   await fs.writeFile(filePath, buf, enc === 'base64' ? undefined : enc);
 });
 
-ipcMain.handle('app:info', () => ({ version: app.getVersion() }));
+function getAppInfo() {
+  const build = typeof __ANNOBIO_BUILD_INFO__ === 'undefined' ? {} : __ANNOBIO_BUILD_INFO__;
+  return {
+    ...build,
+    version: app.getVersion(),
+    electron: process.versions.electron,
+    chromium: process.versions.chrome,
+    node: process.versions.node,
+    v8: process.versions.v8,
+    os: `${os.type()} ${process.arch} ${os.release()}`,
+  };
+}
+ipcMain.handle('app:info', getAppInfo);
+ipcMain.handle('app:copy-info', () => {
+  clipboard.writeText(formatAppInfo(getAppInfo()));
+  return { ok: true };
+});
 ipcMain.handle('backend-log:get', () => backendLog?.lines() || []);
 ipcMain.handle('backend-log:renderer-error', (_event, entry) => {
   if (entry && typeof entry === 'object') backendLog?.rendererError(entry);

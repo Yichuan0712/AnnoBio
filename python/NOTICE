@@ -1,19 +1,23 @@
-AnnoBio — Required Notices
+AnnoBio
 
-Required Notice: Copyright (c) 2026 Yichuan Zhang.
-Required Notice: AnnoBio — a visual workspace for biomedical AI workflows. https://annobio.org ; source: https://github.com/Yichuan0712/AnnoBio
+Copyright (c) 2026 Yichuan Zhang.
 
-AnnoBio's original code is licensed under the PolyForm Noncommercial License 1.0.0.
-When distributing any part of the software, provide the license text or its URL
-and preserve all plain-text lines beginning with "Required Notice:" above.
-License: https://polyformproject.org/licenses/noncommercial/1.0.0
+AnnoBio's original code is licensed under the AnnoBio Software Non-Commercial
+License Agreement in LICENSE, adapted from the Rosetta Software Non-Commercial
+License Agreement. The non-commercial use, citation, official-download/fork,
+notice-retention, patent, compliance, termination, and warranty conditions are
+retained. Project names, licensor references, contact information and project
+links are adapted; Rosetta-specific funding and PyRosetta descriptions are omitted.
+
+Source: https://raw.githubusercontent.com/RosettaCommons/rosetta/7ba83c14239587804d34238b68c3f624d4a1b3be/LICENSE.md
+Rosetta license revision: 7ba83c14239587804d34238b68c3f624d4a1b3be
 
 For commercial licensing, contact yichuan@usf.edu or duolinwang@usf.edu.
+Publications must acknowledge the Software and cite appropriate references;
+see the Paper section of README.md. Paper coming soon.
 
 Third-party software, data, and other materials retain their respective licenses
 and notices. This license does not replace their terms.
 
-Paper coming soon.
-
-Versions previously distributed under MIT remain subject to their original terms;
-this change does not retroactively replace licenses already granted for those copies.
+Previously distributed copies retain the license terms under which they were
+provided; this change does not retroactively withdraw permissions already granted.

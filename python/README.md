@@ -1,10 +1,17 @@
 # annobio-optimize
 
-Licensed under [PolyForm Noncommercial 1.0.0](LICENSE). Commercial uses outside the
-license's permitted purposes require separate authorization from
+Licensed under the [AnnoBio Software Non-Commercial License Agreement](LICENSE),
+adapted from Rosetta's non-commercial license. Use and modification are free solely
+for internal non-commercial purposes, subject to the license's conditions.
+Commercial use requires a separate commercial license agreement and a fee; contact
 [Yichuan Zhang](mailto:yichuan@usf.edu) or [Duolin Wang](mailto:duolinwang@usf.edu).
-Redistributions must include the license or its URL and preserve the `Required Notice:`
-lines in [NOTICE](NOTICE). Paper coming soon.
+Publications must acknowledge the software and cite appropriate references when
+available. Preserve notices and use the official repository/forks as described in
+the license. See [NOTICE](NOTICE) for attribution and license provenance.
+
+## Paper
+
+Paper coming soon.
 
 A standalone Python library for prompt optimization: diagnose failed examples, group issues by root cause, propose local edits, verify candidates, and check for regressions. When needed, use Thompson sampling to search combinations of alternative text segments.
 

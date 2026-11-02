@@ -24,7 +24,7 @@
 [release-date-shield]: https://img.shields.io/github/release-date/Yichuan0712/AnnoBio
 [downloads-shield]: https://img.shields.io/github/downloads/Yichuan0712/AnnoBio/total
 [release-url]: https://github.com/Yichuan0712/AnnoBio/releases
-[license-shield]: https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue
+[license-shield]: https://img.shields.io/badge/license-Non--Commercial-blue
 
 AnnoBio lets you classify documents, extract entities and fields, and curate literature into
 structured records. You connect Datasets, Prompts, and processing steps on a canvas, run them,
@@ -214,14 +214,22 @@ For questions about AnnoBio data, methods, website feedback, or collaboration:
 # License
 
 AnnoBio's original code is source-available under the
-[PolyForm Noncommercial License 1.0.0](LICENSE). Use, modification, and redistribution
-are permitted for purposes allowed by that license. Commercial uses outside those
-permissions require a separate license; contact [Yichuan Zhang](mailto:yichuan@usf.edu)
-or [Duolin Wang](mailto:duolinwang@usf.edu).
+[AnnoBio Software Non-Commercial License Agreement](LICENSE), adapted from
+[Rosetta's non-commercial license](https://github.com/RosettaCommons/rosetta/blob/7ba83c14239587804d34238b68c3f624d4a1b3be/LICENSE.md).
+Non-commercial users may run, copy, use, and modify the software free of charge
+solely for internal non-commercial purposes. Refer other users to the official
+repository; forks on the same hosting platform must retain the license restrictions
+and notices. See the full license for its conditions.
 
-Redistributions must include the license text or its URL and preserve the
-`Required Notice:` lines in [NOTICE](NOTICE). Third-party software and data retain
-their own licenses. Versions previously distributed under MIT retain their original
-terms; this change does not retroactively replace licenses already granted.
+Publications using AnnoBio must acknowledge its contribution and cite appropriate
+references listed below when available. Commercial use, including fee-based service
+projects, requires a separate commercial license agreement and a fee; contact
+[Yichuan Zhang](mailto:yichuan@usf.edu) or [Duolin Wang](mailto:duolinwang@usf.edu).
+
+See [NOTICE](NOTICE) for attribution and license provenance. Third-party software
+and data retain their own licenses. Previously distributed copies retain the terms
+under which they were provided; this change does not retroactively withdraw permissions.
+
+# Paper
 
 Paper coming soon.

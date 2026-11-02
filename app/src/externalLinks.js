@@ -10,7 +10,7 @@ const ABOUT_URLS = new Set([
   'https://annobio.org/',
   'https://github.com/Yichuan0712/AnnoBio',
   'https://github.com/Yichuan0712/AnnoBio/releases',
-  'https://polyformproject.org/licenses/noncommercial/1.0.0',
+  'https://github.com/Yichuan0712/AnnoBio/blob/main/LICENSE',
 ]);
 
 /** Source links open only public-looking web URLs, never files or app protocols.

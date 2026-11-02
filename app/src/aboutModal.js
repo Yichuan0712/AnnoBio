@@ -1,11 +1,14 @@
 import { mountModalDialog } from './modalDialog.js';
 import { attachExternalBrowserLink } from './externalLinks.js';
 import { showAlert } from './alertModal.js';
+import { ABOUT_AFFILIATION, ABOUT_COPYRIGHT, appInfoRows } from './aboutInfo.js';
+
+const logoUrl = new URL('../../images/logo.png', import.meta.url).href;
 
 export function openAboutModal() {
   const existing = document.querySelector('.modal-overlay--about');
   if (existing) {
-    existing.querySelector('.modal-close')?.focus();
+    existing.querySelector('.about-close')?.focus();
     return;
   }
   const overlay = document.createElement('div');
@@ -18,27 +21,24 @@ export function openAboutModal() {
         <button type="button" class="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body about-content">
-        <p class="about-version" aria-live="polite">Loading version…</p>
-        <p>A visual workspace for building, running, evaluating, and improving biomedical AI workflows.</p>
-        <div class="about-links">
-          <a href="https://annobio.org" target="_blank" rel="noopener" tabindex="0">Website</a>
-          <a href="https://github.com/Yichuan0712/AnnoBio" target="_blank" rel="noopener" tabindex="0">Source code</a>
-          <a href="https://github.com/Yichuan0712/AnnoBio/releases" target="_blank" rel="noopener" tabindex="0">Releases</a>
+        <div class="about-product">
+          <img class="about-logo" src="${logoUrl}" width="40" height="40" alt="">
+          <div><div class="about-product-name">AnnoBio</div><div class="about-tagline">Biomedical AI workflows</div></div>
         </div>
-        <h3>Institution</h3>
-        <p>Digital Biology Lab, Health Informatics Institute, Morsani College of Medicine,
-          University of South Florida, Tampa, Florida, USA</p>
-        <h3>Contact</h3>
-        <p>Yichuan Zhang — yichuan@usf.edu<br>Duolin Wang — duolinwang@usf.edu</p>
-        <h3>License</h3>
-        <p>© 2026 Yichuan Zhang. Licensed under
-          <a href="https://polyformproject.org/licenses/noncommercial/1.0.0" target="_blank" rel="noopener" tabindex="0">PolyForm Noncommercial 1.0.0</a>.
-          Commercial uses outside the license's permitted purposes require separate authorization.
-          Third-party software and data retain their own licenses.</p>
-        <h3>Paper</h3>
-        <p>Paper coming soon.</p>
+        <div class="about-details">
+          <dl class="about-build-info" aria-live="polite"><dt>Version:</dt><dd>Loading…</dd></dl>
+          <div class="about-meta">
+            <p>${ABOUT_AFFILIATION}</p>
+            <p>${ABOUT_COPYRIGHT} · <a href="https://github.com/Yichuan0712/AnnoBio/blob/main/LICENSE" target="_blank" rel="noopener" tabindex="0">AnnoBio Non-Commercial License</a></p>
+            <p>Paper coming soon.</p>
+          </div>
+        </div>
       </div>
-      <div class="modal-alert-footer"><button type="button" class="btn btn-primary about-close">Close</button></div>
+      <div class="modal-alert-footer about-footer">
+        <span class="about-copy-status" role="status"></span>
+        <button type="button" class="btn btn-secondary about-copy" disabled>Copy</button>
+        <button type="button" class="btn btn-primary about-close">OK</button>
+      </div>
     </div>`;
   const close = mountModalDialog(overlay);
   overlay.querySelector('.modal-close').addEventListener('click', close);
@@ -46,10 +46,33 @@ export function openAboutModal() {
   overlay.addEventListener('click', (event) => { if (event.target === overlay) close(); });
   overlay.querySelectorAll('a').forEach((link) => attachExternalBrowserLink(link,
     (message) => showAlert(message, { title: 'Open link' })));
-  overlay.querySelector('.modal-close').focus();
-  const version = overlay.querySelector('.about-version');
+  overlay.querySelector('.about-close').focus();
+  const details = overlay.querySelector('.about-build-info');
+  const copy = overlay.querySelector('.about-copy');
+  const status = overlay.querySelector('.about-copy-status');
+  function showInfo(info) {
+    details.replaceChildren(...appInfoRows(info).flatMap(([label, value]) => {
+      const term = document.createElement('dt');
+      const description = document.createElement('dd');
+      term.textContent = `${label}:`;
+      description.textContent = value;
+      return [term, description];
+    }));
+  }
   Promise.resolve().then(() => window.electronAPI?.getAppInfo?.()).then((info) => {
-    version.textContent = typeof info?.version === 'string' && info.version.trim()
-      ? `Version ${info.version.trim()}` : 'Version unavailable';
-  }).catch(() => { version.textContent = 'Version unavailable'; });
+    showInfo(info);
+    copy.disabled = !info || !window.electronAPI?.copyAppInfo;
+  }).catch(() => { showInfo(null); });
+  copy.addEventListener('click', async () => {
+    copy.disabled = true;
+    try {
+      const result = await window.electronAPI.copyAppInfo();
+      if (!result?.ok) throw new Error('Copy failed');
+      status.textContent = 'Copied.';
+    } catch {
+      status.textContent = 'Could not copy information.';
+    } finally {
+      copy.disabled = false;
+    }
+  });
 }
