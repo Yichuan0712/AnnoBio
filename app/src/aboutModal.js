@@ -29,7 +29,7 @@ export function openAboutModal() {
           <dl class="about-build-info" aria-live="polite"><dt>Version:</dt><dd>Loading…</dd></dl>
           <div class="about-meta">
             <p>${ABOUT_AFFILIATION}</p>
-            <p>${ABOUT_COPYRIGHT} · <a href="https://github.com/Yichuan0712/AnnoBio/blob/main/LICENSE" target="_blank" rel="noopener" tabindex="0">AnnoBio Non-Commercial License</a></p>
+            <p>${ABOUT_COPYRIGHT} · <a href="https://github.com/Yichuan0712/AnnoBio/blob/main/LICENSE" target="_blank" rel="noopener" tabindex="0">View Licence</a></p>
             <p>Paper coming soon.</p>
           </div>
         </div>
