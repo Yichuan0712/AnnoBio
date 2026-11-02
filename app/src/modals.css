@@ -278,6 +278,14 @@
   color: var(--text);
 }
 
+.modal-panel--about { width: min(600px, calc(100vw - 40px)); }
+.about-content { overflow-y: auto; line-height: 1.6; }
+.about-content p { margin: 0 0 14px; }
+.about-content .about-version { font-size: 15px; font-weight: 600; }
+.about-content h3 { margin: 22px 0 6px; font-size: 14px; }
+.about-content a { color: var(--accent); overflow-wrap: anywhere; }
+.about-links { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+
 .modal-alert-footer {
   display: flex;
   justify-content: flex-end;

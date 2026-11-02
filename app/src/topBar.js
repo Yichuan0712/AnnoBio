@@ -9,6 +9,7 @@
 import { setTheme, THEME_LIGHT, THEME_DARK } from './theme.js';
 import { showAlert } from './alertModal.js';
 import { openPythonSettingsModal } from './pythonSettingsModal.js';
+import { openAboutModal } from './aboutModal.js';
 import { iconClose, iconMaximize, iconMinimize, iconRestore } from './modalMaximize.js';
 import { iconProcess, iconRun } from './icons.js';
 import logoIconUrl from '../../images/logo.png';
@@ -166,6 +167,13 @@ function buildDesktopTopBar(root, { openAddPromptModal, openAddDatasetModal, add
   submenu.querySelector('[data-mode="dark"]').addEventListener('click', () => setTheme(THEME_DARK));
   displayModeOpt.appendChild(submenu);
   settingsDrop.appendChild(displayModeOpt);
+  const aboutOpt = document.createElement('button');
+  aboutOpt.type = 'button';
+  aboutOpt.className = 'menu-option';
+  aboutOpt.setAttribute('data-action', 'about');
+  aboutOpt.textContent = 'About...';
+  aboutOpt.addEventListener('click', openAboutModal);
+  settingsDrop.appendChild(aboutOpt);
   settingsBtn.appendChild(settingsDrop);
   bar.appendChild(settingsBtn);
 

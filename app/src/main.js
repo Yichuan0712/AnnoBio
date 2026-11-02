@@ -772,6 +772,7 @@ ipcMain.handle('fs:write-file', async (_e, filePath, data, encoding) => {
   await fs.writeFile(filePath, buf, enc === 'base64' ? undefined : enc);
 });
 
+ipcMain.handle('app:info', () => ({ version: app.getVersion() }));
 ipcMain.handle('backend-log:get', () => backendLog?.lines() || []);
 ipcMain.handle('backend-log:renderer-error', (_event, entry) => {
   if (entry && typeof entry === 'object') backendLog?.rendererError(entry);

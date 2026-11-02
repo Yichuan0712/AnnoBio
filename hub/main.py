@@ -27,6 +27,7 @@ import mailer
 from guide import GUIDE_GROUPS, build_chapters
 from proxy import proxy_request
 from hosted_model import router as hosted_model_router
+from releases import latest_release
 
 mimetypes.add_type("image/webp", ".webp")
 db.init_db()
@@ -378,29 +379,28 @@ def whoami(request: Request):
 
 # The newest non-prerelease GitHub release; file names are fixed in app/electron-builder.yml.
 # These only work for visitors once the repo is public.
-WINDOWS_INSTALLER_URL = "https://github.com/Yichuan0712/AnnoBio/releases/latest/download/AnnoBio-Setup-x64.exe"
-MAC_INSTALLER_URL = "https://github.com/Yichuan0712/AnnoBio/releases/latest/download/AnnoBio-arm64.dmg"
-
-
 @app.get("/download")
 def download_page(request: Request):
     """Public page for the two desktop installers (built by .github/workflows/build-desktop.yml
     and published as GitHub releases)."""
     user = current_user(request)
     browser_href = "/app" if user else "/login"
+    release = latest_release()
+    release_label = f"Version {release.version}" if release.version else "Version temporarily unavailable — view releases"
     body = f"""
       <h1>Download AnnoBio</h1>
       <p class="page-sub">The desktop app for Windows and macOS.</p>
+      <p class="download-version">Latest desktop release: <a class="link" href="{escape(release.url, quote=True)}" target="_blank" rel="noopener">{escape(release_label)}</a></p>
       <div class="download-grid">
         <div class="download-card">
           <h3>Windows</h3>
           <p>.exe installer</p>
-          <a class="btn btn-primary" href="{WINDOWS_INSTALLER_URL}" target="_blank" rel="noopener">Download</a>
+          <a class="btn btn-primary" href="{escape(release.windows_url, quote=True)}" target="_blank" rel="noopener">Download</a>
         </div>
         <div class="download-card">
           <h3>macOS</h3>
           <p>.dmg installer, Apple Silicon</p>
-          <a class="btn btn-primary" href="{MAC_INSTALLER_URL}" target="_blank" rel="noopener">Download</a>
+          <a class="btn btn-primary" href="{escape(release.mac_url, quote=True)}" target="_blank" rel="noopener">Download</a>
         </div>
       </div>
       <p class="download-note">
@@ -409,6 +409,7 @@ def download_page(request: Request):
     """
     extra_css = """
       .download-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }
+      .download-version { margin: -16px 0 28px; font-size: 14px; color: var(--text-muted); }
       .download-card { background: var(--bg); border: 1px solid var(--border); border-radius: var(--control-radius); padding: 22px; text-align: center; }
       .download-card h3 { margin: 0 0 4px; font-size: 17px; }
       .download-card p { margin: 0 0 16px; color: var(--text-muted); font-size: 13.5px; }
@@ -422,8 +423,11 @@ def download_page(request: Request):
 @app.get("/about")
 def about_page(request: Request):
     user = current_user(request)
-    body = """
+    release = latest_release()
+    release_label = f"Version {release.version}" if release.version else "Version temporarily unavailable — view releases"
+    body = f"""
       <h1>About AnnoBio</h1>
+      <p class="about-version">Latest desktop release: <a class="link" href="{escape(release.url, quote=True)}" target="_blank" rel="noopener">{escape(release_label)}</a></p>
       <p class="page-sub">
         AnnoBio is a visual workspace for building biomedical AI workflows. Connect data, prompts,
         and processing steps on the canvas, or describe your research task to the Agent and build
@@ -451,6 +455,7 @@ def about_page(request: Request):
     """
     extra_css = """
       .about-heading { font-size: 18px; margin: 32px 0 12px; }
+      .about-version { margin: 8px 0 20px; font-size: 14px; color: var(--text-muted); }
       .about-contact-intro { margin-bottom: 16px; }
       .about-contact-line { margin: 0 0 8px; font-size: 14px; color: var(--text); }
       a.link { color: var(--accent); text-decoration: none; }

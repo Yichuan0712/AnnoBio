@@ -4,6 +4,17 @@ import { allowedExternalUrl, attachExternalBrowserLink } from '../src/externalLi
 
 const screenUrl = 'https://console.wenglab.org/docs/getting-started/auth';
 
+test('About links are permitted without opening unrelated repository or license URLs', () => {
+  for (const url of ['https://annobio.org/', 'https://github.com/Yichuan0712/AnnoBio',
+    'https://github.com/Yichuan0712/AnnoBio/releases', 'https://polyformproject.org/licenses/noncommercial/1.0.0']) {
+    assert.equal(allowedExternalUrl(url), url);
+  }
+  for (const url of ['https://github.com/other/project', 'https://annobio.org.evil.test/',
+    'https://polyformproject.org/licenses/other', 'https://user:pass@annobio.org/']) {
+    assert.equal(allowedExternalUrl(url), null);
+  }
+});
+
 test('credential documentation and existing OpenRouter OAuth can open externally', () => {
   for (const url of [screenUrl, 'https://api.iucnredlist.org/',
     'https://www.guidetopharmacology.org/webServices.jsp', 'https://www.synapse.org/PersonalAccessTokens',

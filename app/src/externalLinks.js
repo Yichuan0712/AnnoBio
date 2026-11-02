@@ -6,6 +6,13 @@ const CREDENTIAL_HELP_URLS = new Set([
   'https://www.synapse.org/PersonalAccessTokens',
 ]);
 
+const ABOUT_URLS = new Set([
+  'https://annobio.org/',
+  'https://github.com/Yichuan0712/AnnoBio',
+  'https://github.com/Yichuan0712/AnnoBio/releases',
+  'https://polyformproject.org/licenses/noncommercial/1.0.0',
+]);
+
 /** Source links open only public-looking web URLs, never files or app protocols.
  * The backend separately resolves and pins public IPs before fetching any page. */
 export function allowedWebSourceUrl(value) {
@@ -43,7 +50,7 @@ export function allowedExternalUrl(value) {
     const url = new URL(value);
     if (url.protocol !== 'https:' || url.username || url.password || url.port) return null;
     // OpenRouter OAuth already uses this bridge, with a generated path and query string.
-    return url.hostname === 'openrouter.ai' || CREDENTIAL_HELP_URLS.has(url.href) ? url.href : null;
+    return url.hostname === 'openrouter.ai' || CREDENTIAL_HELP_URLS.has(url.href) || ABOUT_URLS.has(url.href) ? url.href : null;
   } catch (_) {
     return null;
   }
