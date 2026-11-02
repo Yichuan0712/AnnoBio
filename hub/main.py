@@ -442,8 +442,7 @@ def about_page(request: Request):
         Commercial use requires prior authorization.</p>
       <p>Publications using AnnoBio must acknowledge the software and cite appropriate
         references when available. Third-party software and data retain their own licenses.</p>
-      <p><a class="link" href="https://github.com/Yichuan0712/AnnoBio/blob/main/LICENSE">View Licence</a>
-        &middot; <a class="link" href="https://github.com/Yichuan0712/AnnoBio/blob/main/NOTICE">NOTICE</a></p>
+      <p><a class="link" href="https://github.com/Yichuan0712/AnnoBio/blob/main/LICENSE">View Licence</a></p>
       <h2 id="paper" class="about-heading">Paper</h2>
       <p>Paper coming soon.</p>
     """
