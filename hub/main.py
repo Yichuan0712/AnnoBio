@@ -446,9 +446,8 @@ def about_page(request: Request):
         Third-party software and data retain their own licenses.</p>
       <p>Versions previously distributed under MIT retain their original terms.
         This change does not retroactively replace licenses already granted for those copies.</p>
-      <p>Please cite AnnoBio when using it in research; see
-        <a class="link" href="https://github.com/Yichuan0712/AnnoBio/blob/main/CITATION.cff">CITATION.cff</a>.
-        Paper details will be added when available.</p>
+      <h2 id="paper" class="about-heading">Paper</h2>
+      <p>Paper coming soon.</p>
     """
     extra_css = """
       .about-heading { font-size: 18px; margin: 32px 0 12px; }

@@ -4,7 +4,7 @@ Licensed under [PolyForm Noncommercial 1.0.0](LICENSE). Commercial uses outside 
 license's permitted purposes require separate authorization from
 [Yichuan Zhang](mailto:yichuan@usf.edu) or [Duolin Wang](mailto:duolinwang@usf.edu).
 Redistributions must include the license or its URL and preserve the `Required Notice:`
-lines in [NOTICE](NOTICE). Suggested research citation: [CITATION.cff](CITATION.cff).
+lines in [NOTICE](NOTICE). Paper coming soon.
 
 A standalone Python library for prompt optimization: diagnose failed examples, group issues by root cause, propose local edits, verify candidates, and check for regressions. When needed, use Thompson sampling to search combinations of alternative text segments.
 

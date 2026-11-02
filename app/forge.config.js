@@ -54,7 +54,7 @@ function useAnnoBioNameForDevElectron() {
 module.exports = {
   packagerConfig: {
     asar: true,
-    extraResource: ['LICENSE', 'NOTICE', 'CITATION.cff'].map((name) => path.join(__dirname, '..', name)),
+    extraResource: ['LICENSE', 'NOTICE'].map((name) => path.join(__dirname, '..', name)),
     icon: path.join(__dirname, 'assets', 'icon'),
     // Also names the packaged output dir `${name}-${platform}-${arch}`, which the `dist`
     // npm script and CI pass to electron-builder as `--pd out/AnnoBio-<platform>-<arch>`.

@@ -224,6 +224,4 @@ Redistributions must include the license text or its URL and preserve the
 their own licenses. Versions previously distributed under MIT retain their original
 terms; this change does not retroactively replace licenses already granted.
 
-Please cite AnnoBio when using it in research; see [CITATION.cff](CITATION.cff).
-Paper details will be added when available. This citation request is separate from
-the license's redistribution requirements.
+Paper coming soon.
