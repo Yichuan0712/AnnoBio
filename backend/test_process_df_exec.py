@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import unittest
+from unittest import mock
 
-from backend.process_df_exec import run_process_df_code
+from backend.process_df_exec import HOSTED_RUN_TIMEOUT_SEC, run_process_df_code, run_timeout_sec
 
 
 class ProcessDataframeExecutionTests(unittest.TestCase):
@@ -95,6 +97,31 @@ class ProcessDataframeExecutionTests(unittest.TestCase):
         outcome = self.run_code("def process(df):\n    return {'accepted': ['not a dataframe']}\n")
         self.assertFalse(outcome["ok"])
         self.assertIn('branch "accepted" must be a pandas DataFrame', outcome["error"])
+
+
+class ProcessRunTimeLimitTests(unittest.TestCase):
+    def test_desktop_has_no_limit_and_web_has_a_wide_one(self):
+        with mock.patch.dict(os.environ, {"ANNOBIO_HOSTED_MODE": "0"}):
+            self.assertIsNone(run_timeout_sec())
+        with mock.patch.dict(os.environ, {"ANNOBIO_HOSTED_MODE": "1"}):
+            self.assertEqual(run_timeout_sec(), HOSTED_RUN_TIMEOUT_SEC)
+        self.assertGreaterEqual(HOSTED_RUN_TIMEOUT_SEC, 30 * 60)
+
+    def test_desktop_run_is_started_without_a_timeout(self):
+        # Desktop: communicate() gets timeout=None, so long runs are never cut off.
+        with mock.patch.dict(os.environ, {"ANNOBIO_HOSTED_MODE": "0"}), \
+                mock.patch("subprocess.Popen.communicate", autospec=True,
+                           side_effect=lambda proc, input=None, timeout=None: (
+                               self.assertIsNone(timeout) or ('{"ok": true, "outputs": {}}', ""))):
+            outcome = run_process_df_code(sys.executable, "def process(df):\n    return df\n", ["a"], [[1]])
+        self.assertTrue(outcome["ok"])
+
+    def test_web_limit_stops_the_run_with_an_explanation(self):
+        outcome = run_process_df_code(sys.executable, "import time\n\ndef process(df):\n    time.sleep(30)\n    return df\n",
+                                      ["a"], [[1]], timeout_sec=1)
+        self.assertFalse(outcome["ok"])
+        self.assertIn("1 seconds", outcome["error"])
+        self.assertIn("desktop app has no time limit", outcome["error"])
 
 
 if __name__ == "__main__":

@@ -9,7 +9,9 @@ import { cloneCell, isAssetCell, normalizeDatasetContent } from './datasetConten
 import { prepareAssets } from './runClient.js';
 
 const POLL_MS = 700;
-const MAX_WAIT_MS = 5 * 60 * 1000;
+// No client-side limit by default: the backend owns the run time limit (none on desktop, a wide one
+// on the web) and every caller can stop a run through its AbortSignal or Cancel.
+const NO_LIMIT = 0;
 
 function rowsHaveAssetCells(rows) {
   return (rows || []).some((row) => (row || []).some((cell) => isAssetCell(cell)));
@@ -43,7 +45,7 @@ async function readPythonPath() {
  * @returns {Promise<{outputs: Record<string, {headers: string[], rows: any[][]}>, cancelled: boolean}>}
  *   throws with the Process error (traceback text) when the code fails
  */
-export async function runProcessCode({ code, bindings, signal, onStarted, timeoutMs = MAX_WAIT_MS }) {
+export async function runProcessCode({ code, bindings, signal, onStarted, timeoutMs = NO_LIMIT }) {
   const primary = bindings.find((binding) => binding.primary);
   if (!primary) throw new Error('The Process has no primary Dataset.');
   const pythonPath = await readPythonPath();
@@ -86,7 +88,7 @@ export async function detectProcessOutputs(code) {
 }
 
 /** Resume polling a Process job after reopening a project. */
-export async function waitForProcessJob(jobId, { signal, timeoutMs = MAX_WAIT_MS } = {}) {
+export async function waitForProcessJob(jobId, { signal, timeoutMs = NO_LIMIT } = {}) {
   const cancel = () => fetch(`${BACKEND_API_BASE}/api/process/df/run/cancel/${jobId}`, { method: 'POST' }).catch(() => {});
   signal?.addEventListener('abort', cancel, { once: true });
   const startedAt = Date.now();
@@ -95,7 +97,7 @@ export async function waitForProcessJob(jobId, { signal, timeoutMs = MAX_WAIT_MS
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       if (timeoutMs > 0 && Date.now() - startedAt > timeoutMs) {
         cancel();
-        throw new Error('The Process took longer than 5 minutes and was stopped.');
+        throw new Error(`The Process took longer than ${Math.round(timeoutMs / 1000)} seconds and was stopped.`);
       }
       const res = await fetch(`${BACKEND_API_BASE}/api/process/df/run/result/${jobId}`, { signal });
       const data = await res.json().catch(() => ({}));

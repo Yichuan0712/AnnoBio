@@ -12,7 +12,22 @@ import os
 import subprocess
 import tempfile
 
-RUN_TIMEOUT_SEC = 120
+# The desktop app runs Process code on the user's own machine, so it has no time limit: a run is
+# stopped with Cancel. The web version runs it in the user's container on a shared server and stops
+# it after HOSTED_RUN_TIMEOUT_SEC.
+HOSTED_RUN_TIMEOUT_SEC = 30 * 60
+
+
+def run_timeout_sec() -> int | None:
+    """None (no limit) on the desktop app; HOSTED_RUN_TIMEOUT_SEC on the web version."""
+    return HOSTED_RUN_TIMEOUT_SEC if os.environ.get("ANNOBIO_HOSTED_MODE") == "1" else None
+
+
+def _timeout_error(timeout_sec: int) -> str:
+    minutes = timeout_sec / 60
+    limit = f"{minutes:g} minutes" if minutes >= 1 else f"{timeout_sec} seconds"
+    return (f"Stopped after {limit}: the web version limits each Process run to {limit}. "
+            "The desktop app has no time limit.")
 
 _WRAPPER_HEADER = """import sys, json
 
@@ -98,10 +113,11 @@ def _build_wrapper(code: str) -> str:
     return _WRAPPER_HEADER + code + _WRAPPER_FOOTER
 
 
-def run_process_df_code(python_path: str, code: str, headers: list, rows: list, input_datasets: dict | None = None, primary_dataset_id: str = "", register_proc=None, timeout_sec: int = RUN_TIMEOUT_SEC) -> dict:
+def run_process_df_code(python_path: str, code: str, headers: list, rows: list, input_datasets: dict | None = None, primary_dataset_id: str = "", register_proc=None, timeout_sec: int | None = None) -> dict:
     """
     Runs `code`'s process(df) once on the primary Dataset. Additional input Datasets are exposed
     independently through readable `df_<dataset_name>` globals.
+    `timeout_sec` None means the edition's limit from run_timeout_sec() (none on desktop).
     `register_proc(proc)`, if given, is called with the subprocess.Popen as soon as it's spawned,
     so the caller can kill it to cancel a run in progress. Returns {"ok": True, "outputs":
     {branch_name: [...]}} or {"ok": False, "error": ...}. Never raises.
@@ -140,12 +156,13 @@ def run_process_df_code(python_path: str, code: str, headers: list, rows: list, 
         if register_proc:
             register_proc(proc)
 
+        limit = run_timeout_sec() if timeout_sec is None else timeout_sec
         try:
-            out, err = proc.communicate(input=payload, timeout=timeout_sec)
+            out, err = proc.communicate(input=payload, timeout=limit)
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.communicate()
-            return {"ok": False, "error": f"Timed out after {timeout_sec}s"}
+            return {"ok": False, "error": _timeout_error(limit)}
 
         out = out or ""
         err = err or ""

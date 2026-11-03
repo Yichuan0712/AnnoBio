@@ -41,7 +41,10 @@ def process(df, df_chembl_targets):
   to DataFrames. Each branch is an output other steps can read directly; it can also be saved as a
   Dataset to freeze it. Always return every branch, empty when it has no rows: a pipeline needs each
   branch the code was detected to return.
-- Returning anything else is an error. The run times out after 120 seconds.
+- Returning anything else is an error.
+- The desktop app has no time limit; a long run keeps going until it finishes or the user cancels it.
+  The web version stops a run after 30 minutes. Test changes with `try_process` on the truncated
+  `df` before a full run on a large table.
 
 ## Environment
 
