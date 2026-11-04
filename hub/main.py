@@ -438,16 +438,17 @@ def about_page(request: Request):
       <p class="about-contact-line">Yichuan Zhang (<a class="link" href="mailto:yichuan@usf.edu">yichuan@usf.edu</a>)</p>
       <p class="about-contact-line">Duolin Wang (<a class="link" href="mailto:duolinwang@usf.edu">duolinwang@usf.edu</a>)</p>
       <h2 id="license" class="about-heading">License</h2>
-      <p>AnnoBio is source-available for internal non-commercial use.
+      <p class="about-text">AnnoBio is source-available for internal non-commercial use.
         Commercial use requires prior authorization.</p>
-      <p>Publications using AnnoBio must acknowledge the software and cite appropriate
+      <p class="about-text">Publications using AnnoBio must acknowledge the software and cite appropriate
         references when available. Third-party software and data retain their own licenses.</p>
-      <p><a class="link" href="https://github.com/Yichuan0712/AnnoBio/blob/main/LICENSE">View Licence</a></p>
+      <p class="about-text"><a class="link" href="https://github.com/Yichuan0712/AnnoBio/blob/main/LICENSE">View Licence</a></p>
       <h2 id="paper" class="about-heading">Paper</h2>
-      <p>Paper coming soon.</p>
+      <p class="about-text">Paper coming soon.</p>
     """
     extra_css = """
       .about-heading { font-size: 18px; margin: 32px 0 12px; }
+      .about-text { margin: 0 0 16px; font-size: 15px; line-height: 1.6; color: var(--text-muted); }
       .about-version { margin: 8px 0 20px; font-size: 14px; color: var(--text-muted); }
       .about-contact-intro { margin-bottom: 16px; }
       .about-contact-line { margin: 0 0 8px; font-size: 14px; color: var(--text); }
