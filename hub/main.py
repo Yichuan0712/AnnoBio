@@ -427,29 +427,29 @@ def about_page(request: Request):
     release_label = f"Version {release.version}" if release.version else "Version temporarily unavailable — view releases"
     body = f"""
       <h1>About AnnoBio</h1>
-      <p class="about-version">Latest desktop release: <a class="link" href="{escape(release.url, quote=True)}" target="_blank" rel="noopener">{escape(release_label)}</a></p>
       <p class="page-sub">
         AnnoBio is a visual workspace for building biomedical AI workflows. Connect data, prompts,
         and processing steps on the canvas, or describe your research task to the Agent and build
         the workflow together.
       </p>
+      <p class="about-version">Latest desktop release: <a class="link" href="{escape(release.url, quote=True)}" target="_blank" rel="noopener">{escape(release_label)}</a></p>
       <h2 class="about-heading">Contact</h2>
       <p class="page-sub about-contact-intro">For questions about AnnoBio data, methods, website feedback, or collaboration, please contact:</p>
       <p class="about-contact-line">Yichuan Zhang (<a class="link" href="mailto:yichuan@usf.edu">yichuan@usf.edu</a>)</p>
       <p class="about-contact-line">Duolin Wang (<a class="link" href="mailto:duolinwang@usf.edu">duolinwang@usf.edu</a>)</p>
       <h2 id="license" class="about-heading">License</h2>
       <p class="about-text">AnnoBio is source-available for internal non-commercial use.
-        Commercial use requires prior authorization.</p>
-      <p class="about-text">Publications using AnnoBio must acknowledge the software and cite appropriate
-        references when available. Third-party software and data retain their own licenses.</p>
-      <p class="about-text"><a class="link" href="https://github.com/Yichuan0712/AnnoBio/blob/main/LICENSE">View Licence</a></p>
+        Commercial use requires prior authorization.
+        Publications using AnnoBio must acknowledge the software and cite appropriate
+        references when available. Third-party software and data retain their own licenses.
+        <a class="link" href="https://github.com/Yichuan0712/AnnoBio/blob/main/LICENSE">View Licence</a></p>
       <h2 id="paper" class="about-heading">Paper</h2>
       <p class="about-text">Paper coming soon.</p>
     """
     extra_css = """
       .about-heading { font-size: 18px; margin: 32px 0 12px; }
       .about-text { margin: 0 0 16px; font-size: 15px; line-height: 1.6; color: var(--text-muted); }
-      .about-version { margin: 8px 0 20px; font-size: 14px; color: var(--text-muted); }
+      .about-version { margin: -16px 0 28px; font-size: 14px; color: var(--text-muted); }
       .about-contact-intro { margin-bottom: 16px; }
       .about-contact-line { margin: 0 0 8px; font-size: 14px; color: var(--text); }
       a.link { color: var(--accent); text-decoration: none; }
