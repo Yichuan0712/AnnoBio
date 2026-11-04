@@ -448,10 +448,11 @@ def about_page(request: Request):
     """
     extra_css = """
       .about-heading { font-size: 18px; margin: 32px 0 12px; }
-      .about-text { margin: 0 0 16px; font-size: 15px; line-height: 1.6; color: var(--text-muted); }
+      .about-text { margin: 0 0 16px; font-size: 15px; line-height: 1.6; color: var(--text); }
       .about-version { margin: 8px 0 20px; font-size: 14px; color: var(--text-muted); }
-      .about-contact-intro { margin-bottom: 16px; }
+      .about-contact-intro { margin-bottom: 16px; color: var(--text); }
       .about-contact-line { margin: 0 0 8px; font-size: 14px; color: var(--text); }
+      .about-contact-line a.link, .about-text a.link { color: var(--text); text-decoration: underline; }
       a.link { color: var(--accent); text-decoration: none; }
       a.link:hover { text-decoration: underline; }
     """
