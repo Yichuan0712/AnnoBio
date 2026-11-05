@@ -27,10 +27,10 @@ class EngineConfig:
     max_trials: int = 40
     max_segments: int = 5
     candidates_per_segment: int = 4
-    # Passed-at-baseline inputs outside a card's targets, drawn per session, that every
-    # verification and search trial also runs (design 6: regression guard).
+    # Inputs outside a card's targets that every verification and search trial also runs (design 6:
+    # regression guard): those with the highest baseline score (passing ones first), ties drawn per session.
     regression_examples: int = 4
-    # Search reward = target pass rate - regression_penalty * (lost / regression inputs), clipped to [0, 1].
+    # Search reward = mean target score - regression_penalty * (regression drop / regression inputs), in [0, 1].
     regression_penalty: float = 1.0
     history_items: int = 20
     # Full inputs/outputs attached to one propose/rewrite request; the other inputs it addresses are
@@ -111,6 +111,11 @@ class Check:
     full_pass: bool
     status: Literal["complete", "error"]
     error: str | None = None
+    # Score-based outcome, which also works for partial-credit tasks (e.g. per-document F1), where an
+    # input rarely becomes fully correct and a fully correct one often is not on a rerun:
+    target_gain: float = 0.0       # sum over targets of (score now - score at baseline)
+    target_score: float = 0.0      # mean target score now
+    regression_drop: float = 0.0   # sum over regression inputs of max(0, baseline score - score now)
 
 
 @dataclass(frozen=True, slots=True)

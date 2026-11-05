@@ -8,13 +8,21 @@ failed verification, accept or revert cards, and apply. Per round (one batch of 
    demos are on and none was accepted yet.
 2. Each card is verified. A localized card that fixes nothing or breaks a regression input is
    searched once (if search_failed_cards), and its optimized card replaces it if that one passes.
-3. A card passes when it fixes at least one target and breaks at most `max_lost` regression inputs.
-   From the passing cards the operator forms options: the rewrite card alone; all passing localized
-   cards together; the best localized card alone. Each option is run on the whole batch and
-   compared with the incumbent on the same inputs. An option is eligible when it loses at most
-   `max_lost` previously passing inputs and either gains at least `min_gain` (the noise margin, in
-   summed item scores) or ties within the margin while being shorter. The eligible option with
-   the largest gain wins (shorter on ties); with none, nothing changes.
+3. Outcomes are in item scores (pass/fail tasks: 0/1; partial-credit tasks such as per-document F1:
+   the score), so a partial improvement counts and a rerun wobble of a fully correct input does not
+   condemn a card. A card passes its verification (a lenient screen) when its targets gain at least
+   `min_fix` and its regression inputs drop by at most `max_drop` in total. From the passing cards
+   the operator forms options: the rewrite card alone; all passing localized cards together (the
+   best card of each issue cluster); the best localized card alone. Each option is run on the whole
+   batch and compared with the incumbent on the same inputs (the real gate). It is eligible when
+   the summed drop over the batch is at most `max_batch_drop` and the net gain is at least
+   `min_gain`, or ties within that margin while being shorter. The eligible option with the
+   largest gain wins (shorter on ties); with none, nothing changes.
+
+Default thresholds come from development pilot step 0 (2026-11-05): five identical runs of three
+prompts per task; each default sits at or above the 95th percentile of identical-run noise
+(16-item batch net gain: 1 / 0.9-1.2 / 1-2 for PubMedQA / BioRED / RoBBR; batch drop 1 / 1.3-1.8 /
+1-2; drop on 4 top-scoring inputs 1 / 0.7-1.3 / 1).
 
 The initial prompt is therefore always a candidate: it stays unless something beats it.
 
@@ -47,8 +55,10 @@ class OperatorConfig:
     schedule: Schedule = "compete"
     coarse_patience: int = 2
     coarse_budget_fraction: float = 0.4
-    min_gain: float = 1.0
-    max_lost: int = 0
+    min_fix: float = 0.5         # card screen: summed target score gain
+    max_drop: float = 1.0        # card screen: summed regression-input score drop
+    min_gain: float = 2.0        # batch gate: net summed score gain over the incumbent
+    max_batch_drop: float = 2.0  # batch gate: summed score drop over the batch
     search_failed_cards: bool = True
     # Search only a card that made some progress on its targets (fixed at least one, or matched more
     # comparison rows than the incumbent); a card that moved nothing is dropped instead of searched.
@@ -58,12 +68,13 @@ class OperatorConfig:
     def __post_init__(self):
         check.boolean(self.search_only_promising, "OperatorConfig.search_only_promising")
         check.choice(self.schedule, SCHEDULES, "OperatorConfig.schedule")
-        for name in ("coarse_patience", "max_lost", "demos_cap"):
+        for name in ("coarse_patience", "demos_cap"):
             check.integer(getattr(self, name), f"OperatorConfig.{name}", minimum=0)
         check.unit_score(self.coarse_budget_fraction, "OperatorConfig.coarse_budget_fraction")
-        check.finite_number(self.min_gain, "OperatorConfig.min_gain")
-        if self.min_gain < 0:
-            raise InputValueError("must be non-negative.", path="OperatorConfig.min_gain")
+        for name in ("min_fix", "max_drop", "min_gain", "max_batch_drop"):
+            check.finite_number(getattr(self, name), f"OperatorConfig.{name}")
+            if getattr(self, name) < 0:
+                raise InputValueError("must be non-negative.", path=f"OperatorConfig.{name}")
         check.boolean(self.search_failed_cards, "OperatorConfig.search_failed_cards")
 
 
@@ -78,7 +89,7 @@ class RoundSummary:
     cards: int
     accepted_card_ids: tuple[str, ...]
     gain: float | None
-    lost: int | None
+    lost: int | None  # inputs passing before and failing after (reported; the gate uses drop)
     chosen: str = ""  # the winning option: rewrite, localized, best_localized
     options: tuple[dict, ...] = ()  # every option tried: name, gain, lost, chars, eligible
 
@@ -208,7 +219,7 @@ class Operator:
         if not passing:
             return summary(False, "no card fixed a target without breaking a regression input", cards=len(cards))
         # Highest net fix count first; shorter text breaks ties.
-        passing.sort(key=lambda pair: (-(len(pair[1].fixed_ids) - len(pair[1].lost_ids)), len(pair[0].new_text)))
+        passing.sort(key=lambda pair: (-(pair[1].target_gain - pair[1].regression_drop), len(pair[0].new_text)))
         localized, clusters = [], set()
         for card, _ in passing:  # the combined option takes the best card of each issue cluster
             key = card.cluster_id or card.id
@@ -231,11 +242,12 @@ class Operator:
             candidate = session.apply()
             if candidate == session.source:
                 continue
-            gain, lost = _paired(session, baseline, session.run(candidate, [e.id for e in session.examples]))
+            gain, lost, drop = _paired(session, baseline, session.run(candidate, [e.id for e in session.examples]))
             within = abs(gain) < self.settings.min_gain
-            eligible = lost <= self.settings.max_lost and (
+            eligible = drop <= self.settings.max_batch_drop and (
                 gain >= self.settings.min_gain or (within and gain >= 0 and len(candidate) < len(session.source)))
-            tried.append({"name": name, "gain": gain, "lost": lost, "chars": len(candidate), "eligible": eligible})
+            tried.append({"name": name, "gain": gain, "lost": lost, "drop": drop, "chars": len(candidate),
+                          "eligible": eligible})
             if eligible and (best is None or (gain, -len(candidate)) > (best[2], -best[4])):
                 best = (name, chosen, gain, lost, len(candidate))
         for card_id in list(session.applied):
@@ -249,24 +261,26 @@ class Operator:
         return summary(True, reason, [c.id for c in chosen], gain, lost, len(cards), name, tried)
 
     def _acceptable(self, record) -> bool:
-        return record.status == "complete" and len(record.fixed_ids) >= 1 and len(record.lost_ids) <= self.settings.max_lost
+        return (record.status == "complete" and record.target_gain >= self.settings.min_fix
+                and record.regression_drop <= self.settings.max_drop)
 
 
-def _progress(session: Session, record) -> tuple[int, int]:
-    """(targets fixed, comparison rows matched beyond the incumbent's) for a verification."""
+def _progress(session: Session, record) -> tuple[float, int]:
+    """(target score gain, comparison rows matched beyond the incumbent's) for a verification."""
     if record.status != "complete":
         return (0, 0)
     base = {item.example_id: item for item in session.baseline().observations}
     before = sum(base[i].evaluation.matched_count if base[i].evaluation.total_count is not None
                  else int(session.passed(base[i])) for i in record.target_ids)
-    return (len(record.fixed_ids), record.matched_count - before)
+    return (round(record.target_gain, 9), record.matched_count - before)
 
 
-def _paired(session: Session, before, after) -> tuple[float, int]:
-    """Summed per-item score change on the same inputs, and the number of inputs that passed
-    before and fail after."""
+def _paired(session: Session, before, after) -> tuple[float, int, float]:
+    """On the same inputs: summed score change, inputs that passed before and fail after, and the
+    summed score drop (decreases only)."""
     old = {item.example_id: item for item in before.observations}
     gain = sum(item.evaluation.score - old[item.example_id].evaluation.score for item in after.observations)
     lost = sum(1 for item in after.observations
                if session.passed(old[item.example_id]) and not session.passed(item))
-    return gain, lost
+    drop = sum(max(0.0, old[item.example_id].evaluation.score - item.evaluation.score) for item in after.observations)
+    return gain, lost, drop

@@ -227,6 +227,45 @@ class RobustnessTests(unittest.TestCase):
         self.assertEqual(len(rewrite.payload["observations"]), 2)
 
 
+class PartialCreditTests(unittest.TestCase):
+    """Like BioRED's per-document F1: an input scores the fraction of its needed words in the prompt."""
+    def test_partial_improvements_count_and_regression_inputs_are_the_best_scored(self):
+        needs = [["alpha", "beta"], ["alpha", "gamma"], ["alpha", "delta"], ["base", "zeta"], ["base", "eta"]] + [["base"]] * 3
+
+        def partial_predict(prompt, inputs):
+            return {"share": sum(w in prompt for w in inputs["need"]) / len(inputs["need"])}
+
+        def partial_evaluate(example, prediction):
+            return Evaluation(prediction["share"])
+
+        def propose(p, need):
+            return {"prompt_edits": [{"name": "x", "phase1_addresses": ["y"], "old_sentence": "Answer the question.",
+                                      "new_sentence": "Answer the question. Mention alpha.", "reason": "r"}]}
+        model = Model(propose=propose)
+        model_diag = model.__call__
+
+        def scripted(request):  # diagnoses name the first missing word as the category
+            if request.stage == "diagnose":
+                need = next(w for w in request.payload["example"]["inputs"]["need"] if w not in request.payload["prompt"])
+                return {"card_title": need, "issue_summary": f"needs {need}", "rough_modification_opinion": need,
+                        "problem_category_hint": "words", "gt_suspect_note": ""}
+            return model_diag(request)
+        exs = [Example(f"e{i}", {"need": n}) for i, n in enumerate(needs)]
+        s = Session(model=scripted, predict=partial_predict, evaluate=partial_evaluate, prompt=PROMPT, examples=exs,
+                    config=EngineConfig(regression_examples=3, cluster_threshold=0))
+        (card,) = s.analyze("local")
+        record = s.verify(card.id)
+        self.assertEqual(record.fixed_ids, ())             # no input becomes fully correct ...
+        self.assertAlmostEqual(record.target_gain, 1.5)    # ... but e0-e2 each gain half a point
+        self.assertEqual(set(record.regression_ids), {"e5", "e6", "e7"})  # the fully correct ones, not e3/e4
+        op = Operator(model=scripted, predict=partial_predict, evaluate=partial_evaluate,
+                      config=EngineConfig(regression_examples=3, cluster_threshold=0),
+                      operator=OperatorConfig(schedule="fine_only", min_gain=1.0))
+        first = op.run(PROMPT, [exs]).rounds[0]
+        self.assertTrue(first.committed)
+        self.assertAlmostEqual(first.gain, 1.5)
+
+
 class OperatorTests(unittest.TestCase):
     def batches(self, n=4):
         return [examples() for _ in range(n)]

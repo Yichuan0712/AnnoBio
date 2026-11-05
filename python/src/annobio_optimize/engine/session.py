@@ -368,18 +368,27 @@ class Session:
 
     # ------------------------------------------------------------------ verify and search
 
-    def regression_ids(self) -> tuple[str, ...]:
-        """Inputs that pass at baseline, drawn once per session with its seed (design 6)."""
+    def regression_order(self) -> tuple[str, ...]:
+        """Every input, highest baseline score first (passing ones first); ties in a seeded per-session
+        order. A check takes the first `regression_examples` that the card does not target or show
+        (design 6). For a pass/fail task this is a random draw of passing inputs; for a partial-credit
+        task, where few inputs are fully correct, it still finds the inputs the prompt does well on."""
         if self._regression is None:
-            passed = [item.example_id for item in self.baseline().observations if self.passed(item)]
-            self._regression = tuple(sorted(self.rng.sample(passed, min(self.config.regression_examples, len(passed))),
-                                            key=[e.id for e in self.examples].index))
+            observations = list(self.baseline().observations)
+            ties = {item.example_id: self.rng.random() for item in observations}
+            self._regression = tuple(item.example_id for item in sorted(
+                observations, key=lambda o: (not self.passed(o), -o.evaluation.score, ties[o.example_id])))
         return self._regression
+
+    def regression_ids(self, exclude=()) -> tuple[str, ...]:
+        excluded = set(exclude)
+        chosen = [id for id in self.regression_order() if id not in excluded][:self.config.regression_examples]
+        return tuple(id for id in (e.id for e in self.examples) if id in set(chosen))
 
     def _check_prompt(self, card: Card, prompt: str, kind: str) -> Check:
         baseline = {item.example_id: item for item in self.baseline().observations}
         targets = tuple(id for id in (e.id for e in self.examples) if id in set(card.target_example_ids))
-        regression = tuple(id for id in self.regression_ids() if id not in set(targets) and id not in set(card.demo_example_ids))
+        regression = self.regression_ids(set(targets) | set(card.demo_example_ids))
         id = f"check-{len(self.checks) + 1}"
         try:
             if prompt.strip() == self.source.strip():
@@ -400,9 +409,13 @@ class Session:
             total += evaluation.total_count if evaluation.total_count is not None else 1
         fixed = tuple(i for i in targets if self.passed(by_id[i]) and not self.passed(baseline[i]))
         lost = tuple(i for i in regression if self.passed(baseline[i]) and not self.passed(by_id[i]))
+        gain = sum(by_id[i].evaluation.score - baseline[i].evaluation.score for i in targets)
+        drop = sum(max(0.0, baseline[i].evaluation.score - by_id[i].evaluation.score) for i in regression)
         record = Check(id, card.id, kind, prompt_id(prompt), targets, regression, fixed, lost, matched, total,
                        (sum(self.passed(by_id[i]) for i in targets) / len(targets)) if targets else 0.0,
-                       bool(targets) and all(self.passed(by_id[i]) for i in targets), "complete")
+                       bool(targets) and all(self.passed(by_id[i]) for i in targets), "complete",
+                       target_gain=gain, regression_drop=drop,
+                       target_score=sum(by_id[i].evaluation.score for i in targets) / len(targets) if targets else 0.0)
         self.checks.append(record)
         return record
 
@@ -418,8 +431,8 @@ class Session:
     def reward(self, record: Check) -> float:
         if record.status != "complete":
             return 0.0
-        penalty = self.config.regression_penalty * (len(record.lost_ids) / len(record.regression_ids)) if record.regression_ids else 0.0
-        return min(1.0, max(0.0, record.target_rate - penalty))
+        penalty = self.config.regression_penalty * (record.regression_drop / len(record.regression_ids)) if record.regression_ids else 0.0
+        return min(1.0, max(0.0, record.target_score - penalty))
 
     def searchable(self, card_id: str) -> bool:
         card = self.card(card_id)
