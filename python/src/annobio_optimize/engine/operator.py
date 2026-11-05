@@ -50,9 +50,13 @@ class OperatorConfig:
     min_gain: float = 1.0
     max_lost: int = 0
     search_failed_cards: bool = True
+    # Search only a card that made some progress on its targets (fixed at least one, or matched more
+    # comparison rows than the incumbent); a card that moved nothing is dropped instead of searched.
+    search_only_promising: bool = False
     demos_cap: int = 0  # 0: no worked-examples card (the zero-shot condition)
 
     def __post_init__(self):
+        check.boolean(self.search_only_promising, "OperatorConfig.search_only_promising")
         check.choice(self.schedule, SCHEDULES, "OperatorConfig.schedule")
         for name in ("coarse_patience", "max_lost", "demos_cap"):
             check.integer(getattr(self, name), f"OperatorConfig.{name}", minimum=0)
@@ -177,21 +181,40 @@ class Operator:
                 cards.append(card)
         if not session.issues:
             return summary(False, "no failed inputs in this batch")
-        passing = []
-        for card in cards:
-            record = session.verify(card.id)
-            if not self._acceptable(record) and self.settings.search_failed_cards and session.searchable(card.id):
+        records = {card.id: session.verify(card.id) for card in cards}
+        passing = [(card, records[card.id]) for card in cards if self._acceptable(records[card.id])]
+        if self.settings.search_failed_cards:
+            # At most one search per issue cluster, and none for a cluster that already has a passing
+            # card: the failing alternative with the most progress is searched.
+            covered = {card.cluster_id for card, _ in passing if card.cluster_id}
+            chosen: dict[str, tuple] = {}
+            for card in cards:
+                record = records[card.id]
+                if self._acceptable(record) or not session.searchable(card.id) or card.cluster_id in covered:
+                    continue
+                progress = _progress(session, record)
+                if self.settings.search_only_promising and progress <= (0, 0):
+                    continue
+                key = card.cluster_id or card.id
+                if key not in chosen or progress > chosen[key][0]:
+                    chosen[key] = (progress, card)
+            for _, card in sorted(chosen.values(), key=lambda item: cards.index(item[1])):
                 searched = session.search(card.id)
                 if searched.optimized_card_id is not None:
-                    card = session.card(searched.optimized_card_id)
-                    record = session.latest_check(card.id)
-            if record is not None and self._acceptable(record):
-                passing.append((card, record))
+                    optimized = session.card(searched.optimized_card_id)
+                    record = session.latest_check(optimized.id)
+                    if record is not None and self._acceptable(record):
+                        passing.append((optimized, record))
         if not passing:
             return summary(False, "no card fixed a target without breaking a regression input", cards=len(cards))
         # Highest net fix count first; shorter text breaks ties.
         passing.sort(key=lambda pair: (-(len(pair[1].fixed_ids) - len(pair[1].lost_ids)), len(pair[0].new_text)))
-        localized = [card for card, _ in passing if card.kind != "rewrite"]
+        localized, clusters = [], set()
+        for card, _ in passing:  # the combined option takes the best card of each issue cluster
+            key = card.cluster_id or card.id
+            if card.kind != "rewrite" and key not in clusters:
+                clusters.add(key)
+                localized.append(card)
         options = []
         if localized:
             options.append(("localized", localized))
@@ -227,6 +250,16 @@ class Operator:
 
     def _acceptable(self, record) -> bool:
         return record.status == "complete" and len(record.fixed_ids) >= 1 and len(record.lost_ids) <= self.settings.max_lost
+
+
+def _progress(session: Session, record) -> tuple[int, int]:
+    """(targets fixed, comparison rows matched beyond the incumbent's) for a verification."""
+    if record.status != "complete":
+        return (0, 0)
+    base = {item.example_id: item for item in session.baseline().observations}
+    before = sum(base[i].evaluation.matched_count if base[i].evaluation.total_count is not None
+                 else int(session.passed(base[i])) for i in record.target_ids)
+    return (len(record.fixed_ids), record.matched_count - before)
 
 
 def _paired(session: Session, before, after) -> tuple[float, int]:

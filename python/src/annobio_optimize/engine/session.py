@@ -269,7 +269,8 @@ class Session:
                     "prompt": self.source, "cluster": asdict(cluster), "history": self._history_payload(),
                     "issues": [{k: v for k, v in asdict(i).items() if k != "reference_note"}
                                for i in issues if i.id in cluster.issue_ids],
-                    "observations": self._observations(cluster.example_ids)})
+                    "observations": self._observations(cluster.example_ids),
+                    **({"num_edits": self.config.proposals_per_cluster} if self.config.proposals_per_cluster > 1 else {})})
             except ModelResponseError as exc:
                 self.notices.append(Notice("propose", str(exc), cluster.id))
                 continue
@@ -277,7 +278,7 @@ class Session:
             if not isinstance(edits, list):
                 self.notices.append(Notice("propose", "prompt_edits must be an array.", cluster.id))
                 continue
-            for raw in edits:
+            for raw in edits[:self.config.proposals_per_cluster]:
                 try:
                     card = self._local_card(raw, cluster)
                 except (ValueError, TypeError, ModelResponseError) as exc:

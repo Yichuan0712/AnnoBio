@@ -322,6 +322,43 @@ class OperatorTests(unittest.TestCase):
         self.assertEqual([r.phase for r in result.rounds], ["fine", "both", "fine", "both"])
         self.assertEqual(result.prompt, PROMPT)
 
+    def test_several_directions_per_cluster_one_card_each_in_the_combined_option(self):
+        def propose(p, need):
+            return {"prompt_edits": [
+                {"name": "wrong", "phase1_addresses": ["y"], "old_sentence": "Answer the question.",
+                 "new_sentence": "Answer the question. Mention gamma.", "reason": "r"},
+                {"name": "right", "phase1_addresses": ["y"], "old_sentence": "Answer the question.",
+                 "new_sentence": f"Answer the question. Mention {need}.", "reason": "r"},
+                {"name": "also right", "phase1_addresses": ["y"], "old_sentence": "Answer the question.",
+                 "new_sentence": f"Answer the question. Always mention {need}.", "reason": "r"},
+                {"name": "beyond the limit", "phase1_addresses": ["y"], "old_sentence": "Answer the question.",
+                 "new_sentence": "Answer the question. Mention delta.", "reason": "r"}]}
+        model = Model(propose=propose)
+        config = EngineConfig(regression_examples=3, cluster_threshold=0, proposals_per_cluster=3)
+        op = Operator(model=model, predict=predict, evaluate=evaluate, config=config,
+                      operator=OperatorConfig(schedule="fine_only"))
+        first = op.run(PROMPT, [examples()]).rounds[0]
+        request = next(r for r in model.calls if r.stage == "propose")
+        self.assertEqual(request.payload["num_edits"], 3)
+        self.assertIn("DIFFERENT approach", request.instruction)
+        self.assertEqual(request.response_schema["properties"]["prompt_edits"]["maxItems"], 3)
+        # 3 directions x 2 clusters, the 4th reply ignored; both clusters' identical "gamma" edit merges into one card.
+        self.assertEqual(first.cards, 5)
+        self.assertEqual((first.committed, first.chosen, len(first.accepted_card_ids)), (True, "localized", 2))
+        # Each cluster already had a passing card, so the failing "gamma" cards were not searched.
+        self.assertFalse(any(r.stage == "segment" for r in model.calls))
+
+    def test_search_only_promising_drops_cards_that_moved_nothing(self):
+        def propose(p, need):
+            return {"prompt_edits": [{"name": "wrong", "phase1_addresses": ["y"], "old_sentence": "Answer the question.",
+                                      "new_sentence": "Answer the question. Mention gamma.", "reason": "r"}]}
+        for promising, searched in ((False, True), (True, False)):
+            model = Model(propose=propose)
+            op = Operator(model=model, predict=predict, evaluate=evaluate, config=CFG,
+                          operator=OperatorConfig(schedule="fine_only", search_only_promising=promising))
+            op.run(PROMPT, [examples()])
+            self.assertEqual(any(r.stage == "segment" for r in model.calls), searched)
+
     def test_runs_are_deterministic(self):
         def run():
             op = Operator(model=Model(), predict=predict, evaluate=evaluate, config=CFG,

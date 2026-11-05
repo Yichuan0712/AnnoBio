@@ -36,6 +36,8 @@ class EngineConfig:
     # Full inputs/outputs attached to one propose/rewrite request; the other inputs it addresses are
     # represented by their diagnosis cards only (a long-document task would otherwise overflow the context).
     max_evidence_examples: int = 3
+    # Different-direction localized edits the model proposes per issue cluster (1 = the app's behavior).
+    proposals_per_cluster: int = 1
     pass_threshold: float = 1.0
     max_model_calls: int | None = None
     max_predictions: int | None = None
@@ -45,6 +47,7 @@ class EngineConfig:
         for name in ("max_failed_examples", "cluster_threshold", "max_cards", "max_trials", "max_segments",
                      "candidates_per_segment", "regression_examples", "history_items", "max_evidence_examples"):
             check.integer(getattr(self, name), f"EngineConfig.{name}", minimum=0)
+        check.integer(self.proposals_per_cluster, "EngineConfig.proposals_per_cluster", minimum=1)
         for name in ("max_failed_examples", "max_cards", "max_trials", "max_segments", "candidates_per_segment"):
             if getattr(self, name) < 1:
                 raise InputValueError("must be at least 1.", path=f"EngineConfig.{name}")

@@ -84,7 +84,16 @@ SCHEMAS = {
 }
 
 
+ALTERNATIVES = (
+    " Return num_edits objects in prompt_edits instead of one. Each must take a genuinely DIFFERENT approach to "
+    "the same findings (a different rule, a different sentence to change, or adding versus rewriting), not a "
+    "rewording of another; order them from most to least promising.")
+
+
 def request(stage: str, payload: dict) -> ModelRequest:
-    return ModelRequest(stage, _COMMON + INSTRUCTIONS[stage],
-                        json.loads(json.dumps(payload, ensure_ascii=False, allow_nan=False)),
-                        json.loads(json.dumps(SCHEMAS[stage])))
+    instruction, schema = _COMMON + INSTRUCTIONS[stage], json.loads(json.dumps(SCHEMAS[stage]))
+    count = payload.get("num_edits", 1) if stage == "propose" else 1
+    if count > 1:  # several directions per cluster (EngineConfig.proposals_per_cluster)
+        instruction += ALTERNATIVES
+        schema["properties"]["prompt_edits"]["maxItems"] = count
+    return ModelRequest(stage, instruction, json.loads(json.dumps(payload, ensure_ascii=False, allow_nan=False)), schema)
