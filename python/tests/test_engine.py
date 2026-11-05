@@ -415,6 +415,38 @@ class OperatorTests(unittest.TestCase):
         self.assertGreaterEqual(len(op.result.sessions), 1)  # including the session the stop interrupted
         self.assertTrue(op.result.sessions[0]["cards"])
 
+    def test_held_out_gate_rejects_a_change_that_only_fixes_the_diagnosed_batch(self):
+        # Batch 1 fails on "alpha"; batch 2 (the gate) has no "alpha" inputs, so adding alpha gains nothing there.
+        first = examples(["alpha", "alpha", "alpha", "base", "base", "base", "base", "base"])
+        second = [Example(f"g{i}", {"need": "base"}) for i in range(8)]
+        config = EngineConfig(regression_examples=3, cluster_threshold=0)
+        held_out = Operator(model=Model(), predict=predict, evaluate=evaluate, config=config,
+                            operator=OperatorConfig(schedule="fine_only", min_gain=1.0)).run(PROMPT, [first, second])
+        self.assertFalse(held_out.rounds[0].committed)
+        self.assertEqual(held_out.rounds[0].gate, "next")
+        self.assertIn("held-out next batch", held_out.rounds[0].reason)
+        self.assertEqual(held_out.sessions[0]["gate"]["examples"], [e.id for e in second])
+        same = Operator(model=Model(), predict=predict, evaluate=evaluate, config=config,
+                        operator=OperatorConfig(schedule="fine_only", min_gain=1.0, gate="same")).run(PROMPT, [first, second])
+        self.assertTrue(same.rounds[0].committed)  # in-sample: the fixed targets count as gain
+
+    def test_the_gate_batch_predictions_are_reused_by_the_next_round(self):
+        calls = {"n": 0}
+
+        def counting(prompt, inputs):
+            calls["n"] += 1
+            return predict(prompt, inputs)
+        batches = [examples(), [Example(f"x{i}", {"need": n}) for i, n in enumerate(NEEDS)]]
+        result = Operator(model=Model(), predict=counting, evaluate=evaluate, config=CFG,
+                          operator=OperatorConfig(schedule="fine_only")).run(PROMPT, batches)
+        second = result.sessions[1]
+        # Round 2 starts from the observations its batch got as round 1's gate: no new baseline run.
+        self.assertEqual(second["evaluations"][0]["prompt_id"], result.rounds[0].end_prompt_id)
+        self.assertEqual(second["predictions"], sum(len(c["target_ids"]) + len(c["regression_ids"])
+                                                    for c in second["checks"] if c["status"] == "complete")
+                         + sum(len(e["observations"]) for e in second["evaluations"][1:]
+                               if e["prompt_id"] not in {c["prompt_id"] for c in second["checks"]}))
+
     def test_runs_are_deterministic(self):
         def run():
             op = Operator(model=Model(), predict=predict, evaluate=evaluate, config=CFG,

@@ -64,9 +64,14 @@ class OperatorConfig:
     # comparison rows than the incumbent); a card that moved nothing is dropped instead of searched.
     search_only_promising: bool = False
     demos_cap: int = 0  # 0: no worked-examples card (the zero-shot condition)
+    # Where the batch gate compares options with the incumbent: "next" = the NEXT batch, whose inputs
+    # this round's diagnoses and cards never saw (held out; pilot step 2 showed that gating on the
+    # diagnosed batch accepts every round while validation falls); "same" = the diagnosed batch.
+    gate: Literal["next", "same"] = "next"
 
     def __post_init__(self):
         check.boolean(self.search_only_promising, "OperatorConfig.search_only_promising")
+        check.choice(self.gate, ("next", "same"), "OperatorConfig.gate")
         check.choice(self.schedule, SCHEDULES, "OperatorConfig.schedule")
         for name in ("coarse_patience", "demos_cap"):
             check.integer(getattr(self, name), f"OperatorConfig.{name}", minimum=0)
@@ -91,7 +96,8 @@ class RoundSummary:
     gain: float | None
     lost: int | None  # inputs passing before and failing after (reported; the gate uses drop)
     chosen: str = ""  # the winning option: rewrite, localized, best_localized
-    options: tuple[dict, ...] = ()  # every option tried: name, gain, lost, chars, eligible
+    options: tuple[dict, ...] = ()  # every option tried: name, gain, lost, drop, chars, eligible
+    gate: str = ""  # "next" (held-out batch) or "same"
 
 
 @dataclass
@@ -137,8 +143,14 @@ class Operator:
         stale = 0            # rounds in a row that committed nothing
         since_rewrite = 0    # rounds since a rewrite card was last proposed (compete)
         history, demos_done = [], s.demos_cap == 0
+        carried = None  # the incumbent's observations on the coming batch, from last round's gate
+        stream = iter(batches)
+        upcoming = next(stream, None)
+        index = -1
         try:
-            for index, batch in enumerate(batches):
+            while upcoming is not None:
+                index += 1
+                batch, upcoming = upcoming, next(stream, None)
                 if s.schedule == "compete":
                     early = self._spent() < s.coarse_budget_fraction
                     stalled = stale >= s.coarse_patience and since_rewrite >= s.coarse_patience
@@ -149,15 +161,24 @@ class Operator:
                     want_rewrite, want_local = True, False
                 else:
                     want_rewrite, want_local = coarse, not coarse
-                session = Session(**self.callbacks, prompt=result.prompt, examples=batch,
-                                  config=replace(self.config, seed=self.config.seed * 1000003 + index),
-                                  history=history, with_demos=self.with_demos, is_cancelled=self.is_cancelled,
-                                  on_event=self.on_event, stop_on=self.stop_on)
+                common = dict(**self.callbacks, config=replace(self.config, seed=self.config.seed * 1000003 + index),
+                              is_cancelled=self.is_cancelled, on_event=self.on_event, stop_on=self.stop_on)
+                session = Session(**common, prompt=result.prompt, examples=batch, history=history,
+                                  with_demos=self.with_demos, observations=carried)
+                gate = None
+                if s.gate == "next" and upcoming is not None:
+                    gate = Session(**common, prompt=result.prompt, examples=upcoming)
+                carried = None
                 try:
-                    summary = self._round(session, index, want_rewrite, want_local, demos_done)
+                    summary, carried = self._round(session, index, want_rewrite, want_local, demos_done, gate)
                 finally:
                     history = (history + session.history_items())[-max(1, self.config.history_items):]
-                    result.sessions.append(session.snapshot())
+                    snapshot = session.snapshot()
+                    if gate is not None:  # the gate inputs and per-prompt scores (no payloads)
+                        snapshot["gate"] = {"examples": [e.id for e in gate.examples],
+                                            "evaluations": [{"prompt_id": b.prompt_id, "score": b.score}
+                                                            for b in gate.evaluations]}
+                    result.sessions.append(snapshot)
                 if summary.committed:
                     result.prompt = session.apply()
                     if any(session.card(id).kind == "demos" for id in summary.accepted_card_ids):
@@ -175,13 +196,18 @@ class Operator:
         return result
 
     def _round(self, session: Session, index: int, want_rewrite: bool, want_local: bool,
-               demos_done: bool) -> RoundSummary:
+               demos_done: bool, gate: Session | None = None):
+        """One round. Returns (summary, observations of the resulting incumbent on the gate batch or None)."""
         start = prompt_id(session.source)
         phase = "both" if want_rewrite and want_local else "coarse" if want_rewrite else "fine"
+        judge = gate if gate is not None else session
 
-        def summary(committed, reason, accepted=(), gain=None, lost=None, cards=0, chosen="", options=()):
+        def summary(committed, reason, accepted=(), gain=None, lost=None, cards=0, chosen="", options=(), carry=None):
+            if carry is None and gate is not None and gate.evaluations:
+                carry = gate.baseline().observations  # the unchanged incumbent on the coming batch
             return RoundSummary(index, phase, start, prompt_id(session.apply()), committed, reason, cards,
-                                tuple(accepted), gain, lost, chosen, tuple(options))
+                                tuple(accepted), gain, lost, chosen, tuple(options),
+                                "next" if gate is not None else "same"), carry
 
         cards = []
         if want_local:
@@ -234,7 +260,7 @@ class Operator:
             if len(localized) > 1:
                 options.append(("best_localized", localized[:1]))
         options += [("rewrite", [card]) for card, _ in passing if card.kind == "rewrite"]
-        baseline = session.baseline()
+        baseline = judge.baseline()
         tried, best = [], None
         for name, chosen in options:
             for card_id in list(session.applied):
@@ -244,23 +270,26 @@ class Operator:
             candidate = session.apply()
             if candidate == session.source:
                 continue
-            gain, lost, drop = _paired(session, baseline, session.run(candidate, [e.id for e in session.examples]))
+            run = judge.run(candidate, [e.id for e in judge.examples])
+            gain, lost, drop = _paired(judge, baseline, run)
             within = abs(gain) < self.settings.min_gain
             eligible = drop <= self.settings.max_batch_drop and (
                 gain >= self.settings.min_gain or (within and gain >= 0 and len(candidate) < len(session.source)))
             tried.append({"name": name, "gain": gain, "lost": lost, "drop": drop, "chars": len(candidate),
                           "eligible": eligible})
             if eligible and (best is None or (gain, -len(candidate)) > (best[2], -best[4])):
-                best = (name, chosen, gain, lost, len(candidate))
+                best = (name, chosen, gain, lost, len(candidate), run.observations)
         for card_id in list(session.applied):
             session.revert(card_id)
+        where = "the held-out next batch" if gate is not None else "the whole batch"
         if best is None:
-            return summary(False, "no option beat the incumbent on the whole batch", cards=len(cards), options=tried)
-        name, chosen, gain, lost, _ = best
+            return summary(False, f"no option beat the incumbent on {where}", cards=len(cards), options=tried)
+        name, chosen, gain, lost, _, observations = best
         for card in chosen:
             session.accept(card.id)
         reason = "gain beyond the noise margin" if gain >= self.settings.min_gain else "equal within the noise margin and shorter"
-        return summary(True, reason, [c.id for c in chosen], gain, lost, len(cards), name, tried)
+        return summary(True, f"{reason} on {where}", [c.id for c in chosen], gain, lost, len(cards), name, tried,
+                       carry=observations if gate is not None else None)
 
     def _acceptable(self, record) -> bool:
         return (record.status == "complete" and record.target_gain >= self.settings.min_fix
