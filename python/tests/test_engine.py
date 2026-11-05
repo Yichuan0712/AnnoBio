@@ -182,6 +182,51 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(propose.payload["history"][0]["fixed"], 2)
 
 
+class RobustnessTests(unittest.TestCase):
+    def test_a_host_stop_exception_is_not_recorded_as_a_check_error(self):
+        class Budget(Exception):
+            pass
+        calls = {"n": 0}
+
+        def limited(prompt, inputs):
+            calls["n"] += 1
+            if calls["n"] > len(NEEDS):  # the baseline fits, the first verification does not
+                raise Budget()
+            return predict(prompt, inputs)
+        s = Session(model=Model(), predict=limited, evaluate=evaluate, prompt=PROMPT, examples=examples(),
+                    config=CFG, stop_on=(Budget,))
+        card = s.analyze("local")[0]
+        with self.assertRaises(Budget):
+            s.verify(card.id)
+        # Without stop_on the same failure is an ordinary check error, as in the app.
+        calls["n"] = 0
+        s = Session(model=Model(), predict=limited, evaluate=evaluate, prompt=PROMPT, examples=examples(), config=CFG)
+        card = s.analyze("local")[0]
+        self.assertEqual(s.verify(card.id).status, "error")
+
+    def test_a_malformed_diagnosis_skips_that_input(self):
+        model = Model()
+        inner = model.__call__
+
+        def flaky(request):
+            if request.stage == "diagnose" and request.payload["example"]["id"] == "e0":
+                return "not json"
+            return inner(request)
+        s = Session(model=flaky, predict=predict, evaluate=evaluate, prompt=PROMPT, examples=examples(), config=CFG)
+        self.assertEqual([i.example_id for i in s.diagnose()], ["e1", "e2"])
+        self.assertTrue(any(n.stage == "diagnose" for n in s.notices))
+
+    def test_evidence_is_bounded(self):
+        model = Model()
+        s = Session(model=model, predict=predict, evaluate=evaluate, prompt=PROMPT,
+                    examples=examples(["alpha"] * 6 + ["base"] * 2),
+                    config=EngineConfig(regression_examples=2, cluster_threshold=0, max_evidence_examples=2))
+        s.analyze("rewrite")
+        rewrite = next(r for r in model.calls if r.stage == "rewrite")
+        self.assertEqual(len(rewrite.payload["issues"]), 6)
+        self.assertEqual(len(rewrite.payload["observations"]), 2)
+
+
 class OperatorTests(unittest.TestCase):
     def batches(self, n=4):
         return [examples() for _ in range(n)]

@@ -33,6 +33,9 @@ class EngineConfig:
     # Search reward = target pass rate - regression_penalty * (lost / regression inputs), clipped to [0, 1].
     regression_penalty: float = 1.0
     history_items: int = 20
+    # Full inputs/outputs attached to one propose/rewrite request; the other inputs it addresses are
+    # represented by their diagnosis cards only (a long-document task would otherwise overflow the context).
+    max_evidence_examples: int = 3
     pass_threshold: float = 1.0
     max_model_calls: int | None = None
     max_predictions: int | None = None
@@ -40,7 +43,7 @@ class EngineConfig:
 
     def __post_init__(self):
         for name in ("max_failed_examples", "cluster_threshold", "max_cards", "max_trials", "max_segments",
-                     "candidates_per_segment", "regression_examples", "history_items"):
+                     "candidates_per_segment", "regression_examples", "history_items", "max_evidence_examples"):
             check.integer(getattr(self, name), f"EngineConfig.{name}", minimum=0)
         for name in ("max_failed_examples", "max_cards", "max_trials", "max_segments", "candidates_per_segment"):
             if getattr(self, name) < 1:

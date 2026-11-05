@@ -81,8 +81,10 @@ class Operator:
                  config: EngineConfig | None = None, operator: OperatorConfig | None = None,
                  with_demos: WithDemos | None = None, budget_fraction: Callable[[], float] | None = None,
                  on_round: Callable[[str, RoundSummary], None] | None = None,
-                 is_cancelled: CancelCheck | None = None, on_event: EventCallback | None = None):
+                 is_cancelled: CancelCheck | None = None, on_event: EventCallback | None = None,
+                 stop_on: tuple = ()):
         check.instance(config, EngineConfig, "Operator.config", allow_none=True)
+        self.stop_on = tuple(stop_on)
         check.instance(operator, OperatorConfig, "Operator.operator", allow_none=True)
         self.config = config if config is not None else EngineConfig()
         self.settings = operator if operator is not None else OperatorConfig()
@@ -104,7 +106,7 @@ class Operator:
             for index, batch in enumerate(batches):
                 session = Session(**self.callbacks, prompt=result.prompt, examples=batch,
                                   config=_seeded(self.config, index), history=history, with_demos=self.with_demos,
-                                  is_cancelled=self.is_cancelled, on_event=self.on_event)
+                                  is_cancelled=self.is_cancelled, on_event=self.on_event, stop_on=self.stop_on)
                 try:
                     summary = self._round(session, index, phase, demos_done)
                 finally:

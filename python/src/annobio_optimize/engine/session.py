@@ -41,8 +41,11 @@ class Session:
                  examples: Sequence[Example], config: EngineConfig | None = None,
                  observations: Sequence[Observation] | None = None, history: Sequence[HistoryItem] = (),
                  with_demos: WithDemos | None = None, is_cancelled: CancelCheck | None = None,
-                 on_event: EventCallback | None = None):
+                 on_event: EventCallback | None = None, stop_on: tuple = ()):
+        """stop_on: exception types raised by the host's callbacks that must end the session as they
+        are (e.g. the experiment's budget cap). Other prediction errors are recorded on the check."""
         check.string(prompt, "Session.prompt", nonempty=True)
+        self.stop_on = tuple(stop_on)
         check.callbacks(model=model, predict=predict, evaluate=evaluate, is_cancelled=is_cancelled, on_event=on_event)
         check.instance(config, EngineConfig, "Session.config", allow_none=True)
         self.config = config if config is not None else EngineConfig()
@@ -195,12 +198,16 @@ class Session:
         baseline = self.baseline()
         for observation in self.failed()[:self.config.max_failed_examples]:
             self._event("diagnose", f"Diagnosing {observation.example_id}")
-            data = self._ask("diagnose", {"prompt": self.source, **self._evidence(observation)})
-            summary = text_field(data, "issue_summary", stage="diagnose")
-            advice = text_field(data, "rough_modification_opinion", stage="diagnose")
-            if not summary.strip() or not advice.strip():
-                raise ModelResponseError("diagnosis needs issue_summary and rough_modification_opinion.",
-                                         path="model.return[stage='diagnose']")
+            try:
+                data = self._ask("diagnose", {"prompt": self.source, **self._evidence(observation)})
+                summary = text_field(data, "issue_summary", stage="diagnose")
+                advice = text_field(data, "rough_modification_opinion", stage="diagnose")
+                if not summary.strip() or not advice.strip():
+                    raise ModelResponseError("diagnosis needs issue_summary and rough_modification_opinion.",
+                                             path="model.return[stage='diagnose']")
+            except ModelResponseError as exc:  # e.g. an output cut at the model's length cap: skip this input
+                self.notices.append(Notice("diagnose", f"{observation.example_id}: {exc}"))
+                continue
             optional = {name: data.get(name) if isinstance(data.get(name), str) else ""
                         for name in ("problem_category_hint", "gt_suspect_note", "card_title")}
             self.issues.append(Issue(f"issue-{len(self.issues) + 1}", observation.example_id, baseline.id, summary, advice,
@@ -255,14 +262,17 @@ class Session:
             if card is not None and self._add(card):
                 added.append(card)
             return added
-        baseline = self.baseline()
         for cluster in self._cluster():
             self._event("propose", f"Proposing an edit for {cluster.id}")
-            data = self._ask("propose", {
-                "prompt": self.source, "cluster": asdict(cluster), "history": self._history_payload(),
-                "issues": [{k: v for k, v in asdict(i).items() if k != "reference_note"}
-                           for i in issues if i.id in cluster.issue_ids],
-                "observations": [self._evidence(o) for o in baseline.observations if o.example_id in cluster.example_ids]})
+            try:
+                data = self._ask("propose", {
+                    "prompt": self.source, "cluster": asdict(cluster), "history": self._history_payload(),
+                    "issues": [{k: v for k, v in asdict(i).items() if k != "reference_note"}
+                               for i in issues if i.id in cluster.issue_ids],
+                    "observations": self._observations(cluster.example_ids)})
+            except ModelResponseError as exc:
+                self.notices.append(Notice("propose", str(exc), cluster.id))
+                continue
             edits = data.get("prompt_edits", [data])
             if not isinstance(edits, list):
                 self.notices.append(Notice("propose", "prompt_edits must be an array.", cluster.id))
@@ -294,14 +304,19 @@ class Session:
                     text_field(raw, "reason", nonempty=True), prompt_id(self.source), start, start + len(resolved),
                     resolved, new, cluster.example_ids, cluster.issue_ids, tuple(addresses[:3]), cluster.id, cluster.label)
 
+    def _observations(self, example_ids) -> list:
+        """Full evidence for at most max_evidence_examples of these inputs (the rest are known
+        through their diagnosis cards)."""
+        wanted = set(list(dict.fromkeys(example_ids))[:self.config.max_evidence_examples])
+        return [self._evidence(o) for o in self.baseline().observations if o.example_id in wanted]
+
     def _rewrite_card(self, issues: list[Issue]) -> Card | None:
-        baseline = self.baseline()
         targets = tuple(dict.fromkeys(issue.example_id for issue in issues))
-        data = self._ask("rewrite", {
-            "prompt": self.source, "history": self._history_payload(),
-            "issues": [{k: v for k, v in asdict(i).items() if k != "reference_note"} for i in issues],
-            "observations": [self._evidence(o) for o in baseline.observations if o.example_id in targets]})
         try:
+            data = self._ask("rewrite", {
+                "prompt": self.source, "history": self._history_payload(),
+                "issues": [{k: v for k, v in asdict(i).items() if k != "reference_note"} for i in issues],
+                "observations": self._observations(targets)})
             new = text_field(data, "prompt", nonempty=True, stage="rewrite").strip()
             reason = text_field(data, "reason", nonempty=True, stage="rewrite")
         except ModelResponseError as exc:
@@ -369,9 +384,7 @@ class Session:
             if prompt.strip() == self.source.strip():
                 raise ValueError("the card does not change the prompt")
             batch = self.run(prompt, targets + regression)
-        except EngineStopped:
-            raise
-        except ValidationError:
+        except (EngineStopped, ValidationError, *self.stop_on):
             raise
         except Exception as exc:
             record = Check(id, card.id, kind, prompt_id(prompt), targets, regression, (), (), 0, 0, 0.0, False,
