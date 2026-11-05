@@ -234,7 +234,8 @@ class OperatorTests(unittest.TestCase):
     def test_a_beneficial_rewrite_is_committed_in_the_coarse_phase(self):
         rounds = []
         op = Operator(model=Model(), predict=predict, evaluate=evaluate,
-                      config=CFG, on_round=lambda p, r: rounds.append(r))
+                      config=CFG, on_round=lambda p, r: rounds.append(r),
+                      operator=OperatorConfig(schedule="coarse_to_fine"))
         result = op.run(PROMPT, self.batches(2))
         self.assertTrue(result.rounds[0].committed)
         self.assertEqual(result.rounds[0].phase, "coarse")
@@ -251,7 +252,7 @@ class OperatorTests(unittest.TestCase):
         model = Model(rewrite=lambda prompt, needs: "Answer. Mention " + " ".join(needs) + ".",
                       propose=propose, paraphrases=lambda p: [])
         op = Operator(model=model, predict=predict, evaluate=evaluate, config=CFG,
-                      operator=OperatorConfig(coarse_patience=1))
+                      operator=OperatorConfig(schedule="coarse_to_fine", coarse_patience=1))
         result = op.run(PROMPT, self.batches(3))
         self.assertEqual(result.prompt, PROMPT)
         self.assertFalse(any(r.committed for r in result.rounds))
@@ -292,6 +293,34 @@ class OperatorTests(unittest.TestCase):
         result = op.run(PROMPT, self.batches(1))
         self.assertTrue(result.rounds[0].committed)
         self.assertIn("WORKED_EXAMPLES", result.prompt)
+
+    def test_compete_proposes_both_kinds_and_the_shorter_equal_option_wins(self):
+        # Both the rewrite and the two localized cards fix all three failures (+3); the rewrite is shorter.
+        op = Operator(model=Model(), predict=predict, evaluate=evaluate, config=CFG)
+        first = op.run(PROMPT, self.batches(1)).rounds[0]
+        self.assertEqual((first.phase, first.committed, first.chosen), ("both", True, "rewrite"))
+        self.assertEqual({o["name"] for o in first.options}, {"localized", "best_localized", "rewrite"})
+        self.assertEqual(first.gain, 3.0)
+
+    def test_compete_uses_localized_cards_when_the_rewrite_breaks_inputs(self):
+        model = Model(rewrite=lambda prompt, needs: "Answer the question. Mention " + " and ".join(needs) + ".")
+        op = Operator(model=model, predict=predict, evaluate=evaluate, config=CFG)
+        first = op.run(PROMPT, self.batches(1)).rounds[0]
+        self.assertEqual((first.committed, first.chosen), (True, "localized"))
+        self.assertNotIn("rewrite", {o["name"] for o in first.options})  # it failed verification
+
+    def test_compete_late_rewrites_only_when_stalled(self):
+        # Past the early budget share, a rewrite is proposed only after coarse_patience idle rounds.
+        def propose(p, need):
+            return {"prompt_edits": [{"name": "x", "phase1_addresses": ["y"], "old_sentence": "Use base facts.",
+                                      "new_sentence": f"Use {need} facts.", "reason": "r"}]}
+        model = Model(rewrite=lambda prompt, needs: "Answer. Mention " + " ".join(needs) + ".",
+                      propose=propose, paraphrases=lambda p: [])
+        op = Operator(model=model, predict=predict, evaluate=evaluate, config=CFG, budget_fraction=lambda: 1.0,
+                      operator=OperatorConfig(coarse_patience=1))
+        result = op.run(PROMPT, self.batches(4))
+        self.assertEqual([r.phase for r in result.rounds], ["fine", "both", "fine", "both"])
+        self.assertEqual(result.prompt, PROMPT)
 
     def test_runs_are_deterministic(self):
         def run():
