@@ -130,7 +130,9 @@ class Operator:
     def run(self, prompt: str, batches: Iterable[Sequence[Example]]) -> OperatorResult:
         check.string(prompt, "Operator.run.prompt", nonempty=True)
         s = self.settings
-        result = OperatorResult(prompt, prompt)
+        # Kept on the operator as it grows, so a host whose own exception (stop_on) ends the run
+        # can still save every finished session.
+        self.result = result = OperatorResult(prompt, prompt)
         coarse = s.schedule in ("coarse_to_fine", "coarse_only")  # coarse_to_fine's current phase
         stale = 0            # rounds in a row that committed nothing
         since_rewrite = 0    # rounds since a rewrite card was last proposed (compete)

@@ -398,6 +398,23 @@ class OperatorTests(unittest.TestCase):
             op.run(PROMPT, [examples()])
             self.assertEqual(any(r.stage == "segment" for r in model.calls), searched)
 
+    def test_finished_sessions_survive_a_host_stop(self):
+        class Budget(Exception):
+            pass
+        calls = {"n": 0}
+
+        def limited(prompt, inputs):
+            calls["n"] += 1
+            if calls["n"] > 60:
+                raise Budget()
+            return predict(prompt, inputs)
+        op = Operator(model=Model(), predict=limited, evaluate=evaluate, config=CFG, stop_on=(Budget,),
+                      operator=OperatorConfig(schedule="fine_only"))
+        with self.assertRaises(Budget):
+            op.run(PROMPT, self.batches(10))
+        self.assertGreaterEqual(len(op.result.sessions), 1)  # including the session the stop interrupted
+        self.assertTrue(op.result.sessions[0]["cards"])
+
     def test_runs_are_deterministic(self):
         def run():
             op = Operator(model=Model(), predict=predict, evaluate=evaluate, config=CFG,
