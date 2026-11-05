@@ -133,8 +133,11 @@ class Operator:
     def _spent(self) -> float:
         return self.budget_fraction() if self.budget_fraction is not None else 0.0
 
-    def run(self, prompt: str, batches: Iterable[Sequence[Example]]) -> OperatorResult:
+    def run(self, prompt: str, batches: Iterable[Sequence[Example]], max_rounds: int | None = None) -> OperatorResult:
+        """At most max_rounds rounds; a batch after the last round still serves as that round's gate."""
         check.string(prompt, "Operator.run.prompt", nonempty=True)
+        if max_rounds is not None:
+            check.integer(max_rounds, "Operator.run.max_rounds", minimum=1)
         s = self.settings
         # Kept on the operator as it grows, so a host whose own exception (stop_on) ends the run
         # can still save every finished session.
@@ -148,7 +151,7 @@ class Operator:
         upcoming = next(stream, None)
         index = -1
         try:
-            while upcoming is not None:
+            while upcoming is not None and (max_rounds is None or index + 1 < max_rounds):
                 index += 1
                 batch, upcoming = upcoming, next(stream, None)
                 if s.schedule == "compete":
