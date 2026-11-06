@@ -473,6 +473,34 @@ class OperatorTests(unittest.TestCase):
         self.assertEqual(counts[1], 3)  # the first trial sets the best; then 2 without a better reward
         self.assertGreater(counts[0], 3)
 
+    def test_the_gate_judges_by_the_task_set_score_when_given(self):
+        # Fixing two small inputs counts +2 by item, but little under a size-weighted (pooled) set score,
+        # e.g. relation F1 summed over documents where the fixed documents hold few relations.
+        first = examples(["alpha", "alpha", "alpha", "base", "base", "base", "base", "base"])
+        gate = [Example("s0", {"need": "alpha"}), Example("s1", {"need": "alpha"})] + \
+               [Example(f"b{i}", {"need": "base"}) for i in range(6)]
+        weight = {e.id: 1.0 for e in first} | {"s0": 1.0, "s1": 1.0} | {f"b{i}": 10.0 for i in range(6)}
+
+        def pooled(observations):
+            return sum(weight[o.example_id] * o.evaluation.score for o in observations) / sum(weight[o.example_id] for o in observations)
+        config = EngineConfig(regression_examples=3, cluster_threshold=0)
+        settings = OperatorConfig(schedule="fine_only", min_gain=1.0)
+        by_item = Operator(model=Model(), predict=predict, evaluate=evaluate, config=config,
+                           operator=settings).run(PROMPT, [first, gate], max_rounds=1)
+        by_set = Operator(model=Model(), predict=predict, evaluate=evaluate, config=config, operator=settings,
+                          aggregate=pooled).run(PROMPT, [first, gate], max_rounds=1)
+        self.assertTrue(by_item.rounds[0].committed)
+        self.assertEqual(by_item.rounds[0].gain, 2.0)
+        self.assertFalse(by_set.rounds[0].committed)
+        self.assertAlmostEqual(by_set.rounds[0].options[0]["gain"], 8 * 2 / 62)
+
+    def test_a_bad_aggregate_reply_is_a_contract_error(self):
+        session = Session(model=Model(), predict=predict, evaluate=evaluate, prompt=PROMPT, examples=examples(),
+                          config=CFG, aggregate=lambda observations: "high")
+        with self.assertRaises(Exception) as caught:
+            session.set_score(session.baseline().observations)
+        self.assertIn("aggregate", str(caught.exception))
+
     def test_runs_are_deterministic(self):
         def run():
             op = Operator(model=Model(), predict=predict, evaluate=evaluate, config=CFG,

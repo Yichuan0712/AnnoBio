@@ -121,7 +121,7 @@ class Operator:
                  with_demos: WithDemos | None = None, budget_fraction: Callable[[], float] | None = None,
                  on_round: Callable[[str, RoundSummary], None] | None = None,
                  is_cancelled: CancelCheck | None = None, on_event: EventCallback | None = None,
-                 stop_on: tuple = ()):
+                 stop_on: tuple = (), aggregate: Callable | None = None):
         check.instance(config, EngineConfig, "Operator.config", allow_none=True)
         check.instance(operator, OperatorConfig, "Operator.operator", allow_none=True)
         self.stop_on = tuple(stop_on)
@@ -135,6 +135,7 @@ class Operator:
         self.on_round = on_round
         self.is_cancelled = is_cancelled
         self.on_event = on_event
+        self.aggregate = aggregate  # the task's set score (Session.aggregate); gates and screens use it
 
     def _spent(self) -> float:
         return self.budget_fraction() if self.budget_fraction is not None else 0.0
@@ -186,7 +187,8 @@ class Operator:
                 else:
                     want_rewrite, want_local = coarse, not coarse
                 common = dict(**self.callbacks, config=replace(self.config, seed=self.config.seed * 1000003 + index),
-                              is_cancelled=self.is_cancelled, on_event=self.on_event, stop_on=self.stop_on)
+                              is_cancelled=self.is_cancelled, on_event=self.on_event, stop_on=self.stop_on,
+                              aggregate=self.aggregate)
                 session = Session(**common, prompt=result.prompt, examples=batch, history=history,
                                   with_demos=self.with_demos, observations=carried)
                 gate = None
@@ -336,10 +338,11 @@ def _progress(session: Session, record) -> tuple[float, int]:
 
 
 def _paired(session: Session, before, after) -> tuple[float, int, float]:
-    """On the same inputs: summed score change, inputs that passed before and fail after, and the
-    summed score drop (decreases only)."""
+    """On the same inputs: the score change in item units (set size x change of the task's set score;
+    the summed item-score change when the task has no aggregate), inputs that passed before and fail
+    after, and the summed item-score drop (decreases only)."""
     old = {item.example_id: item for item in before.observations}
-    gain = sum(item.evaluation.score - old[item.example_id].evaluation.score for item in after.observations)
+    gain = session.set_gain([old[item.example_id] for item in after.observations], after.observations)
     lost = sum(1 for item in after.observations
                if session.passed(old[item.example_id]) and not session.passed(item))
     drop = sum(max(0.0, old[item.example_id].evaluation.score - item.evaluation.score) for item in after.observations)

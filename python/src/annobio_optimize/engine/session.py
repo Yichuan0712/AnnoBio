@@ -24,6 +24,8 @@ from ..types import (
     Notice, Observation, OptimizationModel, Predict, ProgressEvent, copy_json, prompt_id,
 )
 from . import prompts
+
+Aggregate = Callable[[Sequence[Observation]], float]
 from .records import Card, Check, Decision, EngineConfig, HistoryItem, Mode, SearchRecord, SearchTrialRecord
 
 WithDemos = Callable[[str, list], str]
@@ -41,10 +43,21 @@ class Session:
                  examples: Sequence[Example], config: EngineConfig | None = None,
                  observations: Sequence[Observation] | None = None, history: Sequence[HistoryItem] = (),
                  with_demos: WithDemos | None = None, is_cancelled: CancelCheck | None = None,
-                 on_event: EventCallback | None = None, stop_on: tuple = ()):
+                 on_event: EventCallback | None = None, stop_on: tuple = (),
+                 aggregate: Aggregate | None = None):
         """stop_on: exception types raised by the host's callbacks that must end the session as they
-        are (e.g. the experiment's budget cap). Other prediction errors are recorded on the check."""
+        are (e.g. the experiment's budget cap). Other prediction errors are recorded on the check.
+
+        aggregate: the task's score of a SET of observations (e.g. relation F1 pooled over documents:
+        true/false positives summed before the ratio). Without it, a set scores the mean of its item
+        scores. Gains (card targets, search reward, the operator's batch gate) are set size x the change
+        of this score, so they are in item units either way and the noise thresholds keep their scale.
+        Pilot step 4 (2026-11-05): on BioRED the mean of per-document F1 rose +.067 on the test while the
+        benchmark's pooled F1 rose only +.022; the engine had optimized a different metric."""
         check.string(prompt, "Session.prompt", nonempty=True)
+        if aggregate is not None:
+            check.callback(aggregate, "aggregate", 1)
+        self.aggregate = aggregate
         self.stop_on = tuple(stop_on)
         check.callbacks(model=model, predict=predict, evaluate=evaluate, is_cancelled=is_cancelled, on_event=on_event)
         check.instance(config, EngineConfig, "Session.config", allow_none=True)
@@ -113,6 +126,22 @@ class Session:
         if not isinstance(response, dict):
             raise ModelResponseError("expected a JSON object.", path=f"model.return[stage={stage!r}]")
         return response
+
+    def set_score(self, observations: Sequence[Observation]) -> float:
+        """The task's score of a set of observations (see `aggregate`); the mean item score by default."""
+        observations = tuple(observations)
+        if not observations:
+            return 0.0
+        if self.aggregate is None:
+            return sum(item.evaluation.score for item in observations) / len(observations)
+        value = check.invoke(self.aggregate, observations, name="aggregate")
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise CallbackContractError("must return a finite number.", path="aggregate.return")
+        return float(value)
+
+    def set_gain(self, before: Sequence[Observation], after: Sequence[Observation]) -> float:
+        """Set size x the change of the set score, on the same inputs (item units)."""
+        return len(tuple(after)) * (self.set_score(after) - self.set_score(before))
 
     def passed(self, observation: Observation) -> bool:
         value = observation.evaluation
@@ -409,13 +438,13 @@ class Session:
             total += evaluation.total_count if evaluation.total_count is not None else 1
         fixed = tuple(i for i in targets if self.passed(by_id[i]) and not self.passed(baseline[i]))
         lost = tuple(i for i in regression if self.passed(baseline[i]) and not self.passed(by_id[i]))
-        gain = sum(by_id[i].evaluation.score - baseline[i].evaluation.score for i in targets)
+        gain = self.set_gain([baseline[i] for i in targets], [by_id[i] for i in targets]) if targets else 0.0
         drop = sum(max(0.0, baseline[i].evaluation.score - by_id[i].evaluation.score) for i in regression)
         record = Check(id, card.id, kind, prompt_id(prompt), targets, regression, fixed, lost, matched, total,
                        (sum(self.passed(by_id[i]) for i in targets) / len(targets)) if targets else 0.0,
                        bool(targets) and all(self.passed(by_id[i]) for i in targets), "complete",
                        target_gain=gain, regression_drop=drop,
-                       target_score=sum(by_id[i].evaluation.score for i in targets) / len(targets) if targets else 0.0)
+                       target_score=self.set_score([by_id[i] for i in targets]) if targets else 0.0)
         self.checks.append(record)
         return record
 
