@@ -26,6 +26,14 @@ prompts per task; each default sits at or above the 95th percentile of identical
 
 The initial prompt is therefore always a candidate: it stays unless something beats it.
 
+Challengers (`challengers` > 0, held-out gate only; ENGINE_V2_DESIGN 6.0d): a single gate cannot
+tell a small true gain from noise, so an option it rejected with a positive gain is kept. Later
+gates run the kept ones against the incumbent on the same inputs, and each one's paired evidence
+accumulates over the inputs after its entry gate (that gate selected it, so it is not evidence). A
+challenger replaces the incumbent when its accumulated net gain reaches min_gain x sqrt(inputs /
+gate size) with its summed drop within max_batch_drop per gate; the round's best qualifying entry
+wins, options and challengers alike, by this gate's gain. Evidence restarts when the incumbent changes.
+
 Schedules (which cards a round proposes):
 - coarse_to_fine: rewrite only, until `coarse_patience` rounds in a row commit nothing or
   `coarse_budget_fraction` of the search budget is spent; then localized only, for good.
@@ -38,6 +46,7 @@ Schedules (which cards a round proposes):
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+import math
 from typing import Callable, Iterable, Literal, Sequence
 
 from .. import validation as check
@@ -73,9 +82,18 @@ class OperatorConfig:
     # How many following batches the held-out gate pools (more inputs separate a small true gain from
     # noise; min_gain and max_batch_drop are summed over the pooled inputs, so scale them with it).
     gate_batches: int = 1
+    # Rejected options kept as challengers (0 = off; ENGINE_V2_DESIGN 6.0d): each later held-out gate
+    # also runs the best `challengers` of them against the incumbent, and their evidence accumulates
+    # on the inputs after their entry gate. A challenger replaces the incumbent once its accumulated
+    # net gain reaches min_gain x sqrt(inputs / gate size); one with no decision after
+    # `challenger_max_gates` gates' worth of inputs, or behind after one, is dropped.
+    challengers: int = 0
+    challenger_max_gates: int = 4
 
     def __post_init__(self):
         check.integer(self.gate_batches, "OperatorConfig.gate_batches", minimum=1)
+        check.integer(self.challengers, "OperatorConfig.challengers", minimum=0)
+        check.integer(self.challenger_max_gates, "OperatorConfig.challenger_max_gates", minimum=1)
         check.boolean(self.search_only_promising, "OperatorConfig.search_only_promising")
         check.choice(self.gate, ("next", "same"), "OperatorConfig.gate")
         check.choice(self.schedule, SCHEDULES, "OperatorConfig.schedule")
@@ -104,6 +122,29 @@ class RoundSummary:
     chosen: str = ""  # the winning option: rewrite, localized, best_localized
     options: tuple[dict, ...] = ()  # every option tried: name, gain, lost, drop, chars, eligible
     gate: str = ""  # "next" (held-out batch) or "same"
+
+
+@dataclass(eq=False)
+class _Challenger:
+    """A rejected option kept for more evidence. `screen`: its entry gate's inputs (it was kept because
+    it looked good there, so they are not evidence); `pairs`: input id -> (incumbent, challenger)
+    observations on later gates, against the current incumbent (cleared when the incumbent changes)."""
+    prompt: str
+    label: str
+    card_ids: tuple
+    screen: set
+    screen_gain: float
+    pairs: dict = field(default_factory=dict)
+    evidence: float = 0.0
+
+
+@dataclass
+class _Outcome:
+    summary: RoundSummary
+    carry: list | None            # the new incumbent's observations on the gate, or None
+    prompt: str | None = None     # the new incumbent when the round committed
+    challenger: _Challenger | None = None  # set when a challenger won
+    entrants: list = field(default_factory=list)  # rejected options that may join the challengers
 
 
 @dataclass
@@ -160,6 +201,8 @@ class Operator:
         # committed it). Predictions are reused per (prompt, input), so on these inputs the incumbent
         # keeps the lucky draws that made it win; later gates skip them to compare fairly.
         selected_on: set = set()
+        pool: list[_Challenger] = []  # rejected options gathering more evidence (s.challengers > 0)
+        gate_size = 0  # a full gate's input count (the evidence unit for challengers)
 
         def fill(size=None):
             while len(ahead) < (size if size is not None else 1 + s.gate_batches):
@@ -193,6 +236,7 @@ class Operator:
                 batch = ahead.pop(0)
                 fill()
                 upcoming = gate_inputs(batch) if s.gate == "next" else []
+                gate_size = max(gate_size, len(upcoming))
                 if s.schedule == "compete":
                     early = self._spent() < s.coarse_budget_fraction
                     stalled = stale >= s.coarse_patience and since_rewrite >= s.coarse_patience
@@ -213,7 +257,9 @@ class Operator:
                     gate = Session(**common, prompt=result.prompt, examples=upcoming)
                 carried = None
                 try:
-                    summary, carried = self._round(session, index, want_rewrite, want_local, demos_done, gate)
+                    outcome = self._round(session, index, want_rewrite, want_local, demos_done, gate,
+                                          pool if gate is not None else [], gate_size)
+                    summary, carried = outcome.summary, outcome.carry
                     if carried is not None:  # reuse only an exact cover of the next round's batch
                         wanted = {e.id for e in ahead[0]} if ahead else set()
                         carried = [o for o in carried if o.example_id in wanted]
@@ -228,11 +274,21 @@ class Operator:
                                                             for b in gate.evaluations]}
                     result.sessions.append(snapshot)
                 if summary.committed:
-                    result.prompt = session.apply()
-                    if gate is not None:
-                        selected_on = {e.id for e in gate.examples}
-                    if any(session.card(id).kind == "demos" for id in summary.accepted_card_ids):
-                        demos_done = True
+                    result.prompt = outcome.prompt
+                    if outcome.challenger is not None:  # selected by its accumulated evidence
+                        selected_on = set(outcome.challenger.pairs) | outcome.challenger.screen
+                        pool.remove(outcome.challenger)
+                    else:
+                        if gate is not None:
+                            selected_on = {e.id for e in gate.examples}
+                        if any(session.card(id).kind == "demos" for id in summary.accepted_card_ids):
+                            demos_done = True
+                    pool = [c for c in pool if c.prompt != result.prompt]
+                    for challenger in pool:  # their evidence was against the replaced incumbent
+                        challenger.pairs.clear()
+                        challenger.evidence = 0.0
+                else:
+                    pool = self._keep_challengers(pool, outcome.entrants, gate_size)
                 result.rounds.append(summary)
                 stale = 0 if summary.committed else stale + 1
                 since_rewrite = 0 if want_rewrite else since_rewrite + 1
@@ -246,20 +302,24 @@ class Operator:
         return result
 
     def _round(self, session: Session, index: int, want_rewrite: bool, want_local: bool,
-               demos_done: bool, gate: Session | None = None):
-        """One round. Returns (summary, observations of the resulting incumbent on the gate batch or None)."""
+               demos_done: bool, gate: Session | None = None, pool=(), gate_size: int = 0) -> _Outcome:
+        """One round: this batch's options and the kept challengers are judged against the incumbent."""
         start = prompt_id(session.source)
         phase = "both" if want_rewrite and want_local else "coarse" if want_rewrite else "fine"
         judge = gate if gate is not None else session
+        where = "the held-out next batch" if gate is not None else "the whole batch"
 
-        def summary(committed, reason, accepted=(), gain=None, lost=None, cards=0, chosen="", options=(), carry=None):
+        def outcome(committed, reason, accepted=(), gain=None, lost=None, cards=0, chosen="", options=(),
+                    carry=None, prompt=None, challenger=None, entrants=()):
             if carry is None and gate is not None and gate.evaluations:
                 carry = gate.baseline().observations  # the unchanged incumbent on the coming batch
-            return RoundSummary(index, phase, start, prompt_id(session.apply()), committed, reason, cards,
-                                tuple(accepted), gain, lost, chosen, tuple(options),
-                                "next" if gate is not None else "same"), carry
+            end = prompt if prompt is not None else session.apply()
+            summary = RoundSummary(index, phase, start, prompt_id(end), committed, reason, cards,
+                                   tuple(accepted), gain, lost, chosen, tuple(options),
+                                   "next" if gate is not None else "same")
+            return _Outcome(summary, carry, end if committed else None, challenger, list(entrants))
 
-        cards = []
+        cards, passing = [], []
         if want_local:
             cards += session.analyze("local")
         if want_rewrite:
@@ -268,34 +328,31 @@ class Operator:
             card = session.propose_demos(self.settings.demos_cap)
             if card is not None:
                 cards.append(card)
-        if not session.issues:
-            return summary(False, "no failed inputs in this batch")
-        records = {card.id: session.verify(card.id) for card in cards}
-        passing = [(card, records[card.id]) for card in cards if self._acceptable(records[card.id])]
-        if self.settings.search_failed_cards:
-            # At most one search per issue cluster, and none for a cluster that already has a passing
-            # card: the failing alternative with the most progress is searched.
-            covered = {card.cluster_id for card, _ in passing if card.cluster_id}
-            chosen: dict[str, tuple] = {}
-            for card in cards:
-                record = records[card.id]
-                if self._acceptable(record) or not session.searchable(card.id) or card.cluster_id in covered:
-                    continue
-                progress = _progress(session, record)
-                if self.settings.search_only_promising and progress[0] < self.settings.min_fix:
-                    continue
-                key = card.cluster_id or card.id
-                if key not in chosen or progress > chosen[key][0]:
-                    chosen[key] = (progress, card)
-            for _, card in sorted(chosen.values(), key=lambda item: cards.index(item[1])):
-                searched = session.search(card.id)
-                if searched.optimized_card_id is not None:
-                    optimized = session.card(searched.optimized_card_id)
-                    record = session.latest_check(optimized.id)
-                    if record is not None and self._acceptable(record):
-                        passing.append((optimized, record))
-        if not passing:
-            return summary(False, "no card fixed a target without breaking a regression input", cards=len(cards))
+        if session.issues:
+            records = {card.id: session.verify(card.id) for card in cards}
+            passing = [(card, records[card.id]) for card in cards if self._acceptable(records[card.id])]
+            if self.settings.search_failed_cards:
+                # At most one search per issue cluster, and none for a cluster that already has a passing
+                # card: the failing alternative with the most progress is searched.
+                covered = {card.cluster_id for card, _ in passing if card.cluster_id}
+                picked: dict[str, tuple] = {}
+                for card in cards:
+                    record = records[card.id]
+                    if self._acceptable(record) or not session.searchable(card.id) or card.cluster_id in covered:
+                        continue
+                    progress = _progress(session, record)
+                    if self.settings.search_only_promising and progress[0] < self.settings.min_fix:
+                        continue
+                    key = card.cluster_id or card.id
+                    if key not in picked or progress > picked[key][0]:
+                        picked[key] = (progress, card)
+                for _, card in sorted(picked.values(), key=lambda item: cards.index(item[1])):
+                    searched = session.search(card.id)
+                    if searched.optimized_card_id is not None:
+                        optimized = session.card(searched.optimized_card_id)
+                        record = session.latest_check(optimized.id)
+                        if record is not None and self._acceptable(record):
+                            passing.append((optimized, record))
         # Highest net fix count first; shorter text breaks ties.
         passing.sort(key=lambda pair: (-(pair[1].target_gain - pair[1].regression_drop), len(pair[0].new_text)))
         localized, clusters = [], set()
@@ -310,8 +367,13 @@ class Operator:
             if len(localized) > 1:
                 options.append(("best_localized", localized[:1]))
         options += [("rewrite", [card]) for card, _ in passing if card.kind == "rewrite"]
+        no_option = ("no failed inputs in this batch" if not session.issues
+                     else "no card fixed a target without breaking a regression input")
+        if not options and not pool:
+            return outcome(False, no_option, cards=len(cards))
+
         baseline = judge.baseline()
-        tried, best = [], None
+        tried, runs, best = [], [], None
         for name, chosen in options:
             for card_id in list(session.applied):
                 session.revert(card_id)
@@ -327,13 +389,45 @@ class Operator:
                 gain >= self.settings.min_gain or (within and gain >= 0 and len(candidate) < len(session.source)))
             tried.append({"name": name, "gain": gain, "lost": lost, "drop": drop, "chars": len(candidate),
                           "eligible": eligible})
+            runs.append((name, [card.id for card in chosen], candidate, gain, drop))
             if eligible and (best is None or (gain, -len(candidate)) > (best[2], -best[4])):
                 best = (name, chosen, gain, lost, len(candidate), run.observations)
         for card_id in list(session.applied):
             session.revert(card_id)
-        where = "the held-out next batch" if gate is not None else "the whole batch"
+
+        # Challengers: run on the same held-out inputs; their evidence accumulates across gates.
+        ready = []
+        for challenger in pool:
+            run = judge.run(challenger.prompt, [e.id for e in judge.examples])
+            gain, lost, drop = _paired(judge, baseline, run)
+            evidence, items, evidence_drop = self._record_evidence(judge, challenger, baseline, run)
+            scale = items / gate_size if gate_size else 0.0
+            qualified = (gate_size > 0 and items >= gate_size
+                         and evidence >= self.settings.min_gain * math.sqrt(scale)
+                         and evidence_drop <= self.settings.max_batch_drop * scale)
+            tried.append({"name": f"challenger {challenger.label}", "gain": gain, "lost": lost, "drop": drop,
+                          "chars": len(challenger.prompt), "eligible": qualified,
+                          "evidence_gain": evidence, "evidence_items": items})
+            if qualified:
+                ready.append((gain, challenger, lost, run.observations))
+
+        top = max(ready, key=lambda item: (item[0], -len(item[1].prompt)), default=None)
+        if top is not None and (best is None or (top[0], -len(top[1].prompt)) > (best[2], -best[4])):
+            gain, challenger, lost, observations = top
+            reason = (f"challenger {challenger.label}: accumulated gain {challenger.evidence:+.2f} over "
+                      f"{len(challenger.pairs)} held-out inputs beyond the noise margin")
+            return outcome(True, reason, challenger.card_ids, gain, lost, len(cards), f"challenger {challenger.label}",
+                           tried, carry=observations if gate is not None else None, prompt=challenger.prompt,
+                           challenger=challenger)
         if best is None:
-            return summary(False, f"no option beat the incumbent on {where}", cards=len(cards), options=tried)
+            entrants = []
+            if gate is not None and self.settings.challengers:
+                ids = {e.id for e in judge.examples}
+                entrants = [_Challenger(candidate, f"round {index} {name}", tuple(card_ids), set(ids), gain)
+                            for name, card_ids, candidate, gain, drop in runs
+                            if gain > 0 and drop <= self.settings.max_batch_drop]
+            reason = f"no option beat the incumbent on {where}" if options else no_option
+            return outcome(False, reason, cards=len(cards), options=tried, entrants=entrants)
         name, chosen, gain, lost, _, observations = best
         for card in chosen:
             session.accept(card.id)
@@ -343,8 +437,41 @@ class Operator:
             session.revert(card_id)
         chosen = [card for card in chosen if card.id in session.applied]
         reason = "gain beyond the noise margin" if gain >= self.settings.min_gain else "equal within the noise margin and shorter"
-        return summary(True, f"{reason} on {where}", [c.id for c in chosen], gain, lost, len(cards), name, tried,
-                       carry=observations if gate is not None else None)
+        return outcome(True, f"{reason} on {where}", [c.id for c in chosen], gain, lost, len(cards), name, tried,
+                       carry=observations if gate is not None else None, prompt=session.apply())
+
+    def _record_evidence(self, judge: Session, challenger: _Challenger, baseline, run):
+        """Adds this gate's (incumbent, challenger) pairs outside the challenger's entry gate; returns
+        the accumulated net gain (set score, item units), the number of inputs and the summed drop."""
+        old = {item.example_id: item for item in baseline.observations}
+        for item in run.observations:
+            if item.example_id not in challenger.screen:
+                challenger.pairs[item.example_id] = (old[item.example_id], item)
+        pairs = list(challenger.pairs.values())
+        challenger.evidence = judge.set_gain([a for a, _ in pairs], [b for _, b in pairs]) if pairs else 0.0
+        drop = sum(max(0.0, a.evaluation.score - b.evaluation.score) for a, b in pairs)
+        return challenger.evidence, len(pairs), drop
+
+    def _keep_challengers(self, pool, entrants, gate_size):
+        """After a round that kept the incumbent: drop challengers behind on a full gate's worth of
+        fresh inputs or undecided after challenger_max_gates gates' worth, add the round's rejected
+        options that gained, and keep the `challengers` best by evidence per sqrt(gate)."""
+        s = self.settings
+        if not s.challengers or not gate_size:
+            return []
+        kept = [c for c in pool if not (len(c.pairs) >= gate_size and c.evidence < 0)
+                and len(c.pairs) < s.challenger_max_gates * gate_size]
+        known = {c.prompt for c in kept}
+        for entrant in entrants:
+            if entrant.prompt not in known:
+                known.add(entrant.prompt)
+                kept.append(entrant)
+
+        def strength(c):
+            if c.pairs:
+                return c.evidence / math.sqrt(len(c.pairs) / gate_size)
+            return c.screen_gain / math.sqrt(max(1, len(c.screen)) / gate_size)
+        return sorted(kept, key=strength, reverse=True)[:s.challengers]
 
     def _acceptable(self, record) -> bool:
         return (record.status == "complete" and record.target_gain >= self.settings.min_fix

@@ -471,6 +471,46 @@ class OperatorTests(unittest.TestCase):
         self.assertEqual(result.sessions[0]["gate"]["examples"], [e.id for e in batches[1] + batches[2]])
         self.assertEqual(result.sessions[1]["gate"]["examples"], [e.id for e in batches[3] + batches[4]])
 
+    def test_a_rejected_option_becomes_the_incumbent_once_its_evidence_accumulates(self):
+        # Each batch has one "alpha" input, so adding alpha gains +1 per 8-input gate: below min_gain 1.5
+        # every time, but kept as a challenger it gains +1, +2, +3 on fresh inputs, and +3 clears
+        # 1.5 x sqrt(3) = 2.6 on the third gate after its entry.
+        batches = [[Example(f"b{k}a", {"need": "alpha"})] + [Example(f"b{k}x{i}", {"need": "base"}) for i in range(7)]
+                   for k in range(6)]
+        settings = dict(schedule="fine_only", min_gain=1.5)
+        plain = Operator(model=Model(), predict=predict, evaluate=evaluate, config=CFG,
+                         operator=OperatorConfig(**settings)).run(PROMPT, batches, max_rounds=4)
+        self.assertFalse(any(r.committed for r in plain.rounds))
+        kept = Operator(model=Model(), predict=predict, evaluate=evaluate, config=CFG,
+                        operator=OperatorConfig(**settings, challengers=2)).run(PROMPT, batches, max_rounds=4)
+        self.assertEqual([r.committed for r in kept.rounds], [False, False, False, True])
+        self.assertEqual(kept.rounds[3].chosen, "challenger round 0 localized")
+        self.assertIn("alpha", kept.prompt)
+        evidence = [o for o in kept.rounds[2].options if o["name"].startswith("challenger")][0]
+        self.assertEqual((evidence["evidence_gain"], evidence["evidence_items"]), (2.0, 16))  # b2, b3; not b1
+        # Traceable: the switch names the round-0 card the challenger was built from.
+        self.assertEqual(kept.rounds[3].accepted_card_ids, (kept.sessions[0]["cards"][0]["id"],))
+
+    def test_a_challenger_without_a_decision_is_dropped_after_its_evidence_limit(self):
+        # Only b0 and b1 need alpha: the alpha option gains +1 on its entry gate (b1), then 0 on b2-b5.
+        # After challenger_max_gates (4) gates' worth of fresh inputs it is dropped and no longer run.
+        needs = ["alpha", "alpha", "", "", "", "", ""]
+        batches = [[Example(f"b{k}a", {"need": needs[k] or "base"})] +
+                   [Example(f"b{k}x{i}", {"need": "base"}) for i in range(7)] for k in range(7)]
+        result = Operator(model=Model(), predict=predict, evaluate=evaluate, config=CFG,
+                          operator=OperatorConfig(schedule="fine_only", min_gain=1.5, challengers=2)).run(
+            PROMPT, batches, max_rounds=6)
+        rows = [[o for o in r.options if o["name"].startswith("challenger")] for r in result.rounds]
+        self.assertEqual([len(r) for r in rows], [0, 1, 1, 1, 1, 0])
+        self.assertEqual([r[0]["evidence_items"] for r in rows[1:5]], [8, 16, 24, 32])
+        self.assertFalse(any(r.committed for r in result.rounds))
+
+    def test_challenger_settings_are_checked(self):
+        with self.assertRaises(Exception):
+            OperatorConfig(challengers=-1)
+        with self.assertRaises(Exception):
+            OperatorConfig(challenger_max_gates=0)
+
     def test_a_combined_option_records_only_the_cards_it_applied(self):
         # Both cards rewrite the same sentence: in the combined option the second is skipped, so the
         # committed decision must not list it.
