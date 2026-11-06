@@ -3,7 +3,7 @@
 Toy task: an input passes when the prompt mentions the word it needs. The initial prompt mentions
 "base", so inputs needing "base" pass and the others fail until a card adds their word.
 """
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 import unittest
 
@@ -446,6 +446,32 @@ class OperatorTests(unittest.TestCase):
                                                     for c in second["checks"] if c["status"] == "complete")
                          + sum(len(e["observations"]) for e in second["evaluations"][1:]
                                if e["prompt_id"] not in {c["prompt_id"] for c in second["checks"]}))
+
+    def test_the_gate_can_pool_several_following_batches(self):
+        batches = [examples(), [Example(f"x{i}", {"need": n}) for i, n in enumerate(NEEDS)],
+                   [Example(f"y{i}", {"need": n}) for i, n in enumerate(NEEDS)]]
+        result = Operator(model=Model(), predict=predict, evaluate=evaluate, config=CFG,
+                          operator=OperatorConfig(schedule="fine_only", gate_batches=2)).run(PROMPT, batches, max_rounds=1)
+        self.assertEqual(len(result.rounds), 1)
+        self.assertEqual(result.sessions[0]["gate"]["examples"], [e.id for e in batches[1] + batches[2]])
+        # A repeat of the diagnosed batch never enters its own gate.
+        repeat = Operator(model=Model(), predict=predict, evaluate=evaluate, config=CFG,
+                          operator=OperatorConfig(schedule="fine_only", gate_batches=2)).run(
+            PROMPT, [batches[0], batches[1], batches[0]], max_rounds=1)
+        self.assertEqual(repeat.sessions[0]["gate"]["examples"], [e.id for e in batches[1]])
+
+    def test_search_stops_after_patience_trials_without_improvement(self):
+        def propose(p, need):
+            return {"prompt_edits": [{"name": "wrong", "phase1_addresses": ["y"], "old_sentence": "Answer the question.",
+                                      "new_sentence": "Answer the question. Mention gamma.", "reason": "r"}]}
+        counts = []
+        for patience in (0, 2):
+            session = Session(model=Model(propose=propose), predict=predict, evaluate=evaluate, prompt=PROMPT,
+                              examples=examples(), config=replace(CFG, search_patience=patience))
+            card = session.analyze("local")[0]
+            counts.append(len(session.search(card.id).trials))
+        self.assertEqual(counts[1], 3)  # the first trial sets the best; then 2 without a better reward
+        self.assertGreater(counts[0], 3)
 
     def test_runs_are_deterministic(self):
         def run():

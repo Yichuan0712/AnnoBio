@@ -457,6 +457,7 @@ class Session:
         beta = [[1.0] * len(row) for row in candidates]
         trials, seen, status = [], set(), "complete"
         best = (None, -1.0, "")  # (check, reward, text)
+        since_best = 0  # trials in a row without a better reward
         try:
             for index in range(1, self.config.max_trials + 1):
                 self._event("search", f"Search trial {index}/{self.config.max_trials}")
@@ -478,8 +479,12 @@ class Session:
                 trials.append(SearchTrialRecord(index, picks, text, record.id, reward, record.status == "complete"))
                 better = reward > best[1] or (reward == best[1] and best[0] is not None and len(text) < len(best[2]))
                 if record.status == "complete" and better:
-                    best = (record, reward, text)
+                    best, since_best = (record, reward, text), 0
+                else:
+                    since_best += 1
                 if record.status == "complete" and reward >= 1.0:
+                    break
+                if self.config.search_patience and since_best >= self.config.search_patience:
                     break
         except EngineStopped as exc:
             status = exc.reason

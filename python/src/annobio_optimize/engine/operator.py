@@ -60,16 +60,22 @@ class OperatorConfig:
     min_gain: float = 2.0        # batch gate: net summed score gain over the incumbent
     max_batch_drop: float = 2.0  # batch gate: summed score drop over the batch
     search_failed_cards: bool = True
-    # Search only a card that made some progress on its targets (fixed at least one, or matched more
-    # comparison rows than the incumbent); a card that moved nothing is dropped instead of searched.
+    # Search only a promising card: its targets gained at least `min_fix` (beyond identical-run noise),
+    # so it failed the screen through its regression inputs alone. On pass/fail tasks this means it fixed
+    # at least one target; on partial-credit tasks a wobble no longer counts (pilot step 2, BioRED: almost
+    # every card moved its targets a little, so nearly all were searched).
     search_only_promising: bool = False
     demos_cap: int = 0  # 0: no worked-examples card (the zero-shot condition)
     # Where the batch gate compares options with the incumbent: "next" = the NEXT batch, whose inputs
     # this round's diagnoses and cards never saw (held out; pilot step 2 showed that gating on the
     # diagnosed batch accepts every round while validation falls); "same" = the diagnosed batch.
     gate: Literal["next", "same"] = "next"
+    # How many following batches the held-out gate pools (more inputs separate a small true gain from
+    # noise; min_gain and max_batch_drop are summed over the pooled inputs, so scale them with it).
+    gate_batches: int = 1
 
     def __post_init__(self):
+        check.integer(self.gate_batches, "OperatorConfig.gate_batches", minimum=1)
         check.boolean(self.search_only_promising, "OperatorConfig.search_only_promising")
         check.choice(self.gate, ("next", "same"), "OperatorConfig.gate")
         check.choice(self.schedule, SCHEDULES, "OperatorConfig.schedule")
@@ -148,12 +154,27 @@ class Operator:
         history, demos_done = [], s.demos_cap == 0
         carried = None  # the incumbent's observations on the coming batch, from last round's gate
         stream = iter(batches)
-        upcoming = next(stream, None)
+        ahead: list = []  # this round's batch and the batches its gate pools
+
+        def fill():
+            while len(ahead) < 1 + s.gate_batches:
+                more = next(stream, None)
+                if more is None:
+                    return
+                ahead.append(list(more))
+        fill()
         index = -1
         try:
-            while upcoming is not None and (max_rounds is None or index + 1 < max_rounds):
+            while ahead and (max_rounds is None or index + 1 < max_rounds):
                 index += 1
-                batch, upcoming = upcoming, next(stream, None)
+                batch = ahead.pop(0)
+                fill()
+                taken = {e.id for e in batch}
+                upcoming = []  # the gate inputs: the following batches, minus repeats of this batch
+                for example in (e for b in ahead[:s.gate_batches] for e in b):
+                    if example.id not in taken:
+                        taken.add(example.id)
+                        upcoming.append(example)
                 if s.schedule == "compete":
                     early = self._spent() < s.coarse_budget_fraction
                     stalled = stale >= s.coarse_patience and since_rewrite >= s.coarse_patience
@@ -169,11 +190,16 @@ class Operator:
                 session = Session(**common, prompt=result.prompt, examples=batch, history=history,
                                   with_demos=self.with_demos, observations=carried)
                 gate = None
-                if s.gate == "next" and upcoming is not None:
+                if s.gate == "next" and upcoming:
                     gate = Session(**common, prompt=result.prompt, examples=upcoming)
                 carried = None
                 try:
                     summary, carried = self._round(session, index, want_rewrite, want_local, demos_done, gate)
+                    if carried is not None:  # reuse only an exact cover of the next round's batch
+                        wanted = {e.id for e in ahead[0]} if ahead else set()
+                        carried = [o for o in carried if o.example_id in wanted]
+                        if {o.example_id for o in carried} != wanted or not wanted:
+                            carried = None
                 finally:
                     history = (history + session.history_items())[-max(1, self.config.history_items):]
                     snapshot = session.snapshot()
@@ -235,7 +261,7 @@ class Operator:
                 if self._acceptable(record) or not session.searchable(card.id) or card.cluster_id in covered:
                     continue
                 progress = _progress(session, record)
-                if self.settings.search_only_promising and progress <= (0, 0):
+                if self.settings.search_only_promising and progress[0] < self.settings.min_fix:
                     continue
                 key = card.cluster_id or card.id
                 if key not in chosen or progress > chosen[key][0]:

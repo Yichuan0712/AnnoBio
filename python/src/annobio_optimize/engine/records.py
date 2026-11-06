@@ -27,6 +27,9 @@ class EngineConfig:
     max_trials: int = 40
     max_segments: int = 5
     candidates_per_segment: int = 4
+    # Stop a search after this many trials in a row without a better reward (0 = run all max_trials, the
+    # app's behavior). Pilot step 2: on BioRED the search spent half the budget for 1-2 rounds.
+    search_patience: int = 0
     # Inputs outside a card's targets that every verification and search trial also runs (design 6:
     # regression guard): those with the highest baseline score (passing ones first), ties drawn per session.
     regression_examples: int = 4
@@ -45,7 +48,8 @@ class EngineConfig:
 
     def __post_init__(self):
         for name in ("max_failed_examples", "cluster_threshold", "max_cards", "max_trials", "max_segments",
-                     "candidates_per_segment", "regression_examples", "history_items", "max_evidence_examples"):
+                     "candidates_per_segment", "regression_examples", "history_items", "max_evidence_examples",
+                     "search_patience"):
             check.integer(getattr(self, name), f"EngineConfig.{name}", minimum=0)
         check.integer(self.proposals_per_cluster, "EngineConfig.proposals_per_cluster", minimum=1)
         for name in ("max_failed_examples", "max_cards", "max_trials", "max_segments", "candidates_per_segment"):
