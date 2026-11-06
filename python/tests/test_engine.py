@@ -460,6 +460,36 @@ class OperatorTests(unittest.TestCase):
             PROMPT, [batches[0], batches[1], batches[0]], max_rounds=1)
         self.assertEqual(repeat.sessions[0]["gate"]["examples"], [e.id for e in batches[1]])
 
+    def test_after_a_commit_later_gates_skip_the_inputs_that_selected_the_incumbent(self):
+        # Predictions are reused per (prompt, input): on the inputs that made it win, the new
+        # incumbent keeps its lucky draws, so the next gate reads further batches instead.
+        batches = [examples()] + [[Example(f"{tag}{i}", {"need": n}) for i, n in enumerate(NEEDS)]
+                                  for tag in ("x", "y", "z", "w")]
+        result = Operator(model=Model(), predict=predict, evaluate=evaluate, config=CFG,
+                          operator=OperatorConfig(schedule="fine_only", gate_batches=2)).run(PROMPT, batches, max_rounds=2)
+        self.assertTrue(result.rounds[0].committed)
+        self.assertEqual(result.sessions[0]["gate"]["examples"], [e.id for e in batches[1] + batches[2]])
+        self.assertEqual(result.sessions[1]["gate"]["examples"], [e.id for e in batches[3] + batches[4]])
+
+    def test_a_combined_option_records_only_the_cards_it_applied(self):
+        # Both cards rewrite the same sentence: in the combined option the second is skipped, so the
+        # committed decision must not list it.
+        def propose(p, need):
+            return {"prompt_edits": [{"name": f"Add {need}", "phase1_addresses": [f"needs {need}"],
+                                      "old_sentence": "Use base facts.", "new_sentence": f"Use base facts; mention {need}.",
+                                      "reason": f"fix {need}"}]}
+        s = session(Model(propose=propose))
+        first, second = s.analyze("local")
+        s.accept(first.id)
+        s.accept(second.id)
+        self.assertEqual(s.inactive, [second.id])
+        gate = [Example(f"x{i}", {"need": n}) for i, n in enumerate(NEEDS)]
+        result = Operator(model=Model(propose=propose), predict=predict, evaluate=evaluate, config=CFG,
+                          operator=OperatorConfig(schedule="fine_only", min_gain=1.0)).run(PROMPT, [examples(), gate], max_rounds=1)
+        self.assertTrue(result.rounds[0].committed)
+        self.assertEqual(len(result.rounds[0].accepted_card_ids), 1)
+        self.assertEqual(result.sessions[0]["applied"], list(result.rounds[0].accepted_card_ids))
+
     def test_search_stops_after_patience_trials_without_improvement(self):
         def propose(p, need):
             return {"prompt_edits": [{"name": "wrong", "phase1_addresses": ["y"], "old_sentence": "Answer the question.",

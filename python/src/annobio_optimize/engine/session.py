@@ -81,6 +81,7 @@ class Session:
         self.model_calls: list[ModelCall] = []
         self.notices: list[Notice] = []
         self.applied: list[str] = []
+        self.inactive: list[str] = []  # accepted cards with no effect on the working prompt (see _rebuild)
         self.predictions = 0
         self._baseline: EvaluationBatch | None = None
         self._regression: tuple[str, ...] | None = None
@@ -592,14 +593,16 @@ class Session:
         return self.prompt
 
     def _rebuild(self):
-        """Working prompt = source + every accepted card, in acceptance order (the app's rule)."""
-        text = self.source
+        """Working prompt = source + every accepted card, in acceptance order (the app's rule).
+        Accepted cards that ended up with no effect (text gone, or replaced by a later rewrite) are
+        listed in self.inactive, so a decision record names only the cards actually in the prompt."""
+        text, effective = self.source, []
         for card_id in self.applied:
             card = self.card(card_id)
             if card.kind == "rewrite":
                 if text != self.source:
                     self.notices.append(Notice("apply", f"{card_id}: a rewrite replaces earlier accepted cards."))
-                text = card.new_text
+                text, effective = card.new_text, [card_id]
                 continue
             segment = find_segment(text, card.old_text)
             if segment is None:
@@ -607,7 +610,9 @@ class Session:
                 continue
             at = text.find(segment)
             text = text[:at] + card.new_text + text[at + len(segment):]
+            effective.append(card_id)
         self.prompt = text
+        self.inactive = [card_id for card_id in self.applied if card_id not in effective]
 
     def apply(self) -> str:
         """The prompt the app saves as a new Prompt version."""

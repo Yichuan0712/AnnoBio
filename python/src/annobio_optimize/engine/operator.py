@@ -156,13 +156,35 @@ class Operator:
         carried = None  # the incumbent's observations on the coming batch, from last round's gate
         stream = iter(batches)
         ahead: list = []  # this round's batch and the batches its gate pools
+        # Inputs whose observations selected the current incumbent (the gate of the round that
+        # committed it). Predictions are reused per (prompt, input), so on these inputs the incumbent
+        # keeps the lucky draws that made it win; later gates skip them to compare fairly.
+        selected_on: set = set()
 
-        def fill():
-            while len(ahead) < 1 + s.gate_batches:
+        def fill(size=None):
+            while len(ahead) < (size if size is not None else 1 + s.gate_batches):
                 more = next(stream, None)
                 if more is None:
                     return
                 ahead.append(list(more))
+
+        def gate_inputs(batch):
+            """The next gate_batches batches' worth of inputs (as many as those batches hold), in
+            stream order, skipping this round's batch and the inputs that selected the incumbent;
+            later batches are read ahead to make up for skipped ones."""
+            target = sum(len(b) for b in ahead[:s.gate_batches])
+            taken, chosen, position = {e.id for e in batch} | selected_on, [], 0
+            while len(chosen) < target:
+                if position >= len(ahead):
+                    fill(len(ahead) + 1)
+                    if position >= len(ahead):
+                        break
+                for example in ahead[position]:
+                    if example.id not in taken and len(chosen) < target:
+                        taken.add(example.id)
+                        chosen.append(example)
+                position += 1
+            return chosen
         fill()
         index = -1
         try:
@@ -170,12 +192,7 @@ class Operator:
                 index += 1
                 batch = ahead.pop(0)
                 fill()
-                taken = {e.id for e in batch}
-                upcoming = []  # the gate inputs: the following batches, minus repeats of this batch
-                for example in (e for b in ahead[:s.gate_batches] for e in b):
-                    if example.id not in taken:
-                        taken.add(example.id)
-                        upcoming.append(example)
+                upcoming = gate_inputs(batch) if s.gate == "next" else []
                 if s.schedule == "compete":
                     early = self._spent() < s.coarse_budget_fraction
                     stalled = stale >= s.coarse_patience and since_rewrite >= s.coarse_patience
@@ -212,6 +229,8 @@ class Operator:
                     result.sessions.append(snapshot)
                 if summary.committed:
                     result.prompt = session.apply()
+                    if gate is not None:
+                        selected_on = {e.id for e in gate.examples}
                     if any(session.card(id).kind == "demos" for id in summary.accepted_card_ids):
                         demos_done = True
                 result.rounds.append(summary)
@@ -318,6 +337,11 @@ class Operator:
         name, chosen, gain, lost, _, observations = best
         for card in chosen:
             session.accept(card.id)
+        # A combined option's card whose text an earlier card changed was skipped: it is not part of
+        # the committed prompt, so it is reverted and not recorded as accepted (traceability).
+        for card_id in list(session.inactive):
+            session.revert(card_id)
+        chosen = [card for card in chosen if card.id in session.applied]
         reason = "gain beyond the noise margin" if gain >= self.settings.min_gain else "equal within the noise margin and shorter"
         return summary(True, f"{reason} on {where}", [c.id for c in chosen], gain, lost, len(cards), name, tried,
                        carry=observations if gate is not None else None)
