@@ -313,6 +313,7 @@ class Operator:
         stale = 0            # rounds in a row that committed nothing
         since_rewrite = 0    # rounds since a rewrite card was last proposed (compete)
         history, demos_done = [], s.demos_cap == 0
+        kept_tail = ""  # the accepted worked-examples block; later rewrites keep it verbatim (Session.kept_tail)
         carried = None  # the incumbent's observations on the coming batch, from last round's gate
         stream = iter(batches)
         if s.style != "fixed":
@@ -405,7 +406,7 @@ class Operator:
                     want_rewrite, want_local = coarse, not coarse
                 common = dict(**self.callbacks, config=replace(self.config, seed=self.config.seed * 1000003 + index),
                               is_cancelled=self.is_cancelled, on_event=self.on_event, stop_on=self.stop_on,
-                              aggregate=self.aggregate)
+                              aggregate=self.aggregate, kept_tail=kept_tail)
                 session = Session(**common, prompt=result.prompt, examples=batch, history=history,
                                   with_demos=self.with_demos, observations=carried)
                 gate = None
@@ -437,8 +438,11 @@ class Operator:
                     else:
                         if gate is not None:
                             selected_on = {e.id for e in gate.examples}
-                        if any(session.card(id).kind == "demos" for id in summary.accepted_card_ids):
-                            demos_done = True
+                        for id in summary.accepted_card_ids:
+                            card = session.card(id)
+                            if card.kind == "demos":
+                                demos_done = True
+                                kept_tail = card.new_text[len(card.old_text):]
                     pool = [c for c in pool if c.prompt != result.prompt]
                     for challenger in pool:  # their evidence was against the replaced incumbent
                         challenger.pairs.clear()

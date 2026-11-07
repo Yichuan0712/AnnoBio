@@ -59,7 +59,7 @@ class Session:
                  observations: Sequence[Observation] | None = None, history: Sequence[HistoryItem] = (),
                  with_demos: WithDemos | None = None, is_cancelled: CancelCheck | None = None,
                  on_event: EventCallback | None = None, stop_on: tuple = (),
-                 aggregate: Aggregate | None = None):
+                 aggregate: Aggregate | None = None, kept_tail: str = ""):
         """stop_on: exception types raised by the host's callbacks that must end the session as they
         are (e.g. the experiment's budget cap). Other prediction errors are recorded on the check.
 
@@ -79,6 +79,11 @@ class Session:
         self.config = config if config is not None else EngineConfig()
         self.model, self.predict, self.evaluate = model, predict, evaluate
         self.with_demos = with_demos
+        # The worked-examples block an accepted demos card appended (the operator passes it on): a
+        # whole-prompt rewrite revises only the text before it and keeps the block verbatim, so the
+        # examples are never paraphrased, dropped or regenerated (a RoBBR example is a full paper).
+        check.string(kept_tail, "Session.kept_tail")
+        self.kept_tail = kept_tail
         self.is_cancelled = is_cancelled or (lambda: False)
         self.on_event = on_event
         self.source = self.prompt = prompt
@@ -348,17 +353,19 @@ class Session:
 
     def _rewrite_card(self, issues: list[Issue]) -> Card | None:
         targets = tuple(dict.fromkeys(issue.example_id for issue in issues))
+        tail = self.kept_tail if self.kept_tail and self.source.endswith(self.kept_tail) else ""
+        body = self.source[:len(self.source) - len(tail)]
         try:
             data = self._ask("rewrite", {
-                "prompt": self.source, "history": self._history_payload(),
+                "prompt": body, "history": self._history_payload(),
                 "issues": [{k: v for k, v in asdict(i).items() if k != "reference_note"} for i in issues],
                 "observations": self._observations(targets)})
-            new = text_field(data, "prompt", nonempty=True, stage="rewrite").strip()
+            new = text_field(data, "prompt", nonempty=True, stage="rewrite").strip() + tail
             reason = text_field(data, "reason", nonempty=True, stage="rewrite")
         except ModelResponseError as exc:
             self.notices.append(Notice("rewrite", str(exc)))
             return None
-        if new == self.source.strip():
+        if new.strip() == self.source.strip():
             self.notices.append(Notice("rewrite", "rewrite returned the prompt unchanged"))
             return None
         return Card(self._next_card_id(), "rewrite", str(data.get("name") or "Rewrite the prompt"), reason,

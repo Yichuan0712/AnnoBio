@@ -333,6 +333,33 @@ class OperatorTests(unittest.TestCase):
         self.assertTrue(result.rounds[0].committed)
         self.assertIn("WORKED_EXAMPLES", result.prompt)
 
+    def test_rewrites_after_accepted_demos_keep_the_examples_block_verbatim(self):
+        def with_demos(prompt, shown):
+            return prompt + "\n\nWORKED_EXAMPLES\n" + " ".join(e.inputs["need"] for e in shown)
+        model = Model(rewrite=lambda prompt, needs: prompt + " Mention " + " and ".join(needs) + ".")
+        op = Operator(model=model, predict=predict, evaluate=evaluate, config=CFG, with_demos=with_demos,
+                      operator=OperatorConfig(schedule="coarse_only", demos_cap=1, min_gain=-10.0, max_batch_drop=99.0))
+        # Round 1: the rewrite card does not see a block yet. Force the demos card to win by a model that
+        # returns the prompt unchanged on round 1 (an unchanged rewrite is dropped), then rewrites after.
+        state = {"round": 0}
+        def rewrite(prompt, needs):
+            state["round"] += 1
+            return prompt if state["round"] == 1 else prompt + " Mention " + " and ".join(needs) + "."
+        model.rewrite = rewrite
+        result = op.run(PROMPT, self.batches(3))
+        accepted_demos = [r for r in result.rounds if r.committed and r.chosen != "rewrite"]
+        self.assertTrue(accepted_demos)
+        block = result.prompt[result.prompt.index("\n\nWORKED_EXAMPLES"):]
+        later = [c for c in model.calls if c.stage == "rewrite"][1:]
+        self.assertTrue(later)
+        for call in later:  # the rewrite model never sees (or regenerates) the block
+            self.assertNotIn("WORKED_EXAMPLES", call.payload["prompt"])
+        rewritten = [r for r in result.rounds if r.committed and r.chosen == "rewrite"]
+        self.assertTrue(rewritten)  # a later rewrite was accepted ...
+        self.assertIn("Mention", result.prompt[:result.prompt.index(block)])  # ... it edited the instruction
+        self.assertTrue(result.prompt.endswith(block))  # ... and the block is still the verbatim tail
+        self.assertEqual(result.prompt.count("WORKED_EXAMPLES"), 1)
+
     def test_compete_proposes_both_kinds_and_the_shorter_equal_option_wins(self):
         # Both the rewrite and the two localized cards fix all three failures (+3); the rewrite is shorter.
         op = Operator(model=Model(), predict=predict, evaluate=evaluate, config=CFG)
