@@ -68,6 +68,19 @@ INSTRUCTIONS = {
         "candidates: at most num_candidates replacement strings, not the full sentence. Keep placeholders unchanged; "
         "the original focus is already included."
     ),
+    # The optimization style, judged once before optimization starts (OperatorConfig.style "auto";
+    # ENGINE_V2_DESIGN 6.0h). Written once and frozen before the formal phase; not tuned per task.
+    "style": (
+        "Before this task prompt is optimized, decide which optimization style suits the task. The payload "
+        "holds the task prompt and a few example inputs with their expected outputs (long texts are cut). "
+        "concise: doing the task well rests on a focused judgment that a short, clear prompt can convey; "
+        "rules added to fix individual failures tend to describe those particular inputs and hurt on new "
+        "ones, so the optimizer should keep the prompt short and accept a change only if it does not lose. "
+        "detailed: doing the task well depends on many task-specific conventions (what counts, how each part "
+        "of the output is decided, how edge cases are handled) that a short prompt cannot convey, so a long "
+        "prompt with detailed rules is expected and the optimizer should let it grow. Judge from the task "
+        "itself, not from the current prompt's length. Return reason (one or two sentences) and style."
+    ),
 }
 
 SCHEMAS = {
@@ -80,6 +93,7 @@ SCHEMAS = {
     "rewrite": _object({"name": _S, "prompt": _S, "reason": _S}),
     "segment": _object({"segments": _array(_S)}),
     "paraphrase": _object({"candidates": _array(_S)}),
+    "style": _object({"reason": _S, "style": {"type": "string", "enum": ["concise", "detailed"]}}),
 }
 
 

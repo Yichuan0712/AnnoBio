@@ -157,6 +157,18 @@ class Decision:
 
 
 @dataclass(frozen=True, slots=True)
+class StyleChoice:
+    """The optimization style a run used (OperatorConfig.style; ENGINE_V2_DESIGN 6.0h). In the app it is
+    the suggested-mode card shown before optimizing, which the user may change; votes/reasons are the
+    model's judgments (empty when the style was set, not judged)."""
+    setting: Literal["auto", "concise", "detailed"]
+    style: Literal["concise", "detailed"]
+    votes: tuple[str, ...] = ()
+    reasons: tuple[str, ...] = ()
+    example_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class HistoryItem:
     """What a later proposal sees of an earlier attempt (design 8; OPRO-style history)."""
     kind: str

@@ -31,6 +31,21 @@ from .records import Card, Check, Decision, EngineConfig, HistoryItem, Mode, Sea
 WithDemos = Callable[[str, list], str]
 
 
+def parse_reply(response, stage: str) -> dict:
+    """The model's reply as a JSON object (a string reply may hold it, optionally fenced)."""
+    if isinstance(response, str):
+        content = response.strip()
+        if content.startswith("```") and content.endswith("```"):
+            content = content.split("\n", 1)[-1].rsplit("```", 1)[0]
+        try:
+            response = json.loads(content)
+        except ValueError as exc:
+            raise ModelResponseError("invalid JSON.", path=f"model.return[stage={stage!r}]") from exc
+    if not isinstance(response, dict):
+        raise ModelResponseError("expected a JSON object.", path=f"model.return[stage={stage!r}]")
+    return response
+
+
 class EngineStopped(AnnoBioError, RuntimeError):
     """Cancelled or out of budget; the session's records up to that point stay available."""
     def __init__(self, reason: str):
@@ -116,17 +131,7 @@ class Session:
         except ValidationError as exc:
             raise CallbackContractError(exc.message, path=exc.path, hint=exc.hint) from exc
         self.model_calls.append(ModelCall(f"model-{len(self.model_calls) + 1}", request, raw))
-        if isinstance(response, str):
-            content = response.strip()
-            if content.startswith("```") and content.endswith("```"):
-                content = content.split("\n", 1)[-1].rsplit("```", 1)[0]
-            try:
-                response = json.loads(content)
-            except ValueError as exc:
-                raise ModelResponseError("invalid JSON.", path=f"model.return[stage={stage!r}]") from exc
-        if not isinstance(response, dict):
-            raise ModelResponseError("expected a JSON object.", path=f"model.return[stage={stage!r}]")
-        return response
+        return parse_reply(response, stage)
 
     def set_score(self, observations: Sequence[Observation]) -> float:
         """The task's score of a set of observations (see `aggregate`); the mean item score by default."""

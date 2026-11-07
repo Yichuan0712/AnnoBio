@@ -8,7 +8,7 @@ import json
 import unittest
 
 from annobio_optimize import Evaluation, Example
-from annobio_optimize.engine import EngineConfig, Operator, OperatorConfig, Session
+from annobio_optimize.engine import STYLE_SETTINGS, EngineConfig, Operator, OperatorConfig, Session
 
 PROMPT = "Answer the question. Use base facts."
 CFG = EngineConfig(regression_examples=3, cluster_threshold=0)  # cluster even a few issues
@@ -594,6 +594,60 @@ class OperatorTests(unittest.TestCase):
             OperatorConfig(final="holdout")  # needs holdout_batches
         with self.assertRaises(Exception):
             OperatorConfig(rollback_z=-1.0)
+
+    def test_auto_style_is_judged_once_before_the_first_round_and_its_settings_apply(self):
+        class Judged(Model):
+            def __init__(self, votes, **kwargs):
+                super().__init__(**kwargs)
+                self.votes = list(votes)
+
+            def __call__(self, request):
+                if request.stage != "style":
+                    return super().__call__(request)
+                self.calls.append(request)
+                vote = self.votes.pop(0)
+                return {"reason": f"looks {vote}", "style": vote} if vote in STYLE_SETTINGS else "not json"
+
+        for votes, expected in ((["detailed"] * 3, "detailed"), (["detailed", "concise", "detailed"], "concise"),
+                                (["detailed", "detailed", "garbled"], "concise")):
+            start, _, batches = self.drifting()
+            model = Judged(votes)
+            runner = Operator(model=model, predict=predict, evaluate=evaluate, config=CFG, operator=OperatorConfig(
+                schedule="coarse_only", min_fix=0.0, style="auto"))
+            result = runner.run(start, batches("b", 5), max_rounds=1)
+            asked = [r for r in model.calls if r.stage == "style"]
+            self.assertEqual(len(asked), 3)
+            self.assertEqual([r.payload["judgment"] for r in asked], [1, 2, 3])  # distinct requests
+            self.assertEqual(model.calls[:3], asked)  # before any diagnosis
+            self.assertEqual(result.style.style, expected)
+            self.assertEqual(result.style.setting, "auto")
+            # Judged on the third batch, which neither style sets aside.
+            self.assertTrue(all(id.startswith("b2") for id in result.style.example_ids))
+            self.assertEqual(len(asked[0].payload["examples"]), 2)
+            for name, value in STYLE_SETTINGS[expected].items():
+                self.assertEqual(getattr(runner.settings, name), value)
+            if votes[-1] == "garbled":
+                self.assertEqual(result.style.votes, ("detailed", "detailed", ""))
+            used = {id for snap in result.sessions for id in snap["gate"]["examples"]} | {
+                o["example_id"] for snap in result.sessions for e in snap["evaluations"] for o in e["observations"]}
+            # concise sets the first two batches aside (never diagnosed or gated); detailed uses them.
+            self.assertEqual(any(id.startswith(("b0", "b1")) for id in used), expected == "detailed")
+
+    def test_a_set_style_applies_its_settings_without_asking_and_fixed_keeps_the_fields(self):
+        for style in ("concise", "detailed", "fixed"):
+            start, model, batches = self.drifting()
+            runner = Operator(model=model, predict=predict, evaluate=evaluate, config=CFG, operator=OperatorConfig(
+                schedule="coarse_only", min_fix=0.0, min_gain=-2.0, style=style))
+            result = runner.run(start, batches("b", 4), max_rounds=1)
+            self.assertFalse([r for r in model.calls if r.stage == "style"])
+            if style == "fixed":
+                self.assertIsNone(result.style)
+                self.assertEqual(runner.settings.min_gain, -2.0)
+            else:
+                self.assertEqual((result.style.setting, result.style.style, result.style.votes), (style, style, ()))
+                self.assertEqual(runner.settings.min_gain, STYLE_SETTINGS[style]["min_gain"])
+        with self.assertRaises(Exception):
+            OperatorConfig(style="long")
 
     def test_rewrite_integrate_asks_the_rewrite_to_integrate_rather_than_append(self):
         for integrate in (False, True):

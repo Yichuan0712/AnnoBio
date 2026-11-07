@@ -51,17 +51,65 @@ Schedules (which cards a round proposes):
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from itertools import chain
+import json
 import math
 from typing import Callable, Iterable, Literal, Sequence
 
 from .. import validation as check
-from ..errors import InputValueError
+from ..errors import InputValueError, ModelResponseError
 from ..types import CancelCheck, Evaluate, EventCallback, Example, OptimizationModel, Predict, prompt_id
-from .records import EngineConfig
-from .session import EngineStopped, Session, WithDemos
+from . import prompts
+from .records import EngineConfig, StyleChoice
+from .session import EngineStopped, Session, WithDemos, parse_reply
 
 Schedule = Literal["coarse_to_fine", "compete", "coarse_only", "fine_only"]
 SCHEDULES = ("coarse_to_fine", "compete", "coarse_only", "fine_only")
+
+# The two optimization styles (ENGINE_V2_DESIGN 6.0h): the settings each one fixes; the others stay as given.
+# concise = pilot step 11a (accept only what does not lose, roll back a drift, hand over the shortest version
+# within one item of the best on set-aside inputs): PubMedQA .777, BioRED .407. detailed = pilot step 9
+# (non-inferiority gate, hand over the best prompt seen on held-out inputs): BioRED .456, PubMedQA .718.
+STYLE_SETTINGS = {
+    "concise": {"min_gain": 0.0, "rollback_z": 2.0, "final": "holdout", "holdout_batches": 2, "final_margin": 1.0},
+    "detailed": {"min_gain": -1.0, "rollback_z": 0.0, "final": "best_seen", "holdout_batches": 0, "final_margin": 0.0},
+}
+STYLE_VOTES = 3            # model judgments per "auto" choice; detailed needs all of them, otherwise concise
+STYLE_EXAMPLES = 2         # example inputs shown to the judgment (from the third batch: never a holdout batch)
+_STYLE_CUT = {"task_prompt": 8000, "input": 3000, "expected_output": 1500}
+
+
+def _cut(value, limit: int) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return text if len(text) <= limit else text[:limit] + " ...[cut]"
+
+
+def suggest_style(model: OptimizationModel, prompt: str, examples: Sequence[Example], *,
+                  votes: int = STYLE_VOTES) -> StyleChoice:
+    """The optimization model's suggested style for this task (OperatorConfig.style "auto"; in the app, the
+    suggested-mode card a user may change). Asked `votes` times; "detailed" only when every reply says so,
+    otherwise "concise" (the default: a split judgment means the task sits in between). An unusable reply
+    counts as no vote."""
+    check.string(prompt, "suggest_style.prompt", nonempty=True)
+    check.integer(votes, "suggest_style.votes", minimum=1)
+    shown = list(examples)[:STYLE_EXAMPLES]
+    payload = {"task_prompt": _cut(prompt, _STYLE_CUT["task_prompt"]),
+               "examples": [{"input": _cut(e.inputs, _STYLE_CUT["input"]),
+                             "expected_output": _cut(e.reference, _STYLE_CUT["expected_output"])} for e in shown]}
+    styles, reasons = [], []
+    for number in range(votes):
+        # The judgment number keeps the requests distinct, so a caching host still returns separate judgments.
+        request = prompts.request("style", {**payload, "judgment": number + 1})
+        try:
+            reply = parse_reply(check.invoke(model, request, name="model", context="stage='style'"), "style")
+        except ModelResponseError:
+            reply = {}
+        style = reply.get("style") if reply.get("style") in STYLE_SETTINGS else ""
+        reason = reply.get("reason") if isinstance(reply.get("reason"), str) else ""
+        styles.append(style)
+        reasons.append(reason if style else "unusable reply")
+    chosen = "detailed" if all(v == "detailed" for v in styles) else "concise"
+    return StyleChoice("auto", chosen, tuple(styles), tuple(reasons), tuple(e.id for e in shown))
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,8 +162,14 @@ class OperatorConfig:
     # step 9: on PubMedQA r2 two early accepted rewrites each lost on their gate and the run never
     # recovered the initial prompt's level.
     rollback_z: float = 0.0
+    # The optimization style (ENGINE_V2_DESIGN 6.0h; the one user-facing switch over the settings above):
+    # "fixed" = the fields as given; "concise" / "detailed" = STYLE_SETTINGS[style] replaces min_gain,
+    # rollback_z, final, holdout_batches and final_margin; "auto" = the optimization model judges the task
+    # once before the first round (suggest_style) and that style applies. OperatorResult.style records it.
+    style: Literal["fixed", "auto", "concise", "detailed"] = "fixed"
 
     def __post_init__(self):
+        check.choice(self.style, ("fixed", "auto", "concise", "detailed"), "OperatorConfig.style")
         check.integer(self.gate_batches, "OperatorConfig.gate_batches", minimum=1)
         check.integer(self.challengers, "OperatorConfig.challengers", minimum=0)
         check.integer(self.challenger_max_gates, "OperatorConfig.challenger_max_gates", minimum=1)
@@ -193,6 +247,7 @@ class OperatorResult:
     sessions: list[dict] = field(default_factory=list)
     stop_reason: str = "rounds_completed"
     final: str = ""  # the prompt handed over (OperatorConfig.final); updated every round
+    style: StyleChoice | None = None  # the style used (OperatorConfig.style other than "fixed")
 
 
 class Operator:
@@ -243,6 +298,21 @@ class Operator:
         history, demos_done = [], s.demos_cap == 0
         carried = None  # the incumbent's observations on the coming batch, from last round's gate
         stream = iter(batches)
+        if s.style != "fixed":
+            if s.style == "auto":
+                # Judged on the third batch's inputs: under either style the first two may be set aside.
+                peeked = []
+                for _ in range(3):
+                    more = next(stream, None)
+                    if more is None:
+                        break
+                    peeked.append(list(more))
+                stream = chain(peeked, stream)
+                choice = suggest_style(self.callbacks["model"], prompt, peeked[-1] if peeked else [])
+            else:
+                choice = StyleChoice(s.style, s.style)
+            self.settings = s = replace(s, **STYLE_SETTINGS[choice.style])
+            result.style = choice
         for _ in range(s.holdout_batches):
             more = next(stream, None)
             if more is None:
