@@ -360,6 +360,36 @@ class OperatorTests(unittest.TestCase):
         self.assertTrue(result.prompt.endswith(block))  # ... and the block is still the verbatim tail
         self.assertEqual(result.prompt.count("WORKED_EXAMPLES"), 1)
 
+    def test_demos_stage_end_offers_examples_once_after_the_prompt_is_optimized(self):
+        def with_demos(prompt, shown):
+            return prompt + "\n\nWORKED_EXAMPLES\n" + " ".join(e.inputs["need"] for e in shown)
+        spent = {"n": 0}
+        def fraction():  # 0.0, 0.3, 0.6, ... per round (read once per round start)
+            return spent["n"] * 0.3
+        rounds = []
+        def on_round(prompt, summary):
+            spent["n"] += 1
+            rounds.append(summary)
+        model = Model(rewrite=lambda prompt, needs: prompt)  # rewrites change nothing, so failures remain at the end
+        op = Operator(model=model, predict=predict, evaluate=evaluate, config=CFG, with_demos=with_demos,
+                      budget_fraction=fraction, on_round=on_round,
+                      operator=OperatorConfig(schedule="coarse_only", demos_cap=1, demos_stage="end", demos_reserve=0.5,
+                                              min_gain=-10.0, max_batch_drop=99.0))
+        result = op.run(PROMPT, self.batches(6))
+        self.assertEqual([r.phase for r in result.rounds], ["coarse", "coarse", "demos"])  # 0.0, 0.3 < 0.5 <= 0.6
+        self.assertTrue(result.rounds[-1].committed)
+        self.assertEqual(result.stop_reason, "demos stage done")
+        cards = [[c["kind"] for c in snap["cards"]] for snap in result.sessions]
+        self.assertTrue(all("demos" not in kinds for kinds in cards[:2]))
+        self.assertEqual(cards[2], ["demos"])  # the end stage proposes only the examples card
+        last = result.rounds[-1]
+        self.assertEqual(last.start_prompt_id, result.rounds[1].final_prompt_id)  # on the prompt it would hand over
+        if last.committed:
+            self.assertIn("WORKED_EXAMPLES", result.final)
+            self.assertEqual(result.final, result.prompt)
+        with self.assertRaises(Exception):
+            OperatorConfig(demos_cap=1, demos_stage="end")  # needs a reserve
+
     def test_compete_proposes_both_kinds_and_the_shorter_equal_option_wins(self):
         # Both the rewrite and the two localized cards fix all three failures (+3); the rewrite is shorter.
         op = Operator(model=Model(), predict=predict, evaluate=evaluate, config=CFG)

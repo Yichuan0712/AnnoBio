@@ -138,6 +138,14 @@ class OperatorConfig:
     # every card moved its targets a little, so nearly all were searched).
     search_only_promising: bool = False
     demos_cap: int = 0  # 0: no worked-examples card (the zero-shot condition)
+    # When the worked-examples card is offered (ENGINE_V2_DESIGN 6.0k): "rounds" = in every round until
+    # accepted; "end" = once, after the prompt is optimized: when the spent budget fraction reaches
+    # 1 - `demos_reserve`, the operator stops rewriting and runs one examples round on the prompt it would
+    # hand over (diagnose, the demos card, verify, the held-out gate); accepted, that prompt with examples is
+    # handed over, otherwise the prompt without; the run then ends. Optimizing without examples keeps every
+    # evaluation cheap (a RoBBR example is a full paper), so the instruction gets nearly the whole budget.
+    demos_stage: Literal["rounds", "end"] = "rounds"
+    demos_reserve: float = 0.0
     # Where the batch gate compares options with the incumbent: "next" = the NEXT batch, whose inputs
     # this round's diagnoses and cards never saw (held out; pilot step 2 showed that gating on the
     # diagnosed batch accepts every round while validation falls); "same" = the diagnosed batch.
@@ -193,6 +201,10 @@ class OperatorConfig:
         check.choice(self.final, ("last", "best_seen", "holdout"), "OperatorConfig.final")
         check.integer(self.holdout_batches, "OperatorConfig.holdout_batches", minimum=0)
         check.boolean(self.final_excludes_initial, "OperatorConfig.final_excludes_initial")
+        check.choice(self.demos_stage, ("rounds", "end"), "OperatorConfig.demos_stage")
+        check.unit_score(self.demos_reserve, "OperatorConfig.demos_reserve")
+        if self.demos_stage == "end" and self.demos_cap and not 0 < self.demos_reserve < 1:
+            raise InputValueError("demos_stage 'end' needs 0 < demos_reserve < 1.", path="OperatorConfig.demos_reserve")
         if self.final == "holdout" and not self.holdout_batches:
             raise InputValueError("final 'holdout' needs holdout_batches >= 1.", path="OperatorConfig.holdout_batches")
         for name in ("final_margin", "rollback_z"):
@@ -216,7 +228,7 @@ class OperatorConfig:
 @dataclass(frozen=True, slots=True)
 class RoundSummary:
     index: int
-    phase: Literal["coarse", "fine", "both"]  # which card kinds this round proposed
+    phase: Literal["coarse", "fine", "both", "demos"]  # which card kinds this round proposed ("demos": the end stage)
     start_prompt_id: str
     end_prompt_id: str
     committed: bool
@@ -407,6 +419,9 @@ class Operator:
                 common = dict(**self.callbacks, config=replace(self.config, seed=self.config.seed * 1000003 + index),
                               is_cancelled=self.is_cancelled, on_event=self.on_event, stop_on=self.stop_on,
                               aggregate=self.aggregate, kept_tail=kept_tail)
+                if s.demos_stage == "end" and not demos_done and self._spent() >= 1 - s.demos_reserve:
+                    self._demos_stage(result, common, index, batch, upcoming, history, gate_size)
+                    break
                 session = Session(**common, prompt=result.prompt, examples=batch, history=history,
                                   with_demos=self.with_demos, observations=carried)
                 gate = None
@@ -414,7 +429,8 @@ class Operator:
                     gate = Session(**common, prompt=result.prompt, examples=upcoming)
                 carried = None
                 try:
-                    outcome = self._round(session, index, want_rewrite, want_local, demos_done, gate,
+                    outcome = self._round(session, index, want_rewrite, want_local,
+                                          demos_done or s.demos_stage == "end", gate,
                                           pool if gate is not None else [], gate_size)
                     summary, carried = outcome.summary, outcome.carry
                     if carried is not None:  # reuse only an exact cover of the next round's batch
@@ -478,6 +494,32 @@ class Operator:
         except EngineStopped as exc:
             result.stop_reason = exc.reason
         return result
+
+    def _demos_stage(self, result: OperatorResult, common: dict, index: int, batch, upcoming, history,
+                     gate_size: int) -> None:
+        """OperatorConfig.demos_stage "end": one worked-examples round on the prompt the operator would hand
+        over now; the last round of the run."""
+        base = result.final or result.prompt
+        session = Session(**common, prompt=base, examples=batch, history=history, with_demos=self.with_demos)
+        gate = Session(**common, prompt=base, examples=upcoming) if self.settings.gate == "next" and upcoming else None
+        try:
+            outcome = self._round(session, index, False, False, False, gate, [], gate_size)
+        finally:
+            snapshot = session.snapshot()
+            if gate is not None:
+                snapshot["gate"] = {"examples": [e.id for e in gate.examples],
+                                    "evaluations": [{"prompt_id": b.prompt_id, "score": b.score} for b in gate.evaluations]}
+            result.sessions.append(snapshot)
+        summary = replace(outcome.summary, phase="demos")
+        if summary.committed:
+            result.prompt = result.final = outcome.prompt
+        else:
+            result.prompt = base
+        summary = replace(summary, final_prompt_id=prompt_id(result.final))
+        result.rounds.append(summary)
+        result.stop_reason = "demos stage done"
+        if self.on_round is not None:
+            self.on_round(result.prompt, summary)
 
     def _round(self, session: Session, index: int, want_rewrite: bool, want_local: bool,
                demos_done: bool, gate: Session | None = None, pool=(), gate_size: int = 0) -> _Outcome:
