@@ -34,6 +34,11 @@ challenger replaces the incumbent when its accumulated net gain reaches min_gain
 gate size) with its summed drop within max_batch_drop per gate; the round's best qualifying entry
 wins, options and challengers alike, by this gate's gain. Evidence restarts when the incumbent changes.
 
+A negative `min_gain` makes the gate a non-inferiority check: an option is accepted unless it loses
+more than |min_gain| on the held-out inputs (closest to plain rewriting, which accepts every rewrite).
+`final` = "best_seen" then hands over the best prompt seen on held-out inputs rather than the last
+incumbent (ENGINE_V2_DESIGN 6.0f).
+
 Schedules (which cards a round proposes):
 - coarse_to_fine: rewrite only, until `coarse_patience` rounds in a row commit nothing or
   `coarse_budget_fraction` of the search budget is spent; then localized only, for good.
@@ -89,6 +94,12 @@ class OperatorConfig:
     # `challenger_max_gates` gates' worth of inputs, or behind after one, is dropped.
     challengers: int = 0
     challenger_max_gates: int = 4
+    # The prompt the operator hands over (ENGINE_V2_DESIGN 6.0f): "last" = the incumbent after the last
+    # round; "best_seen" = of every prompt run on held-out gate inputs (incumbents and options alike) on
+    # at least a full gate's worth, the one with the best set score over all of them, shorter on ties.
+    # It is the experiment harness's checkpoint rule moved into the engine (pilot steps 3, 7, 8: the
+    # harness's pick tested better than the operator's last incumbent). Updated every round.
+    final: Literal["last", "best_seen"] = "last"
 
     def __post_init__(self):
         check.integer(self.gate_batches, "OperatorConfig.gate_batches", minimum=1)
@@ -96,14 +107,18 @@ class OperatorConfig:
         check.integer(self.challenger_max_gates, "OperatorConfig.challenger_max_gates", minimum=1)
         check.boolean(self.search_only_promising, "OperatorConfig.search_only_promising")
         check.choice(self.gate, ("next", "same"), "OperatorConfig.gate")
+        check.choice(self.final, ("last", "best_seen"), "OperatorConfig.final")
         check.choice(self.schedule, SCHEDULES, "OperatorConfig.schedule")
         for name in ("coarse_patience", "demos_cap"):
             check.integer(getattr(self, name), f"OperatorConfig.{name}", minimum=0)
         check.unit_score(self.coarse_budget_fraction, "OperatorConfig.coarse_budget_fraction")
         for name in ("min_fix", "max_drop", "min_gain", "max_batch_drop"):
             check.finite_number(getattr(self, name), f"OperatorConfig.{name}")
-            if getattr(self, name) < 0:
+            # min_gain may be negative: accept an option unless it is worse by more than |min_gain|.
+            if name != "min_gain" and getattr(self, name) < 0:
                 raise InputValueError("must be non-negative.", path=f"OperatorConfig.{name}")
+        if self.challengers and self.min_gain <= 0:
+            raise InputValueError("challengers need a positive min_gain.", path="OperatorConfig.challengers")
         check.boolean(self.search_failed_cards, "OperatorConfig.search_failed_cards")
 
 
@@ -122,6 +137,7 @@ class RoundSummary:
     chosen: str = ""  # the winning option: rewrite, localized, best_localized
     options: tuple[dict, ...] = ()  # every option tried: name, gain, lost, drop, chars, eligible
     gate: str = ""  # "next" (held-out batch) or "same"
+    final_prompt_id: str = ""  # what the operator would hand over if it stopped now (OperatorConfig.final)
 
 
 @dataclass(eq=False)
@@ -150,10 +166,11 @@ class _Outcome:
 @dataclass
 class OperatorResult:
     initial_prompt: str
-    prompt: str
+    prompt: str  # the incumbent
     rounds: list[RoundSummary] = field(default_factory=list)
     sessions: list[dict] = field(default_factory=list)
     stop_reason: str = "rounds_completed"
+    final: str = ""  # the prompt handed over (OperatorConfig.final); updated every round
 
 
 class Operator:
@@ -189,7 +206,11 @@ class Operator:
         s = self.settings
         # Kept on the operator as it grows, so a host whose own exception (stop_on) ends the run
         # can still save every finished session.
-        self.result = result = OperatorResult(prompt, prompt)
+        self.result = result = OperatorResult(prompt, prompt, final=prompt)
+        # Held-out observations per prompt (gate inputs only: a card's verification runs its own targets,
+        # which would favour it) and the prompt texts, for OperatorConfig.final == "best_seen".
+        seen: dict[str, dict] = {}
+        self._texts = {prompt_id(prompt): prompt}
         coarse = s.schedule in ("coarse_to_fine", "coarse_only")  # coarse_to_fine's current phase
         stale = 0            # rounds in a row that committed nothing
         since_rewrite = 0    # rounds since a rewrite card was last proposed (compete)
@@ -289,6 +310,13 @@ class Operator:
                         challenger.evidence = 0.0
                 else:
                     pool = self._keep_challengers(pool, outcome.entrants, gate_size)
+                if gate is not None:
+                    for evaluation in gate.evaluations:
+                        known = seen.setdefault(evaluation.prompt_id, {})
+                        for item in evaluation.observations:
+                            known.setdefault(item.example_id, item)
+                result.final = self._final(result.prompt, seen, gate_size)
+                summary = replace(summary, final_prompt_id=prompt_id(result.final))
                 result.rounds.append(summary)
                 stale = 0 if summary.committed else stale + 1
                 since_rewrite = 0 if want_rewrite else since_rewrite + 1
@@ -382,6 +410,7 @@ class Operator:
             candidate = session.apply()
             if candidate == session.source:
                 continue
+            self._texts[prompt_id(candidate)] = candidate
             run = judge.run(candidate, [e.id for e in judge.examples])
             gain, lost, drop = _paired(judge, baseline, run)
             within = abs(gain) < self.settings.min_gain
@@ -436,9 +465,31 @@ class Operator:
         for card_id in list(session.inactive):
             session.revert(card_id)
         chosen = [card for card in chosen if card.id in session.applied]
-        reason = "gain beyond the noise margin" if gain >= self.settings.min_gain else "equal within the noise margin and shorter"
+        if self.settings.min_gain <= 0:
+            reason = "no loss beyond the noise margin"
+        else:
+            reason = "gain beyond the noise margin" if gain >= self.settings.min_gain else "equal within the noise margin and shorter"
         return outcome(True, f"{reason} on {where}", [c.id for c in chosen], gain, lost, len(cards), name, tried,
                        carry=observations if gate is not None else None, prompt=session.apply())
+
+    def _final(self, incumbent: str, seen: dict, gate_size: int) -> str:
+        """The prompt to hand over: the incumbent ("last"), or the best set score on held-out inputs
+        among prompts run on at least a full gate's worth of them ("best_seen"; shorter on ties)."""
+        if self.settings.final == "last" or not gate_size:
+            return incumbent
+        best = None
+        for id, observations in seen.items():
+            text = self._texts.get(id)
+            if text is None or len(observations) < gate_size:
+                continue
+            items = tuple(observations.values())
+            if self.aggregate is not None:
+                score = float(check.invoke(self.aggregate, items, name="aggregate"))
+            else:
+                score = sum(item.evaluation.score for item in items) / len(items)
+            if best is None or (score, -len(text)) > (best[0], -len(best[1])):
+                best = (score, text)
+        return best[1] if best is not None else incumbent
 
     def _record_evidence(self, judge: Session, challenger: _Challenger, baseline, run):
         """Adds this gate's (incumbent, challenger) pairs outside the challenger's entry gate; returns

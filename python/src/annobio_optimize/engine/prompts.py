@@ -52,12 +52,9 @@ INSTRUCTIONS = {
         "new_sentence, reason. Names and reasons must be plain language."
     ),
     "rewrite": (
-        "Rewrite the whole stored prompt so that it fixes the diagnosed failures while keeping every requirement "
-        "that the passing inputs rely on, the task contract, the output format and all placeholders. Turn the "
-        "diagnoses into explicit guidance: add the specific rules, definitions, decision criteria and boundary "
-        "cases the failures show are missing, and tighten the rules that produced extra items. Keep every existing "
-        "rule that still holds, even ones these failures do not mention; reorganize for clarity and merge only true "
-        "duplicates. Length is not a goal: do not drop useful detail to make the prompt shorter. " + _HISTORY +
+        "Rewrite the stored prompt once using these failed inputs (their outputs, expected outputs and "
+        "diagnoses), so that it handles such inputs correctly. Keep the task contract, the output format and all "
+        "placeholders. " + _HISTORY +
         "Return name (a plain-language title), prompt (the complete new prompt) and reason (which diagnoses it "
         "addresses and how)."
     ),

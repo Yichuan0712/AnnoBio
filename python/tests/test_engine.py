@@ -510,6 +510,43 @@ class OperatorTests(unittest.TestCase):
             OperatorConfig(challengers=-1)
         with self.assertRaises(Exception):
             OperatorConfig(challenger_max_gates=0)
+        with self.assertRaises(Exception):
+            OperatorConfig(min_gain=-1.0, challengers=2)  # every gaining option is accepted: nothing to keep
+        with self.assertRaises(Exception):
+            OperatorConfig(final="first")
+        with self.assertRaises(Exception):
+            OperatorConfig(max_batch_drop=-1.0)
+
+    def test_a_lenient_gate_accepts_a_small_loss_and_best_seen_hands_over_the_better_version(self):
+        # Every batch needs alpha, beta, delta and gamma once (gamma is never fixed, so each round rewrites).
+        # The first rewrite adds alpha and beta (+2 on the gate); the second drops delta (-1), which a
+        # negative min_gain still accepts. The incumbent ends worse; "best_seen" hands over the first rewrite.
+        needs = ["alpha", "beta", "delta", "gamma", "base", "base", "base", "base"]
+        batches = [[Example(f"b{k}x{i}", {"need": n}) for i, n in enumerate(needs)] for k in range(3)]
+        start = PROMPT + " Use delta."
+
+        def rewrites():
+            calls = {"n": 0}
+
+            def rewrite(prompt, _needs):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    return prompt + " Mention alpha and beta."
+                return prompt.replace(" Use delta.", "") + " Mention zeta."
+            return rewrite
+        settings = dict(schedule="coarse_only", min_gain=-2.0, min_fix=0.0)
+        best = Operator(model=Model(rewrite=rewrites()), predict=predict, evaluate=evaluate, config=CFG,
+                        operator=OperatorConfig(**settings, final="best_seen")).run(start, batches, max_rounds=2)
+        self.assertEqual([(r.committed, r.gain) for r in best.rounds], [(True, 2.0), (True, -1.0)])
+        self.assertIn("no loss beyond the noise margin", best.rounds[1].reason)
+        first = start + " Mention alpha and beta."
+        self.assertNotIn("delta", best.prompt)  # the incumbent
+        self.assertEqual(best.final, first)
+        self.assertEqual(best.rounds[-1].final_prompt_id, best.rounds[0].end_prompt_id)
+        last = Operator(model=Model(rewrite=rewrites()), predict=predict, evaluate=evaluate, config=CFG,
+                        operator=OperatorConfig(**settings)).run(start, batches, max_rounds=2)
+        self.assertEqual(last.final, last.prompt)
+        self.assertEqual(last.rounds[-1].final_prompt_id, last.rounds[-1].end_prompt_id)
 
     def test_a_combined_option_records_only_the_cards_it_applied(self):
         # Both cards rewrite the same sentence: in the combined option the second is skipped, so the
