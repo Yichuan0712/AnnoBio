@@ -564,15 +564,16 @@ class OperatorTests(unittest.TestCase):
         return start, Model(rewrite=rewrite), batches
 
     def test_holdout_inputs_are_set_aside_and_the_shortest_version_within_the_margin_is_handed_over(self):
-        for margin, expected in ((0.0, "first"), (2.0, "start")):
+        for margin, excludes, expected in ((0.0, False, "first"), (2.0, False, "start"), (2.0, True, "first")):
             start, model, batches = self.drifting()
             held, rest = batches("h", 1), batches("b", 3)
             result = Operator(model=model, predict=predict, evaluate=evaluate, config=CFG, operator=OperatorConfig(
                 schedule="coarse_only", min_gain=-2.0, min_fix=0.0, final="holdout", holdout_batches=1,
-                final_margin=margin)).run(start, held + rest, max_rounds=2)
+                final_margin=margin, final_excludes_initial=excludes)).run(start, held + rest, max_rounds=2)
             first = start + " Mention alpha and beta."
             self.assertEqual([r.committed for r in result.rounds], [True, True])
-            # Holdout scores: start 5/8, first 7/8, second (no delta) 6/8. Margin 0: the best; margin 2: the shortest.
+            # Holdout scores: start 5/8, first 7/8, second (no delta) 6/8. Margin 0: the best; margin 2: the shortest
+            # (excluding the initial prompt: first, shorter than second).
             self.assertEqual(result.final, {"first": first, "start": start}[expected])
             used = {o["example_id"] for snap in result.sessions for e in snap["evaluations"] for o in e["observations"]}
             used |= {id for snap in result.sessions for id in snap["gate"]["examples"]}

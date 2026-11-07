@@ -71,8 +71,10 @@ SCHEDULES = ("coarse_to_fine", "compete", "coarse_only", "fine_only")
 # within one item of the best on set-aside inputs): PubMedQA .777, BioRED .407. detailed = pilot step 9
 # (non-inferiority gate, hand over the best prompt seen on held-out inputs): BioRED .456, PubMedQA .718.
 STYLE_SETTINGS = {
-    "concise": {"min_gain": 0.0, "rollback_z": 2.0, "final": "holdout", "holdout_batches": 2, "final_margin": 1.0},
-    "detailed": {"min_gain": -1.0, "rollback_z": 0.0, "final": "best_seen", "holdout_batches": 0, "final_margin": 0.0},
+    "concise": {"min_gain": 0.0, "rollback_z": 2.0, "final": "holdout", "holdout_batches": 2, "final_margin": 1.0,
+                "final_excludes_initial": True},
+    "detailed": {"min_gain": -1.0, "rollback_z": 0.0, "final": "best_seen", "holdout_batches": 0, "final_margin": 0.0,
+                 "final_excludes_initial": False},
 }
 STYLE_VOTES = 3            # model judgments per "auto" choice; detailed needs all of them, otherwise concise
 STYLE_EXAMPLES = 2         # example inputs shown to the judgment (from the third batch: never a holdout batch)
@@ -164,6 +166,11 @@ class OperatorConfig:
     final: Literal["last", "best_seen", "holdout"] = "last"
     holdout_batches: int = 0
     final_margin: float = 0.0
+    # With "holdout": once the operator has accepted any version, the initial prompt is no longer handed
+    # over (ENGINE_V2_DESIGN 6.0i). The initial prompt is the shortest, so under "shortest within
+    # final_margin" it won whenever no version beat it by more than the margin on the 32 holdout inputs:
+    # formal PubMedQA r3 accepted rewrites yet handed back the initial prompt every round (test = M0).
+    final_excludes_initial: bool = False
     # Rollback (0 = off; pilot step 11): after a round, when an earlier accepted version's mean item score
     # on held-out gate inputs beats the incumbent's by at least `rollback_z` standard errors (both seen on
     # a full gate's worth), the incumbent returns to that version, as a user would revert to it. Pilot
@@ -172,8 +179,8 @@ class OperatorConfig:
     rollback_z: float = 0.0
     # The optimization style (ENGINE_V2_DESIGN 6.0h; the one user-facing switch over the settings above):
     # "fixed" = the fields as given; "concise" / "detailed" = STYLE_SETTINGS[style] replaces min_gain,
-    # rollback_z, final, holdout_batches and final_margin; "auto" = the optimization model judges the task
-    # once before the first round (suggest_style) and that style applies. OperatorResult.style records it.
+    # rollback_z, final, holdout_batches, final_margin and final_excludes_initial; "auto" = the optimization
+    # model judges the task once before the first round (suggest_style) and that style applies. OperatorResult.style records it.
     style: Literal["fixed", "auto", "concise", "detailed"] = "fixed"
 
     def __post_init__(self):
@@ -185,6 +192,7 @@ class OperatorConfig:
         check.choice(self.gate, ("next", "same"), "OperatorConfig.gate")
         check.choice(self.final, ("last", "best_seen", "holdout"), "OperatorConfig.final")
         check.integer(self.holdout_batches, "OperatorConfig.holdout_batches", minimum=0)
+        check.boolean(self.final_excludes_initial, "OperatorConfig.final_excludes_initial")
         if self.final == "holdout" and not self.holdout_batches:
             raise InputValueError("final 'holdout' needs holdout_batches >= 1.", path="OperatorConfig.holdout_batches")
         for name in ("final_margin", "rollback_z"):
@@ -296,6 +304,7 @@ class Operator:
         # which would favour it) and the prompt texts, for OperatorConfig.final == "best_seen".
         seen: dict[str, dict] = {}
         self._texts = {prompt_id(prompt): prompt}
+        self._initial_id = prompt_id(prompt)
         versions = [prompt_id(prompt)]  # every incumbent so far (the initial prompt and each accepted version)
         holdout: list = []               # inputs set aside for OperatorConfig.final == "holdout"
         holdout_scores: dict[str, tuple] = {}
@@ -639,9 +648,13 @@ class Operator:
     def _final(self, incumbent: str, seen: dict, gate_size: int, holdout_scores: dict | None = None) -> str:
         """The prompt to hand over: the incumbent ("last"); the best set score on held-out inputs among
         prompts run on at least a full gate's worth of them ("best_seen"; shorter on ties); or the
-        shortest accepted version within final_margin of the best holdout score ("holdout")."""
+        shortest accepted version within final_margin of the best holdout score ("holdout"; with
+        final_excludes_initial, the initial prompt drops out once another version has a holdout score)."""
         if self.settings.final == "holdout":
-            scored = [(self._texts[id], score, n) for id, (score, n) in (holdout_scores or {}).items()]
+            scores = dict(holdout_scores or {})
+            if self.settings.final_excludes_initial and any(id != self._initial_id for id in scores):
+                scores.pop(self._initial_id, None)
+            scored = [(self._texts[id], score, n) for id, (score, n) in scores.items()]
             if not scored:
                 return incumbent
             top = max(score for _, score, _ in scored)
