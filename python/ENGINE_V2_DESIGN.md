@@ -325,7 +325,7 @@ Verify 和 Optimize 现在由前端自己运行，v2 改到后端。新增两个
 
 **理由：** 每轮都提"加例子"时，例子一旦被采纳，之后每次打分都要多带几篇例题（RoBBR 一个例子约一篇论文，同预算下轮数约减半）。只在最后加，指令优化几乎用满预算，例子只花最后一小笔。
 
-**做法：** `OperatorConfig.demos_stage`："rounds"（默认，每轮在采纳前提出）或 "end"。"end" 时，花费比例到 1 − `demos_reserve` 就停止改写，在操作器此刻会交出的 prompt（`result.final`）上做一轮只有例子卡片的回合：诊断、挑例子（每类失败一道，带参考答案）、在其余失败题上验证、下一批（`gate_batches`）上把关，规则与普通回合相同（风格的 `min_gain`、`max_batch_drop`）。通过就交出带例子的版本，否则交出原来的；运行到此结束（`stop_reason` "demos stage done"，回合 `phase` "demos"）。预留的预算花在这一轮里，总花费不超过上限。
+**做法：** `OperatorConfig.demos_stage`："rounds"（默认，每轮在采纳前提出）或 "end"。"end" 时，已花比例加上目前最贵一轮的花费达到 1 − `demos_reserve` 就停止改写（再跑一轮普通回合就会吃进预留；RoBBR 一轮约占预算 10–15%），在操作器此刻会交出的 prompt（`result.final`）上做一轮只有例子卡片的回合：诊断、挑例子（每类失败一道，带参考答案）、在其余失败题上验证、下一批（`gate_batches`）上把关，规则与普通回合相同（风格的 `min_gain`、`max_batch_drop`）。通过就交出带例子的版本，否则交出原来的；运行到此结束（`stop_reason` "demos stage done"，回合 `phase` "demos"）。预留的预算花在这一轮里，总花费不超过上限。
 
 ### 6.1 提案：门槛自动校准（2026-11-05，待实现；第 2 步之后再做）
 

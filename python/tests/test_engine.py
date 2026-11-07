@@ -376,7 +376,9 @@ class OperatorTests(unittest.TestCase):
                       operator=OperatorConfig(schedule="coarse_only", demos_cap=1, demos_stage="end", demos_reserve=0.5,
                                               min_gain=-10.0, max_batch_drop=99.0))
         result = op.run(PROMPT, self.batches(6))
-        self.assertEqual([r.phase for r in result.rounds], ["coarse", "coarse", "demos"])  # 0.0, 0.3 < 0.5 <= 0.6
+        # The fake budget moves only between rounds (on_round), so no round cost is seen: the stage starts
+        # at the first round whose starting spend reaches 1 - 0.5 (0.0, 0.3, then 0.6).
+        self.assertEqual([r.phase for r in result.rounds], ["coarse", "coarse", "demos"])
         self.assertTrue(result.rounds[-1].committed)
         self.assertEqual(result.stop_reason, "demos stage done")
         cards = [[c["kind"] for c in snap["cards"]] for snap in result.sessions]

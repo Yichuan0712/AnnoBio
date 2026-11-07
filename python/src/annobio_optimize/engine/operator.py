@@ -139,10 +139,11 @@ class OperatorConfig:
     search_only_promising: bool = False
     demos_cap: int = 0  # 0: no worked-examples card (the zero-shot condition)
     # When the worked-examples card is offered (ENGINE_V2_DESIGN 6.0k): "rounds" = in every round until
-    # accepted; "end" = once, after the prompt is optimized: when the spent budget fraction reaches
-    # 1 - `demos_reserve`, the operator stops rewriting and runs one examples round on the prompt it would
-    # hand over (diagnose, the demos card, verify, the held-out gate); accepted, that prompt with examples is
-    # handed over, otherwise the prompt without; the run then ends. Optimizing without examples keeps every
+    # accepted; "end" = once, after the prompt is optimized: when the spent budget fraction, plus the
+    # costliest round so far, reaches 1 - `demos_reserve`, the operator stops rewriting and runs one
+    # examples round on the prompt it would hand over (diagnose, the demos card, verify, the held-out
+    # gate); accepted, that prompt with examples is handed over, otherwise the prompt without; the run
+    # then ends. Optimizing without examples keeps every
     # evaluation cheap (a RoBBR example is a full paper), so the instruction gets nearly the whole budget.
     demos_stage: Literal["rounds", "end"] = "rounds"
     demos_reserve: float = 0.0
@@ -326,6 +327,7 @@ class Operator:
         since_rewrite = 0    # rounds since a rewrite card was last proposed (compete)
         history, demos_done = [], s.demos_cap == 0
         kept_tail = ""  # the accepted worked-examples block; later rewrites keep it verbatim (Session.kept_tail)
+        round_cost = 0.0  # the largest budget fraction one round has used (demos_stage "end")
         carried = None  # the incumbent's observations on the coming batch, from last round's gate
         stream = iter(batches)
         if s.style != "fixed":
@@ -419,7 +421,10 @@ class Operator:
                 common = dict(**self.callbacks, config=replace(self.config, seed=self.config.seed * 1000003 + index),
                               is_cancelled=self.is_cancelled, on_event=self.on_event, stop_on=self.stop_on,
                               aggregate=self.aggregate, kept_tail=kept_tail)
-                if s.demos_stage == "end" and not demos_done and self._spent() >= 1 - s.demos_reserve:
+                spent_at_start = self._spent()
+                # The end stage starts when another normal round would cut into the reserve: the costliest
+                # round so far predicts the next (one RoBBR round is 10-15% of its budget).
+                if s.demos_stage == "end" and not demos_done and spent_at_start + round_cost >= 1 - s.demos_reserve:
                     self._demos_stage(result, common, index, batch, upcoming, history, gate_size)
                     break
                 session = Session(**common, prompt=result.prompt, examples=batch, history=history,
@@ -484,6 +489,7 @@ class Operator:
                 result.final = self._final(result.prompt, seen, gate_size, holdout_scores)
                 summary = replace(summary, final_prompt_id=prompt_id(result.final))
                 result.rounds.append(summary)
+                round_cost = max(round_cost, self._spent() - spent_at_start)
                 stale = 0 if summary.committed else stale + 1
                 since_rewrite = 0 if want_rewrite else since_rewrite + 1
                 if s.schedule == "coarse_to_fine" and coarse and (
