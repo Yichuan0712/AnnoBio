@@ -99,7 +99,21 @@ class OperatorConfig:
     # at least a full gate's worth, the one with the best set score over all of them, shorter on ties.
     # It is the experiment harness's checkpoint rule moved into the engine (pilot steps 3, 7, 8: the
     # harness's pick tested better than the operator's last incumbent). Updated every round.
-    final: Literal["last", "best_seen"] = "last"
+    # "holdout" (pilot step 11): the first `holdout_batches` batches are set aside and never diagnosed or
+    # gated; every version the operator accepted (and the initial prompt) runs on them once, and the
+    # version handed over is the shortest whose holdout score is within `final_margin` (item units, like
+    # min_gain) of the best. Pilot step 9: on PubMedQA "best_seen" picked bloated prompts that won by
+    # luck on 32 gate inputs among dozens of candidates (tests .748/.688 against the harness's .774/.702,
+    # which also chooses on separate data among few candidates).
+    final: Literal["last", "best_seen", "holdout"] = "last"
+    holdout_batches: int = 0
+    final_margin: float = 0.0
+    # Rollback (0 = off; pilot step 11): after a round, when an earlier accepted version's mean item score
+    # on held-out gate inputs beats the incumbent's by at least `rollback_z` standard errors (both seen on
+    # a full gate's worth), the incumbent returns to that version, as a user would revert to it. Pilot
+    # step 9: on PubMedQA r2 two early accepted rewrites each lost on their gate and the run never
+    # recovered the initial prompt's level.
+    rollback_z: float = 0.0
 
     def __post_init__(self):
         check.integer(self.gate_batches, "OperatorConfig.gate_batches", minimum=1)
@@ -107,7 +121,14 @@ class OperatorConfig:
         check.integer(self.challenger_max_gates, "OperatorConfig.challenger_max_gates", minimum=1)
         check.boolean(self.search_only_promising, "OperatorConfig.search_only_promising")
         check.choice(self.gate, ("next", "same"), "OperatorConfig.gate")
-        check.choice(self.final, ("last", "best_seen"), "OperatorConfig.final")
+        check.choice(self.final, ("last", "best_seen", "holdout"), "OperatorConfig.final")
+        check.integer(self.holdout_batches, "OperatorConfig.holdout_batches", minimum=0)
+        if self.final == "holdout" and not self.holdout_batches:
+            raise InputValueError("final 'holdout' needs holdout_batches >= 1.", path="OperatorConfig.holdout_batches")
+        for name in ("final_margin", "rollback_z"):
+            check.finite_number(getattr(self, name), f"OperatorConfig.{name}")
+            if getattr(self, name) < 0:
+                raise InputValueError("must be non-negative.", path=f"OperatorConfig.{name}")
         check.choice(self.schedule, SCHEDULES, "OperatorConfig.schedule")
         for name in ("coarse_patience", "demos_cap"):
             check.integer(getattr(self, name), f"OperatorConfig.{name}", minimum=0)
@@ -138,6 +159,7 @@ class RoundSummary:
     options: tuple[dict, ...] = ()  # every option tried: name, gain, lost, drop, chars, eligible
     gate: str = ""  # "next" (held-out batch) or "same"
     final_prompt_id: str = ""  # what the operator would hand over if it stopped now (OperatorConfig.final)
+    rolled_back_to: str = ""  # the earlier version the incumbent returned to after this round (rollback_z)
 
 
 @dataclass(eq=False)
@@ -211,12 +233,25 @@ class Operator:
         # which would favour it) and the prompt texts, for OperatorConfig.final == "best_seen".
         seen: dict[str, dict] = {}
         self._texts = {prompt_id(prompt): prompt}
+        versions = [prompt_id(prompt)]  # every incumbent so far (the initial prompt and each accepted version)
+        holdout: list = []               # inputs set aside for OperatorConfig.final == "holdout"
+        holdout_scores: dict[str, tuple] = {}
+        holdout_session = None
         coarse = s.schedule in ("coarse_to_fine", "coarse_only")  # coarse_to_fine's current phase
         stale = 0            # rounds in a row that committed nothing
         since_rewrite = 0    # rounds since a rewrite card was last proposed (compete)
         history, demos_done = [], s.demos_cap == 0
         carried = None  # the incumbent's observations on the coming batch, from last round's gate
         stream = iter(batches)
+        for _ in range(s.holdout_batches):
+            more = next(stream, None)
+            if more is None:
+                break
+            holdout.extend(more)
+        if holdout:  # held-out inputs never come back as a batch or gate input (schedules may repeat inputs)
+            reserved = {e.id for e in holdout}
+            holdout = list({e.id: e for e in holdout}.values())
+            stream = (kept for kept in ([e for e in b if e.id not in reserved] for b in stream) if kept)
         ahead: list = []  # this round's batch and the batches its gate pools
         # Inputs whose observations selected the current incumbent (the gate of the round that
         # committed it). Predictions are reused per (prompt, input), so on these inputs the incumbent
@@ -249,9 +284,22 @@ class Operator:
                         chosen.append(example)
                 position += 1
             return chosen
+        def score_holdout(text):
+            nonlocal holdout_session
+            if not holdout or prompt_id(text) in holdout_scores:
+                return
+            if holdout_session is None:
+                holdout_session = Session(**self.callbacks, config=self.config, prompt=prompt, examples=holdout,
+                                          is_cancelled=self.is_cancelled, on_event=self.on_event,
+                                          stop_on=self.stop_on, aggregate=self.aggregate)
+            self._texts[prompt_id(text)] = text
+            run = holdout_session.run(text, [e.id for e in holdout])
+            holdout_scores[prompt_id(text)] = (holdout_session.set_score(run.observations), len(run.observations))
         fill()
         index = -1
         try:
+            if s.final == "holdout":
+                score_holdout(prompt)
             while ahead and (max_rounds is None or index + 1 < max_rounds):
                 index += 1
                 batch = ahead.pop(0)
@@ -315,7 +363,18 @@ class Operator:
                         known = seen.setdefault(evaluation.prompt_id, {})
                         for item in evaluation.observations:
                             known.setdefault(item.example_id, item)
-                result.final = self._final(result.prompt, seen, gate_size)
+                if summary.committed and prompt_id(result.prompt) not in versions:
+                    versions.append(prompt_id(result.prompt))
+                    self._texts[prompt_id(result.prompt)] = result.prompt
+                back = self._rollback(prompt_id(result.prompt), versions, seen, gate_size)
+                if back is not None:
+                    result.prompt = self._texts[back]
+                    carried, selected_on = None, set()  # its observations on the coming batch are unknown
+                    pool = []
+                    summary = replace(summary, rolled_back_to=back)
+                if s.final == "holdout":
+                    score_holdout(result.prompt)
+                result.final = self._final(result.prompt, seen, gate_size, holdout_scores)
                 summary = replace(summary, final_prompt_id=prompt_id(result.final))
                 result.rounds.append(summary)
                 stale = 0 if summary.committed else stale + 1
@@ -472,9 +531,44 @@ class Operator:
         return outcome(True, f"{reason} on {where}", [c.id for c in chosen], gain, lost, len(cards), name, tried,
                        carry=observations if gate is not None else None, prompt=session.apply())
 
-    def _final(self, incumbent: str, seen: dict, gate_size: int) -> str:
-        """The prompt to hand over: the incumbent ("last"), or the best set score on held-out inputs
-        among prompts run on at least a full gate's worth of them ("best_seen"; shorter on ties)."""
+    def _rollback(self, incumbent: str, versions: list, seen: dict, gate_size: int) -> str | None:
+        """An earlier accepted version whose mean item score on held-out gate inputs beats the incumbent's
+        by rollback_z standard errors (both on a full gate's worth), else None. Mean item scores (not the
+        set score) so that the standard error is defined."""
+        if not self.settings.rollback_z or not gate_size:
+            return None
+
+        def stats(id):
+            scores = [item.evaluation.score for item in seen.get(id, {}).values()]
+            if len(scores) < max(2, gate_size):
+                return None
+            mean = sum(scores) / len(scores)
+            return mean, sum((x - mean) ** 2 for x in scores) / (len(scores) - 1) / len(scores)
+        current = stats(incumbent)
+        if current is None:
+            return None
+        best = None
+        for id in versions:
+            other = stats(id) if id != incumbent else None
+            if other is None or other[0] <= current[0]:
+                continue
+            spread = math.sqrt(other[1] + current[1])
+            z = (other[0] - current[0]) / spread if spread > 0 else math.inf
+            if z >= self.settings.rollback_z and (best is None or other[0] > best[1]):
+                best = (id, other[0])
+        return best[0] if best is not None else None
+
+    def _final(self, incumbent: str, seen: dict, gate_size: int, holdout_scores: dict | None = None) -> str:
+        """The prompt to hand over: the incumbent ("last"); the best set score on held-out inputs among
+        prompts run on at least a full gate's worth of them ("best_seen"; shorter on ties); or the
+        shortest accepted version within final_margin of the best holdout score ("holdout")."""
+        if self.settings.final == "holdout":
+            scored = [(self._texts[id], score, n) for id, (score, n) in (holdout_scores or {}).items()]
+            if not scored:
+                return incumbent
+            top = max(score for _, score, _ in scored)
+            near = [text for text, score, n in scored if n * (top - score) <= self.settings.final_margin + 1e-9]
+            return min(near, key=lambda text: (len(text), text))
         if self.settings.final == "last" or not gate_size:
             return incumbent
         best = None

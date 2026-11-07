@@ -41,6 +41,8 @@ class EngineConfig:
     max_evidence_examples: int = 3
     # Different-direction localized edits the model proposes per issue cluster (1 = the app's behavior).
     proposals_per_cluster: int = 1
+    # Rewrite cards integrate new guidance into the existing rules instead of appending (prompts.INTEGRATE).
+    rewrite_integrate: bool = False
     pass_threshold: float = 1.0
     max_model_calls: int | None = None
     max_predictions: int | None = None
@@ -52,6 +54,7 @@ class EngineConfig:
                      "search_patience"):
             check.integer(getattr(self, name), f"EngineConfig.{name}", minimum=0)
         check.integer(self.proposals_per_cluster, "EngineConfig.proposals_per_cluster", minimum=1)
+        check.boolean(self.rewrite_integrate, "EngineConfig.rewrite_integrate")
         for name in ("max_failed_examples", "max_cards", "max_trials", "max_segments", "candidates_per_segment"):
             if getattr(self, name) < 1:
                 raise InputValueError("must be at least 1.", path=f"EngineConfig.{name}")

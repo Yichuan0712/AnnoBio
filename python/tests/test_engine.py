@@ -548,6 +548,61 @@ class OperatorTests(unittest.TestCase):
         self.assertEqual(last.final, last.prompt)
         self.assertEqual(last.rounds[-1].final_prompt_id, last.rounds[-1].end_prompt_id)
 
+    def drifting(self):
+        """The scenario above: rewrite 1 gains (+2), rewrite 2 loses delta (-1) and is still accepted."""
+        needs = ["alpha", "beta", "delta", "gamma", "base", "base", "base", "base"]
+        start = PROMPT + " Use delta."
+        calls = {"n": 0}
+
+        def rewrite(prompt, _needs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return prompt + " Mention alpha and beta."
+            return prompt.replace(" Use delta.", "") + " Mention zeta."
+        batches = lambda tag, n: [[Example(f"{tag}{k}x{i}", {"need": need}) for i, need in enumerate(needs)]
+                                  for k in range(n)]
+        return start, Model(rewrite=rewrite), batches
+
+    def test_holdout_inputs_are_set_aside_and_the_shortest_version_within_the_margin_is_handed_over(self):
+        for margin, expected in ((0.0, "first"), (2.0, "start")):
+            start, model, batches = self.drifting()
+            held, rest = batches("h", 1), batches("b", 3)
+            result = Operator(model=model, predict=predict, evaluate=evaluate, config=CFG, operator=OperatorConfig(
+                schedule="coarse_only", min_gain=-2.0, min_fix=0.0, final="holdout", holdout_batches=1,
+                final_margin=margin)).run(start, held + rest, max_rounds=2)
+            first = start + " Mention alpha and beta."
+            self.assertEqual([r.committed for r in result.rounds], [True, True])
+            # Holdout scores: start 5/8, first 7/8, second (no delta) 6/8. Margin 0: the best; margin 2: the shortest.
+            self.assertEqual(result.final, {"first": first, "start": start}[expected])
+            used = {o["example_id"] for snap in result.sessions for e in snap["evaluations"] for o in e["observations"]}
+            used |= {id for snap in result.sessions for id in snap["gate"]["examples"]}
+            self.assertFalse(used & {e.id for e in held[0]})  # never diagnosed or gated
+
+    def test_rollback_returns_to_an_earlier_version_that_beats_the_incumbent_on_held_out_inputs(self):
+        # After round 1 the incumbent (no delta) scores 6/8 on its gate; the first rewrite scored 14/16 on
+        # its two gates: z = (.875 - .75) / .185 = .68.
+        for z, back in ((0.5, True), (2.0, False)):
+            start, model, batches = self.drifting()
+            result = Operator(model=model, predict=predict, evaluate=evaluate, config=CFG, operator=OperatorConfig(
+                schedule="coarse_only", min_gain=-2.0, min_fix=0.0, rollback_z=z)).run(start, batches("b", 3), max_rounds=2)
+            first = start + " Mention alpha and beta."
+            self.assertEqual(result.prompt == first, back)
+            self.assertEqual(bool(result.rounds[1].rolled_back_to), back)
+            if back:
+                self.assertEqual(result.rounds[1].rolled_back_to, result.rounds[0].end_prompt_id)
+        with self.assertRaises(Exception):
+            OperatorConfig(final="holdout")  # needs holdout_batches
+        with self.assertRaises(Exception):
+            OperatorConfig(rollback_z=-1.0)
+
+    def test_rewrite_integrate_asks_the_rewrite_to_integrate_rather_than_append(self):
+        for integrate in (False, True):
+            model = Model()
+            session(model, config=replace(CFG, rewrite_integrate=integrate)).analyze("rewrite")
+            instruction = next(r for r in model.calls if r.stage == "rewrite").instruction
+            self.assertEqual("Do not merely append" in instruction, integrate)
+            self.assertNotIn("Do not merely append", next(r for r in model.calls if r.stage == "diagnose").instruction)
+
     def test_a_combined_option_records_only_the_cards_it_applied(self):
         # Both cards rewrite the same sentence: in the combined option the second is skipped, so the
         # committed decision must not list it.

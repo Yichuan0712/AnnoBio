@@ -83,14 +83,23 @@ SCHEMAS = {
 }
 
 
+# EngineConfig.rewrite_integrate (pilot step 11b): pilot step 9 showed PubMedQA rewrites mostly keeping every
+# sentence and appending 2-4K characters, so prompts grew from 251 to 31-33K characters.
+INTEGRATE = (
+    " Integrate new guidance into the existing structure: revise or replace the rules these failures show to be "
+    "wrong or unclear, merge overlapping rules, and remove rules that no longer help. Do not merely append new "
+    "text to the end of the prompt.")
+
 ALTERNATIVES = (
     " Return num_edits objects in prompt_edits instead of one. Each must take a genuinely DIFFERENT approach to "
     "the same findings (a different rule, a different sentence to change, or adding versus rewriting), not a "
     "rewording of another; order them from most to least promising.")
 
 
-def request(stage: str, payload: dict) -> ModelRequest:
+def request(stage: str, payload: dict, *, integrate: bool = False) -> ModelRequest:
     instruction, schema = _COMMON + INSTRUCTIONS[stage], json.loads(json.dumps(SCHEMAS[stage]))
+    if stage == "rewrite" and integrate:
+        instruction += INTEGRATE
     count = payload.get("num_edits", 1) if stage == "propose" else 1
     if count > 1:  # several directions per cluster (EngineConfig.proposals_per_cluster)
         instruction += ALTERNATIVES

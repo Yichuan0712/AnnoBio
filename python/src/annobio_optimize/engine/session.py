@@ -109,7 +109,7 @@ class Session:
         self._check()
         if self.config.max_model_calls is not None and len(self.model_calls) >= self.config.max_model_calls:
             raise EngineStopped("budget_exhausted")
-        request = prompts.request(stage, payload)
+        request = prompts.request(stage, payload, integrate=self.config.rewrite_integrate)
         response = check.invoke(self.model, deepcopy(request), name="model", context=f"stage={stage!r}")
         try:
             raw = copy_json(response, f"model.return[stage={stage!r}]")
