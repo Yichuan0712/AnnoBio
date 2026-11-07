@@ -8,7 +8,7 @@ import json
 import unittest
 
 from annobio_optimize import Evaluation, Example
-from annobio_optimize.engine import STYLE_SETTINGS, EngineConfig, Operator, OperatorConfig, Session
+from annobio_optimize.engine import STYLE_SETTINGS, EngineConfig, Operator, OperatorConfig, Session, suggest_style
 
 PROMPT = "Answer the question. Use base facts."
 CFG = EngineConfig(regression_examples=3, cluster_threshold=0)  # cluster even a few issues
@@ -632,6 +632,20 @@ class OperatorTests(unittest.TestCase):
                 o["example_id"] for snap in result.sessions for e in snap["evaluations"] for o in e["observations"]}
             # concise sets the first two batches aside (never diagnosed or gated); detailed uses them.
             self.assertEqual(any(id.startswith(("b0", "b1")) for id in used), expected == "detailed")
+
+    def test_the_style_judgment_sees_every_input_field_with_long_ones_cut(self):
+        seen = []
+
+        def model(request):
+            seen.append(request.payload)
+            return json.dumps({"reason": "many conventions", "style": "detailed"})
+        long = {"question": "q?", "paper": "x" * 50000, "options": ["A", "B"]}
+        choice = suggest_style(model, PROMPT, [Example("p1", long, {"label": "A"}), Example("p2", long), Example("p3", long)])
+        self.assertEqual((choice.style, choice.votes, choice.example_ids), ("detailed", ("detailed",) * 3, ("p1", "p2")))
+        shown = seen[0]["examples"][0]["input"]
+        self.assertEqual(list(shown), ["question", "paper", "options"])  # field order kept, nothing dropped
+        self.assertEqual((shown["question"], shown["options"]), ("q?", ["A", "B"]))
+        self.assertTrue(shown["paper"].endswith("...[cut]") and len(shown["paper"]) < 2100)
 
     def test_a_set_style_applies_its_settings_without_asking_and_fixed_keeps_the_fields(self):
         for style in ("concise", "detailed", "fixed"):

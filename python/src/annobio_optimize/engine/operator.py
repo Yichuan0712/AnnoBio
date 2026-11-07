@@ -76,12 +76,20 @@ STYLE_SETTINGS = {
 }
 STYLE_VOTES = 3            # model judgments per "auto" choice; detailed needs all of them, otherwise concise
 STYLE_EXAMPLES = 2         # example inputs shown to the judgment (from the third batch: never a holdout batch)
-_STYLE_CUT = {"task_prompt": 8000, "input": 3000, "expected_output": 1500}
+_STYLE_CUT = {"task_prompt": 8000, "input_field": 2000, "input": 3000, "expected_output": 1500}
 
 
 def _cut(value, limit: int) -> str:
-    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, sort_keys=True)
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
     return text if len(text) <= limit else text[:limit] + " ...[cut]"
+
+
+def _cut_input(value):
+    """An input with every field kept and each long field cut (a full paper must not hide the answer options)."""
+    if isinstance(value, dict):
+        return {key: item if len(_cut(item, 10 ** 9)) <= _STYLE_CUT["input_field"] else _cut(item, _STYLE_CUT["input_field"])
+                for key, item in value.items()}
+    return _cut(value, _STYLE_CUT["input"])
 
 
 def suggest_style(model: OptimizationModel, prompt: str, examples: Sequence[Example], *,
@@ -94,7 +102,7 @@ def suggest_style(model: OptimizationModel, prompt: str, examples: Sequence[Exam
     check.integer(votes, "suggest_style.votes", minimum=1)
     shown = list(examples)[:STYLE_EXAMPLES]
     payload = {"task_prompt": _cut(prompt, _STYLE_CUT["task_prompt"]),
-               "examples": [{"input": _cut(e.inputs, _STYLE_CUT["input"]),
+               "examples": [{"input": _cut_input(e.inputs),
                              "expected_output": _cut(e.reference, _STYLE_CUT["expected_output"])} for e in shown]}
     styles, reasons = [], []
     for number in range(votes):
