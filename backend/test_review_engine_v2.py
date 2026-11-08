@@ -203,6 +203,19 @@ class EngineSettingsTests(unittest.TestCase):
         self.assertEqual(review_methods.get_review_method(None).id, "annobio_engine_v2")
         self.assertTrue(review_methods.get_review_method(None).supports_segment_optimization)
 
+    def test_saved_settings_with_the_removed_method_read_as_the_default(self):
+        import json, tempfile
+        from pathlib import Path
+        from unittest import mock
+        import main
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings.json"
+            with mock.patch.object(main, "SETTINGS_FILE", path), mock.patch.object(main, "DATA_DIR", Path(tmp)):
+                path.write_text(json.dumps({"default_review_method": "issue_analysis_suggestions"}), encoding="utf-8")
+                self.assertEqual(main._load_settings()["default_review_method"], "")
+                path.write_text(json.dumps({"default_review_method": "annobio_engine_v2"}), encoding="utf-8")
+                self.assertEqual(main._load_settings()["default_review_method"], "annobio_engine_v2")
+
 
 class SchemaModelTests(unittest.TestCase):
     def test_every_engine_schema_becomes_a_response_model(self):

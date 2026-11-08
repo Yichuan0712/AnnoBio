@@ -1336,7 +1336,8 @@ export function openSettingsModal() {
     }
     if (agentContextInp) agentContextInp.value = settings.agent_context_tokens ? String(settings.agent_context_tokens) : '';
     if (reviewMethodDefaultSelect) {
-      if (settings.default_review_method) {
+      if (settings.default_review_method
+          && [...reviewMethodDefaultSelect.options].some((o) => o.value === settings.default_review_method)) {
         reviewMethodDefaultSelect.value = settings.default_review_method;
       } else if (reviewMethodDefaultSelect.options.length > 0) {
         /* No explicit default — show the registry's own default (first option) rather than leaving

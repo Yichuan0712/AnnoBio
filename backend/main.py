@@ -555,6 +555,17 @@ def _ensure_data_dir():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _known_review_method(method_id) -> str:
+    """A saved default method that is no longer registered (e.g. the removed Thompson Prompt Search,
+    "issue_analysis_suggestions") reads as blank, so the registry default — the AnnoBio Optimizer — applies
+    and the Settings dropdown shows it."""
+    method_id = str(method_id or "").strip()
+    if not method_id:
+        return ""
+    from review_methods import REGISTRY
+    return method_id if method_id in REGISTRY else ""
+
+
 def _load_settings() -> dict:
     """Load settings from disk; return defaults if missing or invalid."""
     _ensure_data_dir()
@@ -568,6 +579,7 @@ def _load_settings() -> dict:
             if k in data:
                 out[k] = data[k]
         out["model_settings"] = clean_model_settings(out.get("model_settings"))
+        out["default_review_method"] = _known_review_method(out.get("default_review_method"))
         return hosted_model.settings(out, _load_credentials())
     except (json.JSONDecodeError, OSError):
         return hosted_model.settings(dict(DEFAULT_SETTINGS), _load_credentials())
