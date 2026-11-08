@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from llm import _extract_json_array_from_text, _extract_json_from_text, chat as llm_chat
 from safe_stdio import safe_print as _print
 
@@ -21,6 +22,31 @@ def _clip(s: str, n: int) -> str:
 def _preview(s: str, max_len: int = 140) -> str:
     t = (s or "").replace("\r\n", "\n").strip()
     return t if len(t) <= max_len else t[: max_len - 1] + "…"
+
+
+# A whole-prompt card (the AnnoBio engine's rewrites) is too long for the model to copy verbatim into segments
+# within the output cap, and stripped segments lose the paragraph breaks when the frontend joins them. Such a text
+# is split locally at paragraph boundaries instead, each segment keeping its own whitespace so the segments join
+# back to the text exactly. A short single-line sentence (the built-in method's cards) keeps the model split.
+LOCAL_SPLIT_MIN_CHARS = 1200
+
+
+def split_paragraphs(text: str, max_segments: int) -> list[str]:
+    """Contiguous segments of `text` at paragraph (or line) boundaries; "".join(result) == text."""
+    pieces = [p for p in re.split(r"(?<=\n)(?=[^\S\n]*\S)", text) if p]  # each piece ends with its own line break(s)
+    if len(pieces) <= 1:
+        return [text]
+    ms = max(1, max_segments)
+    target = len(text) / ms
+    segments: list[str] = []
+    current = ""
+    for piece in pieces:
+        if current and len(current) + len(piece) > target and len(segments) < ms - 1:
+            segments.append(current)
+            current = ""
+        current += piece
+    segments.append(current)
+    return segments
 
 
 def compositional_optimization_segments(
@@ -40,6 +66,10 @@ def compositional_optimization_segments(
         return []
 
     ms = max(2, min(8, int(max_segments or 5)))
+    if len(new_sentence) >= LOCAL_SPLIT_MIN_CHARS or "\n" in new_sentence:
+        parts = split_paragraphs(new_sentence, ms)
+        _print(f"[Optimization] ── local paragraph split: {len(parts)} segment(s) of a {len(new_sentence)}-char text")
+        return parts
 
     prompt = (
         "You split ONE improved prompt sentence into contiguous parts for localized rewriting later.\n\n"

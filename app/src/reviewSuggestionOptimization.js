@@ -70,6 +70,19 @@ function gammaMarsagliaTsang(shape) {
   }
 }
 
+/**
+ * A candidate for one segment, carrying the segment's own leading/trailing whitespace. A whole-prompt card is
+ * split at paragraph boundaries with each segment keeping its line breaks (backend split_paragraphs), so the
+ * joined candidates keep the prompt's layout. The built-in method's segments have no edge whitespace (the
+ * backend strips them), so its candidates are unchanged.
+ */
+export function keepSegmentWhitespace(segment, candidate) {
+  const seg = String(segment || '');
+  const lead = /^\s*/.exec(seg)[0];
+  const trail = seg.trim() ? /\s*$/.exec(seg)[0] : '';
+  return lead + String(candidate || '').trim() + trail;
+}
+
 function sampleBeta(a, b) {
   if (!(a > 0) || !(b > 0)) return 0.5;
   const x = gammaMarsagliaTsang(a);
@@ -271,7 +284,7 @@ export async function runSuggestionOptimizationCompositional(options) {
         throw new Error(d || 'optimization/candidates failed');
       }
       const cands = Array.isArray(cData.candidates)
-        ? cData.candidates.map((x) => String(x || '').trim()).filter(Boolean)
+        ? cData.candidates.map((x) => String(x || '').trim()).filter(Boolean).map((c) => keepSegmentWhitespace(seg, c))
         : [];
       if (!cands.length) throw new Error(`No candidates returned for segment ${i}.`);
       lattice.push(cands);
