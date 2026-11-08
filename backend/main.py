@@ -498,11 +498,22 @@ class ReviewRequest(BaseModel):
     review_method: str | None = Field(default=None, description="Registered review method id (backend/review_methods.py); defaults to the legacy issue-analysis + suggested-changes pipeline")
     score_mapping: str | None = Field(default=None, description="Serialized Score rule-tree bundle (scoreMappingBundle.js) from the upstream Score node; only methods that self-score candidates (e.g. gepa) need this")
     settings_overrides: dict | None = Field(default=None, description="Per-Score-node Review settings (REVIEW_SETTINGS_OVERRIDE_KEYS)")
+    # What Verify already uses, for methods that run and score candidates in the backend (the AnnoBio engine's
+    # worked-example card; review_engine_hooks.py). All optional: without them that card is simply not offered.
+    run_credential_id: str | None = Field(default=None, description="The upstream Generate node's model credential")
+    run_settings: dict | None = Field(default=None, description="The Generate node's run settings (RUN_SETTINGS_OVERRIDE_KEYS)")
+    score_match_code: str | None = Field(default=None, description="The Score node's match() code when it is in code mode")
+    score_tables: dict | None = Field(default=None, description="{input_headers, input_rows: [[index, row]], gt_headers, gt_rows: [[index, row]]} for the rows this Optimize refers to")
 
     @field_validator("settings_overrides")
     @classmethod
     def check_settings_overrides(cls, value):
         return _validate_settings_overrides(value, REVIEW_SETTINGS_OVERRIDE_KEYS)
+
+    @field_validator("run_settings")
+    @classmethod
+    def check_run_settings(cls, value):
+        return _validate_settings_overrides(value, RUN_SETTINGS_OVERRIDE_KEYS)
 
     @model_validator(mode="after")
     def image_inputs_require_session(self):
@@ -3647,6 +3658,33 @@ def _review_is_cancelled(review_id: str | None) -> bool:
         return review_id in _review_cancelled
 
 
+def _engine_task_hooks(body: ReviewRequest, st: dict) -> dict:
+    """The Generate model and Verify's scoring for the engine's worked-example card, or {} when the request does not
+    carry them (an older frontend or project) or the Generate credential is unusable: the card is then not offered."""
+    from review_engine_hooks import make_score_input
+    from task_row_runner import make_row_runner
+
+    if not (body.run_credential_id and body.output_schema and body.score_tables and (body.score_mapping or body.score_match_code)):
+        return {}
+    cred = next((item for item in _load_credentials() if item.get("id") == body.run_credential_id), None)
+    if not cred:
+        return {}
+    cred = _credential_for_task(cred, "generate")
+    if not cred.get("api_key"):
+        return {}
+    # The same settings a Run (and so Verify) uses: this model's settings, then the Generate node's overrides.
+    run_settings = {**settings_for_model(_load_settings(), body.run_credential_id), **(body.run_settings or {})}
+    run_row = make_row_runner(provider=_credential_provider(cred), model=_credential_model(cred) or "",
+                              api_key=cred.get("api_key", ""), base_url=_credential_base_url(cred),
+                              output_schema=body.output_schema, run_settings=run_settings,
+                              project_session_id=body.project_session_id)
+    score_input = make_score_input(comparison_rows=list(body.comparison_rows or []), score_mapping=body.score_mapping,
+                                   score_match_code=body.score_match_code or "", score_tables=body.score_tables,
+                                   output_fields=run_row.output_fields, python_path=st.get("python_path") or None,
+                                   project_session_id=body.project_session_id)
+    return {"_run_row": run_row, "_score_input": score_input}
+
+
 def _do_review_work(review_id: str, body: ReviewRequest) -> None:
     """Validate credential; run review_pipeline.run_review_pipeline; finalize job status."""
 
@@ -3698,6 +3736,12 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
         except (TypeError, ValueError):
             max_failed = DEFAULT_SETTINGS["review_max_failed_rows"]
         max_failed = max(1, min(200, max_failed))
+
+        if review_method.id == "annobio_engine_v2" and st.get("engine_offer_examples", True):
+            try:
+                st = {**st, **_engine_task_hooks(body, st)}
+            except Exception as e:  # the rewrites still come; only the worked-example card is left out
+                _safe_print(_HL + "[Review] Worked-example card unavailable: " + _R + str(e))
 
         review_method.run(
             provider=provider,

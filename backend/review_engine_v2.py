@@ -229,6 +229,9 @@ def example_card(*, prompt: str, examples: list[Example], observations: list[Obs
     from annobio_optimize.engine import search_demos
     from annobio_optimize.engine.session import _closing_anchor
 
+    scorable = getattr(score_input, "scorable", None)  # inputs Verify can score (an input_row_index)
+    if scorable is not None:
+        examples = [e for e in examples if e.id in scorable]
     if len(examples) < MIN_INPUTS_FOR_EXAMPLES:
         return None
     order = sorted(examples, key=lambda e: e.id)

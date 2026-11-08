@@ -4,6 +4,7 @@
  */
 
 import { EditorView, basicSetup } from 'codemirror';
+import { reviewVerifyContext } from './reviewVerifyContext.js';
 import { canonicalJson } from './runHistorySignature.js';
 import { attachRunHistoryPicker } from './runHistoryPicker.js';
 import { python } from '@codemirror/lang-python';
@@ -919,6 +920,7 @@ export async function runReviewStart({ reviewNodeId, payload, credentialId, regi
       source_gt_row_index: typeof r.source_gt_row_index === 'number' && !Number.isNaN(r.source_gt_row_index) ? r.source_gt_row_index : null,
       score_table_row: typeof r.score_table_row === 'number' && !Number.isNaN(r.score_table_row) ? r.score_table_row : null,
     })),
+    ...reviewVerifyContext(payload, comparisonRows),
   };
   document.dispatchEvent(new CustomEvent('workflow:review-progress', { detail: { reviewNodeId, percent: 0 } }));
   document.dispatchEvent(new CustomEvent('workflow:save-review-result', {
