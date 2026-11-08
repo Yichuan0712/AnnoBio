@@ -3388,6 +3388,82 @@ def cancel_match_run(job_id: str):
     return {"ok": True, "status": "cancelling"}
 
 
+# ---------- Score evaluate (the Verify verdict computed in the backend; score_engine.py) ----------
+SCORE_EVALUATE_MAX_INPUTS = 10000
+
+
+class ScoreEvaluateInput(BaseModel):
+    input_row: list[Any] = Field(default_factory=list, description="This input's row of the input table (aligned with input_headers)")
+    run_rows: list[dict[str, Any]] = Field(default_factory=list, description="The run's result rows for this input: {output, error?, row_index?}; several for a table output")
+    gt_rows: list[list[Any]] = Field(default_factory=list, description="This input's ground-truth rows (aligned with gt_headers)")
+
+
+class ScoreEvaluateRequest(BaseModel):
+    """Either `inputs` (one entry per input, the backend form) or `results` + `input_entries` + `run_ws` +
+    `gt_content` (exactly the arguments Verify passes to evaluateScoreOutputGt)."""
+    score_mapping: Any = Field(default=None, description="Serialized v2 score bundle (string or object); its output rules decide the verdict")
+    score_match_code: str = Field(default="", description="Python match(input_row, output_row, gt_row); when set, the rules are not used")
+    output_fields: list[Any] = Field(default_factory=list)
+    input_headers: list[Any] = Field(default_factory=list)
+    gt_headers: list[Any] = Field(default_factory=list)
+    inputs: list[ScoreEvaluateInput] | None = None
+    results: list[Any] | None = None
+    input_entries: list[Any] | None = None
+    run_ws: dict[str, Any] | None = None
+    gt_content: dict[str, Any] | None = None
+    embedding_cosines: list[list[Any]] | None = Field(default=None, description="Optional prefetched [run, gt, cosine] triples; otherwise computed in-process when an embedding rule needs them")
+    concepts: list[list[Any]] | None = Field(default=None, description="Optional prefetched [source, term, result] triples; otherwise resolved in-process when a concept rule needs them")
+    python_path: str | None = Field(default=None, description="Interpreter for code mode; defaults to Settings -> Python")
+    project_session_id: str | None = Field(default=None, description="Required in code mode when a row has an image/PDF cell")
+
+    @model_validator(mode="after")
+    def _check_form(self):
+        verify_form = self.results is not None or self.input_entries is not None
+        if (self.inputs is not None) == verify_form:
+            raise ValueError("Send either `inputs` or `results` + `input_entries` (+ `run_ws`, `gt_content`).")
+        if verify_form and self.input_entries is None:
+            raise ValueError("`input_entries` is required with `results`.")
+        count = len(self.inputs) if self.inputs is not None else len(self.input_entries or [])
+        if count > SCORE_EVALUATE_MAX_INPUTS:
+            raise ValueError(f"Too many inputs (max {SCORE_EVALUATE_MAX_INPUTS}).")
+        for name in ("embedding_cosines", "concepts"):
+            for i, item in enumerate(getattr(self, name) or []):
+                if len(item) != 3 or not isinstance(item[1], str) or (name == "embedding_cosines" and not isinstance(item[0], str)):
+                    raise ValueError(f"{name}[{i}] must be a [string, string, value] triple.")
+        return self
+
+
+@app.post("/api/score/evaluate")
+def score_evaluate(body: ScoreEvaluateRequest):
+    """Scores a batch of inputs exactly as Verify does (matched / not matched per run row, pairs, counts)."""
+    import score_engine
+
+    python_path = body.python_path
+    if body.score_match_code and not (python_path or "").strip():
+        python_path = str(_load_settings().get("python_path") or "")
+    shared = dict(
+        score_mapping=body.score_mapping, score_match_code=body.score_match_code, output_fields=body.output_fields,
+        embedding_cosines=body.embedding_cosines, concept_ids=body.concepts,
+        python_path=python_path, project_session_id=body.project_session_id,
+    )
+    try:
+        if body.inputs is not None:
+            return score_engine.score_inputs(
+                [item.model_dump() for item in body.inputs],
+                input_headers=body.input_headers, gt_headers=body.gt_headers, **shared,
+            )
+        return score_engine.evaluate_score_output_gt(
+            results=body.results, input_entries=body.input_entries,
+            run_ws=body.run_ws or {"headers": [], "rows": []}, gt_content=body.gt_content or {"headers": [], "rows": []},
+            **shared,
+        )
+    except (ValueError, TypeError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        _safe_print(f"[Score evaluate] {e}", file=sys.stderr)
+        raise HTTPException(status_code=503, detail=f"Scoring service unavailable: {e}") from e
+
+
 # ---------- Process (runs a user Python process(df) function once on the whole dataset, delegates
 #             to process_df_exec.py; it may return one DataFrame or named DataFrame branches) ----------
 _process_df_jobs: dict[str, dict] = {}
