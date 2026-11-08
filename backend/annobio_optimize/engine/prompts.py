@@ -75,6 +75,13 @@ INSTRUCTIONS = {
         "explanation, at most 120 words, of why this output is correct, pointing to the evidence in the input that "
         "decides it. Do not restate the output. Return explanation."
     ),
+    # Instruction induction (optimizer v3, ENGINE_V2_DESIGN 6.0n): APE's forward generation query, answered as JSON.
+    "induce": (
+        "payload.query is a text-completion prompt: a few input-output pairs and the words 'The instruction was "
+        "to'. Complete it: write the instruction that produced these outputs from these inputs, in full, as an "
+        "instruction a model can follow on new inputs (including the output format the pairs show). Return "
+        "instruction."
+    ),
     "style": (
         "Before this task prompt is optimized, decide which optimization style suits the task. The payload "
         "holds the task prompt and a few example inputs with their expected outputs (long texts are cut). "
@@ -100,7 +107,23 @@ SCHEMAS = {
     "paraphrase": _object({"candidates": _array(_S)}),
     "style": _object({"reason": _S, "style": {"type": "string", "enum": ["concise", "detailed"]}}),
     "explain": _object({"explanation": _S}),
+    "induce": _object({"instruction": _S}),
 }
+
+# APE (Zhou et al., ICLR 2023; https://github.com/keirp/automatic_prompt_engineer, MIT License, Copyright (c) 2022
+# keirp): the forward generation template of ape.py get_simple_prompt_gen_template and simple_ape's demos template,
+# verbatim (the same texts as the experiments' pinned vendor copy and the app's prompt_search_templates.py).
+APE_GENERATION_TEMPLATE = ("I gave a friend an instruction. Based on the instruction they produced the following "
+                           "input-output pairs:\n\n[full_DEMO]\n\nThe instruction was to [APE]")
+APE_DEMOS_TEMPLATE = "Input: [INPUT]\nOutput: [OUTPUT]"
+APE_DEMOS_DELIMITER = "\n\n"
+
+
+def induction_query(pairs) -> str:
+    """APE's generation query for (input text, output text) pairs, with the [APE] marker removed as its
+    llm.GPT_forward does."""
+    demos = APE_DEMOS_DELIMITER.join(APE_DEMOS_TEMPLATE.replace("[INPUT]", i).replace("[OUTPUT]", o) for i, o in pairs)
+    return APE_GENERATION_TEMPLATE.replace("[full_DEMO]", demos).replace("[APE]", "").strip()
 
 
 # EngineConfig.rewrite_integrate (pilot step 11b): pilot step 9 showed PubMedQA rewrites mostly keeping every
