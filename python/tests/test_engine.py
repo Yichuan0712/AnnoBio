@@ -886,3 +886,84 @@ class DemoSearchTests(unittest.TestCase):
         self.assertEqual([(c.name, c.example_ids, c.first_score, c.full_score) for c in reused.candidates],
                          [(c.name, c.example_ids, c.first_score, c.full_score) for c in fresh.candidates])
         self.assertEqual(reused.best, fresh.best)
+
+
+class InductionTests(unittest.TestCase):
+    """Optimizer v3's start stage (OperatorConfig.start "induce", ENGINE_V2_DESIGN 6.0n)."""
+    GOOD = "Use base facts. Mention alpha and beta."
+
+    class Inducing(Model):
+        def __init__(self, write, **kwargs):
+            super().__init__(**kwargs)
+            self.write = write  # sample number -> instruction text
+
+        def __call__(self, request):
+            if request.stage == "induce":
+                self.calls.append(request)
+                return {"instruction": self.write(request.payload["sample"])}
+            return super().__call__(request)
+
+    @staticmethod
+    def batch(tag, needs=NEEDS):
+        return [Example(f"{tag}{i}", {"need": need}, reference={"answer": need}) for i, need in enumerate(needs)]
+
+    def operator(self, model, **settings):
+        return Operator(model=model, predict=predict, evaluate=evaluate, config=CFG, operator=OperatorConfig(
+            schedule="coarse_only", start="induce", start_candidates=4, start_demos=3, min_gain=0.0, **settings))
+
+    def test_the_best_written_instruction_becomes_the_start_when_it_passes_the_held_out_gate(self):
+        model = self.Inducing(lambda n: self.GOOD if n == 3 else f"Answer. Mention gamma {n}.")
+        batches = [self.batch(t) for t in ("s", "f", "g", "n", "m")]
+        result = self.operator(model).run(PROMPT, batches)
+        start = result.rounds[0]
+        self.assertEqual((start.phase, start.committed, start.chosen, start.cards), ("start", True, "induced", 4))
+        self.assertEqual(result.prompt, self.GOOD)
+        self.assertEqual(start.gate, "next")
+        induce = [c for c in model.calls if c.stage == "induce"]
+        self.assertEqual([c.payload["sample"] for c in induce], [1, 2, 3, 4])
+        query = induce[0].payload["query"]
+        self.assertTrue(query.startswith("I gave a friend an instruction."))
+        self.assertTrue(query.endswith("The instruction was to"))
+        self.assertIn('Input: {"need":', query)
+        self.assertIn('Output: {"answer":', query)
+        # The examples batch is only shown, never scored; scoring uses the next two batches, the gate the one after.
+        scored = {o["example_id"] for e in result.sessions[0]["evaluations"] for o in e["observations"]}
+        self.assertFalse(any(id.startswith("s") for id in scored))
+        self.assertEqual({id[0] for id in scored}, {"f", "g"})
+        self.assertTrue(all(id.startswith("n") for id in result.sessions[0]["gate"]["examples"]))
+        self.assertTrue(all(r.phase == "coarse" for r in result.rounds[1:]))  # the rounds continue from it
+
+    def test_the_given_prompt_stays_when_no_written_instruction_beats_it(self):
+        model = self.Inducing(lambda n: "Answer. Mention gamma.")
+        result = self.operator(model).run(PROMPT, [self.batch(t) for t in ("s", "f", "g", "n")], max_rounds=1 + 1)
+        self.assertFalse(result.rounds[0].committed)
+        self.assertIn("no written instruction beat the given prompt", result.rounds[0].reason)
+        self.assertEqual(result.rounds[0].end_prompt_id, result.rounds[0].start_prompt_id)
+
+    def test_a_written_instruction_that_loses_on_the_held_out_gate_is_rejected(self):
+        # Scoring inputs need only alpha/beta (the instruction wins 3/3 to 0/3); the gate needs base (it loses).
+        model = self.Inducing(lambda n: "Mention alpha and beta.")
+        rare, common = ["alpha", "beta", "alpha"], ["base"] * 4
+        batches = [self.batch("s"), self.batch("f", rare), self.batch("g", rare), self.batch("n", common)]
+        result = self.operator(model).run(PROMPT, batches, max_rounds=2)
+        self.assertFalse(result.rounds[0].committed)
+        self.assertIn("lost on the held-out next batch", result.rounds[0].reason)
+        self.assertEqual(result.prompt, PROMPT)
+
+    def test_written_instructions_keep_placeholders_and_are_never_verified_on_the_examples_they_show(self):
+        model = self.Inducing(lambda n: f"Label the text, version {n}.")
+        prompt = 'Classify {text} for {topic}. Reply as {"label": "<x>"} and {{literal}}.'
+        s = Session(model=model, predict=predict, evaluate=evaluate, prompt=prompt, config=CFG,
+                    examples=self.batch("e"))
+        cards = s.propose_instructions(3, 2, ["e0", "e1", "e2"], per_set=2)
+        self.assertEqual(len(cards), 3)
+        self.assertEqual(cards[0].new_text, "Label the text, version 1.\ntext: {text}\ntopic: {topic}")
+        for card in cards:
+            self.assertEqual((card.kind, card.old_text), ("rewrite", prompt))
+            self.assertEqual(len(card.demo_example_ids), 2)
+            self.assertFalse(set(card.demo_example_ids) & set(card.target_example_ids))
+        self.assertEqual(s.predictions, 0)  # writing instructions predicts nothing
+        with self.assertRaises(Exception):
+            OperatorConfig(start="apex")
+        with self.assertRaises(Exception):
+            OperatorConfig(start_budget=1.5)

@@ -13,6 +13,7 @@ from dataclasses import asdict, replace
 import json
 import math
 import random
+import re
 from typing import Callable, Sequence
 
 from .. import validation as check
@@ -408,6 +409,54 @@ class Session:
                     tuple(by_example[id].summary for id in chosen[:3]), demo_example_ids=tuple(chosen))
         return self._add(card)
 
+    def propose_instructions(self, count: int, shots: int, pool_ids: Sequence[str] | None = None,
+                             per_set: int = 2) -> list[Card]:
+        """Instructions written from examples (optimizer v3, ENGINE_V2_DESIGN 6.0n; APE's proposal step): up to
+        `count` whole-prompt cards, each the optimization model's completion of APE's query "I gave a friend an
+        instruction ... input-output pairs ... The instruction was to", over `shots` inputs with their reference
+        answers drawn (seeded) from `pool_ids` (default: every input), `per_set` samples per drawn set. Needs no
+        prediction. A placeholder of the source prompt that a new instruction lacks is appended as "name: {name}".
+        Each card targets the inputs it does not show (a card is never verified on the examples it shows)."""
+        check.integer(count, "propose_instructions.count", minimum=1)
+        check.integer(shots, "propose_instructions.shots", minimum=1)
+        check.integer(per_set, "propose_instructions.per_set", minimum=1)
+        pool = list(pool_ids) if pool_ids is not None else [e.id for e in self.examples]
+        unknown = [id for id in pool if id not in self.by_id]
+        if unknown:
+            raise InputValueError(f"unknown example ids {unknown[:3]!r}.", path="propose_instructions.pool_ids")
+        if not pool:
+            return []
+        rng = random.Random(f"{self.config.seed}:induce")
+        cards, seen = [], {self.source.strip()}
+        for set_number in range(-(-count // per_set)):
+            shown = rng.sample(pool, min(shots, len(pool)))
+            query = prompts.induction_query([(_as_text(self.by_id[id].inputs), _as_text(self.by_id[id].reference))
+                                             for id in shown])
+            for sample in range(per_set):
+                if len(cards) >= count:
+                    break
+                self._event("induce", f"instruction {len(cards) + 1} of {count}")
+                try:
+                    # The sample number keeps the requests distinct, so a caching host still returns separate samples.
+                    reply = self._ask("induce", {"query": query, "sample": set_number * per_set + sample + 1})
+                except ModelResponseError:
+                    self.notices.append(Notice("induce", "unusable reply"))
+                    continue
+                text = reply.get("instruction") if isinstance(reply.get("instruction"), str) else ""
+                text = _keep_placeholders(text.strip(), self.source) if text.strip() else ""
+                if not text or text.strip() in seen:
+                    self.notices.append(Notice("induce", "empty or repeated instruction"))
+                    continue
+                seen.add(text.strip())
+                targets = tuple(e.id for e in self.examples if e.id not in shown)
+                card = Card(self._next_card_id(), "rewrite", "Instruction written from examples",
+                            f"Written from {len(shown)} solved examples ({', '.join(shown)}), as APE proposes instructions",
+                            prompt_id(self.source), 0, len(self.source), self.source, text, targets,
+                            demo_example_ids=tuple(shown))
+                if self._add(card) is not None:
+                    cards.append(card)
+        return cards
+
     # ------------------------------------------------------------------ verify and search
 
     def regression_order(self) -> tuple[str, ...]:
@@ -653,6 +702,20 @@ class Session:
             "decisions": [asdict(d) for d in self.decisions], "applied": list(self.applied),
             "evaluations": [asdict(e) for e in self.evaluations], "model_calls": [asdict(m) for m in self.model_calls],
             "notices": [asdict(n) for n in self.notices], "predictions": self.predictions}, ensure_ascii=False))
+
+
+_PLACEHOLDER = re.compile(r'(?<!\{)\{([^{}"\n:]+)\}(?!\})')  # {name}; not {{escaped}} and not JSON like {"a":1}
+
+
+def _keep_placeholders(text: str, source: str) -> str:
+    """`text` with each placeholder of `source` it lacks appended on its own line as "name: {name}"."""
+    missing = [name for name in dict.fromkeys(m.group(1) for m in _PLACEHOLDER.finditer(source))
+               if "{" + name + "}" not in text]
+    return text + "".join(f"\n{name}: {{{name}}}" for name in missing)
+
+
+def _as_text(value) -> str:
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
 def _closing_anchor(prompt: str) -> int:
