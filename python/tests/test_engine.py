@@ -864,3 +864,25 @@ class DemoSearchTests(unittest.TestCase):
                               pool=pool, scoring=scoring, cap=2, seed=1, config=CFG)
         self.assertEqual({c.source for c in result.candidates}, {"labeled", "bootstrapped"})
         self.assertIsNotNone(result.best)
+
+    def test_existing_observations_spare_the_prompts_own_runs(self):
+        from annobio_optimize import Observation
+        pool = [Example(f"p{i}", {"need": n}, n) for i, n in enumerate(["alpha", "beta", "base", "base"])]
+        scoring = [Example(f"s{i}", {"need": n}, n) for i, n in enumerate(["alpha", "beta", "base", "base"] * 5)]
+        observe = lambda e: Observation(e.id, predict(PROMPT, e.inputs), evaluate(e, predict(PROMPT, e.inputs)))
+        prompts_seen = []
+
+        def counting(prompt, inputs):
+            prompts_seen.append(prompt)
+            return predict(prompt, inputs)
+        common = dict(model=self.Explaining(), evaluate=evaluate, render=self.render, prompt=PROMPT, pool=pool,
+                      scoring=scoring, cap=1, seed=2, config=CFG)
+        reused = search_demos(predict=counting, pool_observations=[observe(e) for e in pool],
+                              scoring_observations=[observe(e) for e in scoring], **common)
+        self.assertNotIn(PROMPT, prompts_seen)  # the prompt itself was never predicted again
+        prompts_seen.clear()
+        fresh = search_demos(predict=counting, **common)
+        self.assertIn(PROMPT, prompts_seen)
+        self.assertEqual([(c.name, c.example_ids, c.first_score, c.full_score) for c in reused.candidates],
+                         [(c.name, c.example_ids, c.first_score, c.full_score) for c in fresh.candidates])
+        self.assertEqual(reused.best, fresh.best)

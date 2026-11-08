@@ -61,8 +61,10 @@ def _default_label(example: Example) -> str:
 def search_demos(*, model, predict, evaluate, render: RenderDemos, prompt: str, pool: Sequence[Example],
                  scoring: Sequence[Example], cap: int, seed: int, config=None, aggregate=None,
                  label_of: Callable[[Example], str] | None = None, stop_on: tuple = (), is_cancelled=None,
-                 on_event=None) -> DemoSearchResult:
-    """See the module docstring. `pool` and `scoring` must not share inputs; `cap` = examples per set."""
+                 on_event=None, pool_observations=None, scoring_observations=None) -> DemoSearchResult:
+    """See the module docstring. `pool` and `scoring` must not share inputs; `cap` = examples per set.
+    `pool_observations` / `scoring_observations`: the prompt's existing observations on those inputs (e.g. the
+    run the user already scored), so the prompt itself is not predicted again; omitted, it is run."""
     if cap < 1:
         raise ValueError("cap must be at least 1")
     pool, scoring = list(pool), [e for e in scoring if e.id not in {p.id for p in pool}]
@@ -70,7 +72,7 @@ def search_demos(*, model, predict, evaluate, render: RenderDemos, prompt: str, 
                   stop_on=stop_on, is_cancelled=is_cancelled, on_event=on_event)
     result = DemoSearchResult(tuple(e.id for e in pool), tuple(e.id for e in scoring))
     rng = random.Random(seed)
-    session = Session(**common, prompt=prompt, examples=pool,
+    session = Session(**common, prompt=prompt, examples=pool, observations=pool_observations,
                       with_demos=lambda text, shown: text + "\n\nWORKED_EXAMPLES\n" + " ".join(e.id for e in shown))
     observed = {o.example_id: o for o in session.baseline().observations}
     ids = [e.id for e in pool]
@@ -115,10 +117,13 @@ def search_demos(*, model, predict, evaluate, render: RenderDemos, prompt: str, 
     if not built or not scoring:
         return result
     scorer = Session(**common, prompt=prompt, examples=scoring)
+    known = {o.example_id: o for o in (scoring_observations or [])}
     first = [e.id for e in scoring[:FIRST_STAGE]]
     every = [e.id for e in scoring]
 
     def score(text, which):
+        if text == prompt and all(k in known for k in which):  # the prompt's own run is already known
+            return scorer.set_score([known[k] for k in which])
         return scorer.set_score(scorer.run(text, which).observations)
 
     stage1 = {name: score(text, first) for name, _, _, _, text in built}

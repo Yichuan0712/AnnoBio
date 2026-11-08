@@ -25,6 +25,20 @@ import { getCurrentProjectId } from './currentProject.js';
 
 const API_BASE = BACKEND_API_BASE;
 
+/**
+ * A candidate for one segment, carrying the segment's own leading/trailing whitespace. A whole-prompt card is
+ * split at paragraph boundaries with each segment keeping its line breaks (backend split_paragraphs), so the
+ * joined candidates keep the prompt's layout. The built-in method's segments have no edge whitespace (the
+ * backend strips them), so its candidates are unchanged. runSuggestionOptimizationCompositional inlines the
+ * same rule (python/tests/test_review.py evaluates that function's source on its own).
+ */
+export function keepSegmentWhitespace(segment, candidate) {
+  const seg = String(segment || '');
+  const lead = /^\s*/.exec(seg)[0];
+  const trail = seg.trim() ? /\s*$/.exec(seg)[0] : '';
+  return lead + String(candidate || '').trim() + trail;
+}
+
 // ─── Session management (abort on app close) ─────────────────────────────────
 
 /** @type {Set<AbortController>} */
@@ -68,19 +82,6 @@ function gammaMarsagliaTsang(shape) {
     if (u < 1 - 0.0331 * x * x * x * x) return d * v;
     if (Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) return d * v;
   }
-}
-
-/**
- * A candidate for one segment, carrying the segment's own leading/trailing whitespace. A whole-prompt card is
- * split at paragraph boundaries with each segment keeping its line breaks (backend split_paragraphs), so the
- * joined candidates keep the prompt's layout. The built-in method's segments have no edge whitespace (the
- * backend strips them), so its candidates are unchanged.
- */
-export function keepSegmentWhitespace(segment, candidate) {
-  const seg = String(segment || '');
-  const lead = /^\s*/.exec(seg)[0];
-  const trail = seg.trim() ? /\s*$/.exec(seg)[0] : '';
-  return lead + String(candidate || '').trim() + trail;
 }
 
 function sampleBeta(a, b) {
@@ -284,7 +285,8 @@ export async function runSuggestionOptimizationCompositional(options) {
         throw new Error(d || 'optimization/candidates failed');
       }
       const cands = Array.isArray(cData.candidates)
-        ? cData.candidates.map((x) => String(x || '').trim()).filter(Boolean).map((c) => keepSegmentWhitespace(seg, c))
+        ? cData.candidates.map((x) => String(x || '').trim()).filter(Boolean)
+          .map((c) => /^\s*/.exec(seg)[0] + c + (seg.trim() ? /\s*$/.exec(seg)[0] : '')) // = keepSegmentWhitespace
         : [];
       if (!cands.length) throw new Error(`No candidates returned for segment ${i}.`);
       lattice.push(cands);
