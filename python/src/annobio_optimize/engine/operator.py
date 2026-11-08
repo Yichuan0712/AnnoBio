@@ -191,27 +191,9 @@ class OperatorConfig:
     # rollback_z, final, holdout_batches, final_margin and final_excludes_initial; "auto" = the optimization
     # model judges the task once before the first round (suggest_style) and that style applies. OperatorResult.style records it.
     style: Literal["fixed", "auto", "concise", "detailed"] = "fixed"
-    # Optimizer v3 (ENGINE_V2_DESIGN 6.0n, user decision 2026-11-08): "initial" = the rounds start from the given
-    # prompt (v2); "induce" = a start stage first, APE's strengths (instructions written from solved examples, many
-    # candidates compared on the same inputs): the next batch only supplies examples (never scored here);
-    # `start_candidates` instructions are written from `start_demos` of its inputs each (Session.propose_instructions);
-    # the given prompt and every candidate run on the following batch, the given prompt and the best
-    # `start_finalists` on one more; the best of them by its score over both batches, if it beats the given prompt
-    # there, faces the round's usual held-out gate (min_gain, max_batch_drop) and becomes the incumbent if it passes.
-    # The rounds then continue from the incumbent; an accepted start is a version like any other (rollback, final).
-    # Stage-1 scoring stops once `start_budget` of the budget is spent.
-    start: Literal["initial", "induce"] = "initial"
-    start_candidates: int = 10
-    start_demos: int = 5
-    start_finalists: int = 3
-    start_budget: float = 0.25
 
     def __post_init__(self):
         check.choice(self.style, ("fixed", "auto", "concise", "detailed"), "OperatorConfig.style")
-        check.choice(self.start, ("initial", "induce"), "OperatorConfig.start")
-        for name in ("start_candidates", "start_demos", "start_finalists"):
-            check.integer(getattr(self, name), f"OperatorConfig.{name}", minimum=1)
-        check.unit_score(self.start_budget, "OperatorConfig.start_budget")
         check.integer(self.gate_batches, "OperatorConfig.gate_batches", minimum=1)
         check.integer(self.challengers, "OperatorConfig.challengers", minimum=0)
         check.integer(self.challenger_max_gates, "OperatorConfig.challenger_max_gates", minimum=1)
@@ -247,8 +229,7 @@ class OperatorConfig:
 @dataclass(frozen=True, slots=True)
 class RoundSummary:
     index: int
-    # which card kinds this round proposed ("demos": the end stage; "start": optimizer v3's start stage)
-    phase: Literal["coarse", "fine", "both", "demos", "start"]
+    phase: Literal["coarse", "fine", "both", "demos"]  # which card kinds this round proposed ("demos": the end stage)
     start_prompt_id: str
     end_prompt_id: str
     committed: bool
@@ -416,124 +397,11 @@ class Operator:
             self._texts[prompt_id(text)] = text
             run = holdout_session.run(text, [e.id for e in holdout])
             holdout_scores[prompt_id(text)] = (holdout_session.set_score(run.observations), len(run.observations))
-
-        def start_stage(number):
-            """Optimizer v3's start stage (OperatorConfig.start "induce"); returns the incumbent's observations on
-            the coming batch (or None) and the inputs that selected it."""
-            shown = ahead.pop(0)
-            fill()
-            scoring = []
-            for _ in range(2):
-                if ahead:
-                    scoring.append(ahead.pop(0))
-                    fill()
-            used = {e.id for e in shown}
-            stages = []
-            for batch in scoring:
-                fresh = list({e.id: e for e in batch if e.id not in used}.values())
-                used |= {e.id for e in fresh}
-                stages.append(fresh)
-            first = stages[0] if stages else []
-            second = stages[1] if len(stages) > 1 else []
-            common = dict(**self.callbacks, config=replace(self.config, seed=self.config.seed * 1000003 + number),
-                          is_cancelled=self.is_cancelled, on_event=self.on_event, stop_on=self.stop_on,
-                          aggregate=self.aggregate)
-            session = Session(**common, prompt=result.prompt,
-                              examples=list({e.id: e for e in chain(shown, first, second)}.values()))
-            upcoming = gate_inputs([]) if s.gate == "next" else []
-            gate = Session(**common, prompt=result.prompt, examples=upcoming) if upcoming else None
-            start_id, tried, cards = prompt_id(result.prompt), [], []
-            committed, reason, gain, lost, accepted, carry = False, "", None, None, (), None
-            try:
-                cards = session.propose_instructions(s.start_candidates, s.start_demos, [e.id for e in shown])
-                if not cards or not first:
-                    reason = "no instruction could be written" if not cards else "no inputs to score the instructions on"
-                else:
-                    first_ids, second_ids = [e.id for e in first], [e.id for e in second]
-                    base = list(session.run(result.prompt, first_ids).observations)
-                    runs = {}
-                    for card in cards:
-                        if self.budget_fraction is not None and runs and self._spent() >= s.start_budget:
-                            break
-                        runs[card.id] = list(session.run(card.new_text, first_ids).observations)
-                    stage1 = {id: session.set_score(obs) for id, obs in runs.items()}
-                    finalists = sorted(stage1, key=lambda id: (-stage1[id], len(session.card(id).new_text), id))
-                    finalists = finalists[:s.start_finalists]
-                    if second_ids:
-                        base += list(session.run(result.prompt, second_ids).observations)
-                        for id in finalists:
-                            runs[id] += list(session.run(session.card(id).new_text, second_ids).observations)
-                    full = {id: session.set_score(runs[id]) for id in finalists}
-                    base_score = session.set_score(base)
-                    best = min(finalists, key=lambda id: (-full[id], len(session.card(id).new_text), id))
-                    text = session.card(best).new_text
-                    tried = [{"name": card.id, "first_score": stage1.get(card.id), "score": full.get(card.id),
-                              "chars": len(card.new_text), "eligible": False} for card in cards]
-                    tried.append({"name": "initial", "first_score": session.set_score(base[:len(first_ids)]),
-                                  "score": base_score, "chars": len(result.prompt), "eligible": False})
-                    if full[best] <= base_score:
-                        reason = f"no written instruction beat the given prompt on {len(base)} scoring inputs"
-                    elif gate is None:
-                        committed, reason = True, f"best written instruction beat the given prompt on {len(base)} scoring inputs"
-                    else:
-                        baseline = gate.baseline()
-                        run = gate.run(text, [e.id for e in gate.examples])
-                        gain, lost, drop = _paired(gate, baseline, run)
-                        eligible = drop <= s.max_batch_drop and gain >= s.min_gain
-                        tried.append({"name": f"gate {best}", "gain": gain, "lost": lost, "drop": drop,
-                                      "chars": len(text), "eligible": eligible})
-                        if eligible:
-                            committed, carry = True, list(run.observations)
-                            reason = "best written instruction: no loss beyond the noise margin on the held-out next batch"
-                        else:
-                            reason = "best written instruction lost on the held-out next batch"
-                    if committed:
-                        session.accept(best)
-                        accepted = (best,)
-                        self._texts[prompt_id(text)] = text
-                        result.prompt = text
-            finally:
-                snapshot = session.snapshot()
-                if gate is not None:
-                    snapshot["gate"] = {"examples": [e.id for e in gate.examples],
-                                        "evaluations": [{"prompt_id": b.prompt_id, "score": b.score} for b in gate.evaluations]}
-                result.sessions.append(snapshot)
-            selected = set()
-            if gate is not None:
-                for evaluation in gate.evaluations:
-                    known = seen.setdefault(evaluation.prompt_id, {})
-                    for item in evaluation.observations:
-                        known.setdefault(item.example_id, item)
-                if carry is None and gate.evaluations:
-                    carry = list(gate.baseline().observations)
-                if committed:
-                    selected = {e.id for e in gate.examples}
-            if committed and prompt_id(result.prompt) not in versions:
-                versions.append(prompt_id(result.prompt))
-            if s.final == "holdout":
-                score_holdout(result.prompt)
-            result.final = self._final(result.prompt, seen, len(upcoming), holdout_scores)
-            summary = RoundSummary(number, "start", start_id, prompt_id(result.prompt), committed, reason, len(cards),
-                                   accepted, gain, lost, "induced" if committed else "", tuple(tried),
-                                   "next" if gate is not None else "same", prompt_id(result.final))
-            result.rounds.append(summary)
-            if self.on_round is not None:
-                self.on_round(result.prompt, summary)
-            if carry is not None:  # reuse only an exact cover of the next round's batch
-                wanted = {e.id for e in ahead[0]} if ahead else set()
-                carry = [o for o in carry if o.example_id in wanted]
-                if {o.example_id for o in carry} != wanted or not wanted:
-                    carry = None
-            return carry, selected, len(upcoming)
-
         fill()
         index = -1
         try:
             if s.final == "holdout":
                 score_holdout(prompt)
-            if s.start == "induce" and ahead and (max_rounds is None or max_rounds > 1):
-                index += 1
-                carried, selected_on, gate_size = start_stage(index)
             while ahead and (max_rounds is None or index + 1 < max_rounds):
                 index += 1
                 batch = ahead.pop(0)
