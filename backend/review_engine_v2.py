@@ -174,6 +174,120 @@ def run_engine_v2(*, provider: str, model: str, api_key: str, base_url: str, bod
         suggestions = [_suggestion(card, rows_of, i + 1) for i, card in enumerate(cards)]
         if suggestions:
             append_event({"type": "suggestions", "suggestions": suggestions})
+        run_row, score_input = settings.get("_run_row"), settings.get("_score_input")
+        if settings.get("engine_offer_examples", True) and run_row is not None and score_input is not None:
+            card = example_card(prompt=prompt, examples=examples, observations=observations, rows_of=rows_of,
+                                model_call=model_call, run_row=run_row, score_input=score_input,
+                                is_cancelled=is_cancelled)
+            if card is not None:
+                append_event({"type": "suggestions", "suggestions": [card]})
     except EngineStopped:
         return
     append_event({"type": "done"})
+
+
+# ---------------------------------------------------------------- worked examples (engine.search_demos, 6.0m)
+
+MIN_INPUTS_FOR_EXAMPLES = 6
+MAX_POOL = MAX_SCORING = 32           # the experiment's two batches of 16 each
+LONG_INPUT_CHARS = 10000              # inputs this long (e.g. full papers) get one example per set, as RoBBR did
+
+
+def _json(value) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def render_examples(prompt: str, demos: list) -> str:
+    """The experiment's examples block (harness.with_demos; with an EXPLANATION when the set is explained)."""
+    explained = any(note for _, _, note in demos)
+    blocks = []
+    for index, (example, output, note) in enumerate(demos, 1):
+        middle = f"EXPLANATION\n{(note or '').strip()}\n" if explained else ""
+        blocks.append(f"EXAMPLE {index}\nINPUT_JSON\n{_json(example.inputs)}\n{middle}OUTPUT_JSON\n{output.strip()}")
+    header = ("WORKED_EXAMPLES (solved examples with explanations; for the final INPUT_JSON return only the "
+              "required JSON, without an explanation)" if explained
+              else "WORKED_EXAMPLES (solved examples; answer only the final INPUT_JSON)")
+    return prompt + "\n\n" + header + "\n\n" + "\n\n".join(blocks) + "\n\nEND_OF_WORKED_EXAMPLES"
+
+
+def _as_output(outputs: list) -> str:
+    """One input's outputs as the JSON text an example shows (one object, or the rows of a table)."""
+    return _json(outputs[0] if len(outputs) == 1 else outputs)
+
+
+def example_card(*, prompt: str, examples: list[Example], observations: list[Observation], rows_of: dict,
+                 model_call, run_row, score_input, is_cancelled, seed: int = 0) -> dict | None:
+    """The best of six worked-example sets (engine.search_demos) as one suggestion card, or None.
+
+    run_row(template, values) -> output dicts of one input (the user's Generate model, task_row_runner);
+    score_input(example_id, outputs) -> (matched_count, total_count) by the Evaluate's own rules (backend scoring).
+    The examples come from half of the evaluated inputs, the scoring from the other half; the prompt's own run
+    is the one the user already scored, so it is not run again. The card appends the examples after the
+    prompt's closing line; the user verifies it like any other card."""
+    import random
+
+    from annobio_optimize.engine import search_demos
+    from annobio_optimize.engine.session import _closing_anchor
+
+    if len(examples) < MIN_INPUTS_FOR_EXAMPLES:
+        return None
+    order = sorted(examples, key=lambda e: e.id)
+    random.Random(seed).shuffle(order)
+    half = len(order) // 2
+    pool_ex, scoring_ex = order[:half][:MAX_POOL], order[half:][:MAX_SCORING]
+    by_id = {o.example_id: o for o in observations}
+
+    def search_example(example: Example) -> Example:  # one GT row shows as an object, several as a list
+        refs = example.reference or []
+        return Example(example.id, example.inputs, refs[0] if len(refs) == 1 else refs)
+
+    def search_observation(example: Example) -> Observation:
+        seen = by_id[example.id]
+        return Observation(example.id, _as_output(seen.prediction or [{}]), seen.evaluation)
+
+    def predict(text: str, inputs: dict) -> str:
+        try:
+            return _as_output(run_row(text, inputs) or [{}])
+        except Exception as exc:  # a failed run scores as unmatched, as an error row does in a Run
+            return _json({"_error": str(exc)[:200]})
+
+    feedback = {e.id: by_id[e.id].evaluation.feedback for e in examples}
+
+    def evaluate(example: Example, prediction: str) -> Evaluation:
+        try:
+            outputs = json.loads(prediction)
+        except (TypeError, ValueError):
+            outputs = {}
+        outputs = [] if isinstance(outputs, dict) and "_error" in outputs else (outputs if isinstance(outputs, list) else [outputs])
+        matched, total = score_input(example.id, outputs)
+        return Evaluation(matched / total if total else 0.0, feedback=feedback.get(example.id, ""),
+                          matched_count=matched, total_count=total)
+
+    lengths = sorted(len(_json(e.inputs)) for e in examples)
+    cap = 1 if lengths[len(lengths) // 2] > LONG_INPUT_CHARS else 3
+    pool = [search_example(e) for e in pool_ex]
+    scoring = [search_example(e) for e in scoring_ex]
+    result = search_demos(model=model_call, predict=predict, evaluate=evaluate, render=render_examples, prompt=prompt,
+                          pool=pool, scoring=scoring, cap=cap, seed=seed, is_cancelled=is_cancelled,
+                          pool_observations=[search_observation(e) for e in pool_ex],
+                          scoring_observations=[search_observation(e) for e in scoring_ex])
+    best = result.best_candidate()
+    if best is None:
+        return None
+    start = _closing_anchor(prompt)
+    anchor = prompt[start:]
+    block = best.prompt[len(prompt):]
+    failed_scoring = [e.id for e in scoring_ex if by_id[e.id].evaluation.matched_count != by_id[e.id].evaluation.total_count]
+    targets = sorted({row for example_id in (failed_scoring or [e.id for e in scoring_ex])
+                      for row in rows_of.get(example_id, [])})
+    source = {"failures": "failed inputs", "labeled": "inputs with their reference answers",
+              "bootstrapped": "inputs the prompt already got right"}[best.source]
+    with_notes = ", with explanations" if best.explained else ""
+    base = result.base_full_score if result.base_full_score is not None else 0.0
+    reason = (f"Best of {len(result.candidates)} worked-example sets on {len(scoring_ex)} held-out inputs: "
+              f"{best.full_score:.2f} with these examples vs {base:.2f} without. Examples: {len(best.example_ids)} "
+              f"{source}{with_notes}.")
+    return {"name": "Add worked examples", "phase1_addresses": [f"Worked examples from {source}"[:500]],
+            "old_sentence": anchor, "new_sentence": anchor + block, "reason": reason,
+            "target_score_row_indices": targets, "row_indices": targets, "engine_card_kind": "demos",
+            "engine_demo_set": best.name, "engine_demo_example_ids": list(best.example_ids)}

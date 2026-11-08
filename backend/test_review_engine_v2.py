@@ -106,6 +106,76 @@ class EngineV2MethodTests(unittest.TestCase):
         self.assertEqual(number_of["input-3"], 3)
 
 
+DRUGS = ["aspirin", "ibuprofen", "metformin", "insulin", "warfarin", "heparin", "statin", "codeine"]
+
+
+def many_rows():
+    """Eight single-row inputs; the base prompt gets the first three right."""
+    out = []
+    for i, drug in enumerate(DRUGS):
+        out.append({"row_index": i, "input_row_index": i, "matched": i < 3, "run_output": {"drug": drug if i < 3 else "pain"},
+                    "ground_truth_output": {"drug": drug}, "row_input": {"text": f"Patient took {drug}."},
+                    "comparison_types": ["drug: exact (ignore case)"], "gt_only": False})
+    return out
+
+
+class ExampleModel(Model):
+    def __call__(self, request):
+        if request.stage == "explain":
+            self.calls.append(request)
+            return {"explanation": "The drug is named in the text."}
+        return super().__call__(request)
+
+
+class ExampleCardTests(unittest.TestCase):
+    def setUp(self):
+        self.runs = []
+
+        def run_row(template, values):
+            self.runs.append(template)
+            text = values["text"]
+            drug = text.split("took ")[1].rstrip(".")
+            return [{"drug": drug if "WORKED_EXAMPLES" in template else "pain"}]  # examples teach the task
+
+        gt = {f"input-{i + 1}": d for i, d in enumerate(DRUGS)}
+
+        def score_input(example_id, outputs):
+            ok = bool(outputs) and str(outputs[0].get("drug", "")).lower() == gt[example_id]
+            return (1 if ok else 0, 1)
+        self.settings = {"engine_num_proposals": 1, "_run_row": run_row, "_score_input": score_input}
+
+    def run_method(self, settings, comparison_rows=None):
+        model, events = ExampleModel(), []
+        body = SimpleNamespace(prompt=PROMPT, comparison_rows=comparison_rows or many_rows())
+        run_engine_v2(provider="", model="", api_key="", base_url="", body=body, max_tokens=1000, max_failed_inputs=30,
+                      is_cancelled=lambda: False, append_event=events.append, settings=settings, llm_call=model)
+        return model, events
+
+    def test_example_card_is_offered_after_the_rewrites(self):
+        model, events = self.run_method(self.settings)
+        batches = [e["suggestions"] for e in events if e["type"] == "suggestions"]
+        self.assertEqual(len(batches), 2)  # rewrites, then the example card
+        card = batches[1][0]
+        self.assertEqual(card["engine_card_kind"], "demos")
+        self.assertEqual(card["old_sentence"], PROMPT)  # the closing line (here the whole one-line prompt)
+        self.assertTrue(card["new_sentence"].startswith(PROMPT + "\n\nWORKED_EXAMPLES"))
+        self.assertTrue(card["new_sentence"].endswith("END_OF_WORKED_EXAMPLES"))
+        self.assertTrue(card["target_score_row_indices"])
+        self.assertTrue(set(card["target_score_row_indices"]) <= set(range(8)))
+        self.assertFalse(set(card["engine_demo_example_ids"]) & {f"input-{r + 1}" for r in card["target_score_row_indices"]})
+        self.assertNotIn(PROMPT, self.runs)  # the prompt's own run is the user's, not repeated
+        self.assertEqual(events[-1]["type"], "done")
+        self.assertIn("held-out inputs", card["reason"])
+
+    def test_no_example_card_when_switched_off_or_too_few_inputs(self):
+        _, events = self.run_method({**self.settings, "engine_offer_examples": False})
+        self.assertEqual(sum(1 for e in events if e["type"] == "suggestions"), 1)
+        _, events = self.run_method(self.settings, comparison_rows=many_rows()[:5])
+        self.assertEqual(sum(1 for e in events if e["type"] == "suggestions"), 1)
+        _, events = self.run_method({"engine_num_proposals": 1})  # no task model or scoring wired in
+        self.assertEqual(sum(1 for e in events if e["type"] == "suggestions"), 1)
+
+
 class EngineSettingsTests(unittest.TestCase):
     def test_defaults_and_validation(self):
         from pydantic import ValidationError
