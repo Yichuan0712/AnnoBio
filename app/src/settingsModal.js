@@ -53,7 +53,7 @@ const MODEL_SETTINGS_DEFAULTS = {
   simba_max_steps: 8,
   /** Distinct inputs with ≥1 unmatched comparison row; Phase 1 analyzes at most this many. */
   review_max_failed_rows: 30,
-  /** Thompson-sampling trials per compositional optimization run (4–200). */
+  /** Click to Optimize on a card: wording variants tried per click (4–200); unused by a normal Optimize run. */
   optimization_max_trials: 40,
   /** AnnoBio Optimizer: exploration intensity — failed inputs diagnosed / rewrites proposed per Optimize:
    * low 4/1 (the formal experiments), medium 8/2, high 16/4. */
@@ -871,8 +871,8 @@ export function openSettingsModal() {
                               </label>
                             </div>
                             <div class="defaults-field settings-review-method-specific" data-method-settings="annobio_engine_v2" hidden>
-                              <label class="dataset-meta-label" for="settings-optimization-max-trials">Max trials per optimization run (4–200)</label>
-                              <input type="number" id="settings-optimization-max-trials" class="dataset-meta-input" min="4" max="200" value="40" aria-label="Optimization max Thompson-sampling trials" title="Used by the suggestion-card 'Optimize' pill (Thompson-sampling segment search) of the AnnoBio Optimizer." />
+                              <label class="dataset-meta-label" for="settings-optimization-max-trials">Click to Optimize: max attempts per card (4–200)</label>
+                              <input type="number" id="settings-optimization-max-trials" class="dataset-meta-input" min="4" max="200" value="40" aria-label="Click to Optimize: max attempts per card" title="Used only when you click 'Click to Optimize' on a card whose verification did not pass: how many wording variants it may try. A normal Optimize run does not use it." />
                             </div>
                             <!-- Hidden: a developer switch. Its saved value still applies (Restore defaults turns it off). -->
                             <div class="defaults-field defaults-field--full" style="margin-top:0.5rem;" hidden>
