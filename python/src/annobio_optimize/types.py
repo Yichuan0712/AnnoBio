@@ -11,7 +11,7 @@ from . import validation as check
 from .errors import InputTypeError, InputValueError, ValidationError
 
 JSONValue = Union[None, bool, int, float, str, list["JSONValue"], dict[str, "JSONValue"]]
-Stage = Literal["diagnose", "cluster", "propose", "rewrite", "segment", "paraphrase", "style"]
+Stage = Literal["diagnose", "cluster", "propose", "rewrite", "segment", "paraphrase", "style", "explain"]
 
 
 def copy_json(value: Any, path: str = "value") -> JSONValue:
@@ -97,7 +97,7 @@ class ModelRequest:
     response_schema: dict[str, JSONValue]
 
     def __post_init__(self):
-        check.choice(self.stage, ("diagnose", "cluster", "propose", "rewrite", "segment", "paraphrase", "style"), "ModelRequest.stage")
+        check.choice(self.stage, ("diagnose", "cluster", "propose", "rewrite", "segment", "paraphrase", "style", "explain"), "ModelRequest.stage")
         check.string(self.instruction, "ModelRequest.instruction", nonempty=True)
         for name in ("payload", "response_schema"):
             value = getattr(self, name)

@@ -70,6 +70,11 @@ INSTRUCTIONS = {
     ),
     # The optimization style, judged once before optimization starts (OperatorConfig.style "auto";
     # ENGINE_V2_DESIGN 6.0h). Written once and frozen before the formal phase; not tuned per task.
+    "explain": (
+        "The payload holds a task prompt, one input and its correct output (payload.reference). Write a brief "
+        "explanation, at most 120 words, of why this output is correct, pointing to the evidence in the input that "
+        "decides it. Do not restate the output. Return explanation."
+    ),
     "style": (
         "Before this task prompt is optimized, decide which optimization style suits the task. The payload "
         "holds the task prompt and a few example inputs with their expected outputs (long texts are cut). "
@@ -94,6 +99,7 @@ SCHEMAS = {
     "segment": _object({"segments": _array(_S)}),
     "paraphrase": _object({"candidates": _array(_S)}),
     "style": _object({"reason": _S, "style": {"type": "string", "enum": ["concise", "detailed"]}}),
+    "explain": _object({"explanation": _S}),
 }
 
 

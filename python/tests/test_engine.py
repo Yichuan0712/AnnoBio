@@ -8,7 +8,7 @@ import json
 import unittest
 
 from annobio_optimize import Evaluation, Example
-from annobio_optimize.engine import STYLE_SETTINGS, EngineConfig, Operator, OperatorConfig, Session, suggest_style
+from annobio_optimize.engine import STYLE_SETTINGS, EngineConfig, Operator, OperatorConfig, Session, search_demos, suggest_style
 
 PROMPT = "Answer the question. Use base facts."
 CFG = EngineConfig(regression_examples=3, cluster_threshold=0)  # cluster even a few issues
@@ -801,3 +801,66 @@ class OperatorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DemoSearchTests(unittest.TestCase):
+    """search_demos (design 6.0m): six candidate sets from failures, labeled and bootstrapped inputs."""
+
+    class Explaining(Model):
+        def __call__(self, request):
+            if request.stage == "explain":
+                self.calls.append(request)
+                return {"explanation": "because " + request.payload["input"]["need"]}
+            return super().__call__(request)
+
+    @staticmethod
+    def render(prompt, demos):
+        parts = [json.dumps(e.inputs) + " -> " + out + (" | " + note if note else "") for e, out, note in demos]
+        return prompt + "\nEXAMPLES\n" + "\n".join(parts)
+
+    def run_search(self, seed=7, cap=2):
+        model = self.Explaining()
+        pool = [Example(f"p{i}", {"need": n}, n) for i, n in enumerate(["alpha", "alpha", "beta", "gamma", "base",
+                                                                        "base", "base", "base"])]
+        scoring = [Example(f"s{i}", {"need": n}, n) for i, n in enumerate(["alpha", "beta", "gamma", "base"] * 5)]
+        result = search_demos(model=model, predict=predict, evaluate=evaluate, render=self.render, prompt=PROMPT,
+                              pool=pool, scoring=scoring, cap=cap, seed=seed, config=CFG)
+        return model, pool, scoring, result
+
+    def test_candidates_halving_and_best(self):
+        model, pool, scoring, result = self.run_search()
+        names = [c.name for c in result.candidates]
+        self.assertEqual(names, ["failures+explained", "failures", "labeled+explained", "labeled",
+                                 "bootstrapped+explained", "bootstrapped"])
+        for c in result.candidates:
+            self.assertLessEqual(len(c.example_ids), 2)  # the cap
+            self.assertTrue(c.prompt.startswith(PROMPT))
+            self.assertFalse(set(c.example_ids) & {e.id for e in scoring})  # never shown on a scored input
+        finalists = [c for c in result.candidates if c.full_score is not None]
+        self.assertEqual(len(finalists), 3)  # successive halving: the best three of the first stage
+        best = result.best_candidate()
+        self.assertIn(best, finalists)
+        self.assertEqual(best.full_score, max(c.full_score for c in finalists))
+        self.assertNotEqual(best.source, "bootstrapped")  # inputs base got right add no missing word
+        self.assertGreater(best.full_score, result.base_full_score)
+        boot = next(c for c in result.candidates if c.name == "bootstrapped")
+        self.assertTrue(all(i in {"p4", "p5", "p6", "p7"} for i in boot.example_ids))  # inputs base got right
+        self.assertIn("{'ok': True}", boot.prompt)  # shown with the prompt's own output
+        explained = sum(len(c.example_ids) for c in result.candidates if c.explained)
+        self.assertEqual(sum(1 for r in model.calls if r.stage == "explain"), explained)
+
+    def test_same_seed_same_result(self):
+        _, _, _, a = self.run_search(seed=3)
+        _, _, _, b = self.run_search(seed=3)
+        self.assertEqual([(c.name, c.example_ids, c.first_score, c.full_score) for c in a.candidates],
+                         [(c.name, c.example_ids, c.first_score, c.full_score) for c in b.candidates])
+        self.assertEqual(a.best, b.best)
+
+    def test_no_failures_still_offers_labeled_and_bootstrapped(self):
+        model = self.Explaining()
+        pool = [Example(f"p{i}", {"need": "base"}, "base") for i in range(6)]
+        scoring = [Example(f"s{i}", {"need": "base"}, "base") for i in range(4)]
+        result = search_demos(model=model, predict=predict, evaluate=evaluate, render=self.render, prompt=PROMPT,
+                              pool=pool, scoring=scoring, cap=2, seed=1, config=CFG)
+        self.assertEqual({c.source for c in result.candidates}, {"labeled", "bootstrapped"})
+        self.assertIsNotNone(result.best)
