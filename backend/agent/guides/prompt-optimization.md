@@ -7,7 +7,9 @@ Prompts are improved from evidence, not by rewriting them blind:
 1. Run the prompt on a Dataset that has ground truth (a sampled subset is fine while iterating).
 2. Evaluate the Generate.
 3. Optimize the prompt using the evaluation results. An Optimize node analyses the unmatched rows and proposes concrete edits: the old
-   sentence, the new sentence and the reason.
+   sentence, the new sentence and the reason. With the default AnnoBio engine an edit is usually a whole rewritten
+   prompt (the old sentence is the entire prompt); it may also offer a worked-examples edit that appends solved
+   examples to the end of the prompt.
 4. Verify suggestions. Verification re-runs the prompt with the edit on the rows it targets and reports
    whether they now match, including rows the source prompt already had right.
 5. Accept the suggestions that verified, and apply them. Applying creates a new prompt version linked to
@@ -55,7 +57,11 @@ Evaluate's Optimize model), or else the default Optimize model from Settings →
 Optimize keeps the model it started with.
 
 Optimize nodes use the review method set in Settings → Optimize:
-- Thompson Prompt Search (the default): issue analysis followed by targeted sentence-level edits.
+- AnnoBio engine (the default): diagnoses the failed inputs (as many as "Failed inputs analyzed per Optimize"),
+  using the Evaluate's matching rules, then proposes whole-prompt rewrites (as many as "Rewrite proposals per
+  Optimize") and, when "Offer worked examples" is on, a worked-examples edit. Its cards are verified, optimized
+  (Click to Optimize) and applied like any other.
+- Thompson Prompt Search: issue analysis followed by targeted sentence-level edits.
 - GEPA: reflective evolution of the prompt across candidates.
 - MIPROv2: optimises instructions together with few-shot examples.
 - BootstrapFewShot with random search: optimises few-shot examples only.

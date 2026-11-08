@@ -457,6 +457,7 @@ interpretable, issue-guided edits. Use another method only when its search strat
 cost, and use of examples fit the study design.</p>
 <div class="docs-table-wrap"><table>
 <thead><tr><th>Method</th><th>What it changes</th></tr></thead><tbody>
+<tr><td>AnnoBio engine (default)</td><td>Diagnoses failures using the Evaluate's matching rules, then proposes whole-prompt rewrites and, optionally, a worked-examples edit; edits can undergo further local search.</td></tr>
 <tr><td>Thompson Prompt Search</td><td>Analyzes failures and proposes local instruction edits; supported edits can undergo further local search.</td></tr>
 <tr><td>GEPA</td><td>Reflective evolution of candidate instructions.</td></tr>
 <tr><td>MIPROv2</td><td>Instruction and few-shot example search.</td></tr>
