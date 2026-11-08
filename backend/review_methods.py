@@ -34,6 +34,7 @@ from review_bootstrap_fewshot import run_bootstrap_fewshot
 from review_copro import run_copro
 from review_gepa import run_gepa
 from review_miprov2 import run_miprov2
+from review_engine_v2 import run_engine_v2
 from review_pipeline import run_review_pipeline
 from review_simba import run_simba
 from safe_stdio import safe_print as _print
@@ -80,11 +81,26 @@ class ReviewMethodSpec:
         }
 
 
-DEFAULT_REVIEW_METHOD_ID = "issue_analysis_suggestions"
+# Engine v2 is the default since 2026-11-07 (user decision; python/ENGINE_V2_DESIGN.md 6.0l). The previous
+# built-in method stays registered under its id, so projects and settings that name it keep working.
+DEFAULT_REVIEW_METHOD_ID = "annobio_engine_v2"
+THOMPSON_REVIEW_METHOD_ID = "issue_analysis_suggestions"
 
 _ALL_METHODS: list[tuple[str, ReviewMethodSpec | None]] = [
     (DEFAULT_REVIEW_METHOD_ID, ReviewMethodSpec(
         id=DEFAULT_REVIEW_METHOD_ID,
+        label="AnnoBio engine (issue diagnosis + whole-prompt rewrites)",
+        stages=[
+            ReviewMethodStage(id="analysis", label="Issue analysis"),
+            ReviewMethodStage(id="suggestions", label="Suggested changes"),
+        ],
+        run=run_engine_v2,
+        # "Click to Optimize" stays available on its cards (user decision 2026-11-07: useful with a person in the
+        # loop); the compositional search handles whole-prompt cards (docs/design/SCORING_BACKEND_PLAN.md step 3).
+        supports_segment_optimization=True,
+    )),
+    (THOMPSON_REVIEW_METHOD_ID, ReviewMethodSpec(
+        id=THOMPSON_REVIEW_METHOD_ID,
         label="Thompson Prompt Search (issue-guided local search)",
         stages=[
             ReviewMethodStage(id="analysis", label="Issue analysis"),

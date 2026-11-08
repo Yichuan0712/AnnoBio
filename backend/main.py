@@ -181,6 +181,11 @@ DEFAULT_SETTINGS = {
     "review_max_failed_rows": 30,
     # Thompson-sampling trials per optimization run (4–200).
     "optimization_max_trials": 40,
+    # AnnoBio engine (default review method, review_engine_v2.py): failed inputs diagnosed per Optimize (1-200),
+    # whole-prompt rewrite proposals per Optimize (1-10), and whether to also offer the worked-examples card.
+    "engine_failed_inputs": 10,
+    "engine_num_proposals": 3,
+    "engine_offer_examples": True,
     # GEPA reflective-evolution max iterations (4-200); kept separate from optimization_max_trials because
     # each GEPA iteration runs the task model against every targeted input, not just a suggestion's rows.
     "gepa_max_iterations": 15,
@@ -267,6 +272,12 @@ class SettingsPatch(BaseModel):
         le=200,
         description="Maximum Thompson-sampling trials per compositional optimization run (4–200).",
     )
+    engine_failed_inputs: int | None = Field(default=None, ge=1, le=200,
+                                             description="AnnoBio engine: failed inputs diagnosed per Optimize.")
+    engine_num_proposals: int | None = Field(default=None, ge=1, le=10,
+                                             description="AnnoBio engine: whole-prompt rewrite proposals per Optimize.")
+    engine_offer_examples: bool | None = Field(default=None,
+                                               description="AnnoBio engine: also offer a worked-examples card.")
     gepa_max_iterations: int | None = Field(
         default=None,
         ge=4,
