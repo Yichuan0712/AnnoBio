@@ -331,13 +331,14 @@ Verify 和 Optimize 现在由前端自己运行，v2 改到后端。新增两个
 
 **操作不变。** 用户的操作与现在完全一样：点 Optimize → 看问题和修改卡片 → 点哪张验证哪张（不自动验证）→ 接受/撤销 → Apply。不加自动优化模式，不加优化风格设置。
 
-**新设置只有三项（设置 → Optimize 页签）：**
+**新设置只有两项（设置 → Optimize 页签，只在选 AnnoBio Optimizer 时显示；2026-11-08 用户改定）：**
 | 设置 | 默认 | 说明 |
 |---|---|---|
-| 每次分析的错题数 | 10 | 每次 Optimize 最多诊断几道错题，替换原"Max failed inputs per Optimize" |
-| 每次给出的修改方案数 | 3 | 每次 Optimize 生成几个修改后的 prompt |
-| 提供例子方案 | 开 | 额外给出例子搜索（实验 10.50）选出的例子方案卡片 |
+| Exploration intensity（探索强度） | 低 | 每次 Optimize 诊断几道错题、给几个整篇改写：低 4/1（正式实验的设置）、中 8/2、高 16/4 |
+| Enable few-shot optimization（启用 few-shot 优化） | 开 | 额外给出例子搜索（实验 10.50）选出的例子卡片 |
 修改方案只用实验验证过的做法（正式运行的整篇改写、10.50 例子搜索），不加新类型。每个 prompt 最多几道例子不给用户设置：默认 3，输入很长时自动降到 1（与实验相同）。
+
+**名字与旧方法（2026-11-08 用户决定）：** 新引擎在 app 里叫 **AnnoBio Optimizer**（方法 id 仍为 `annobio_engine_v2`），是默认方法；旧的内置方法 Thompson Prompt Search（`issue_analysis_suggestions`）从方法列表、设置和文档中删除，项目或设置里仍写着它的，后端自动改用 AnnoBio Optimizer。`backend/review_pipeline.py` 保留，因为 GEPA、MIPROv2 等方法共用其中整理修改卡片的函数。
 
 **必须把用户的匹配规则交给优化模型。** app 的打分回调构造 `Evaluation` 时，把该题用到的匹配规则写进 `Evaluation.feedback`（前端已随每行发送 `comparison_types`：每个字段的规则标签，或自定义 `match()` 代码；旧后端从未使用），逐字段对错写进 `details`。引擎诊断和改写时原样把 `Evaluation` 交给优化模型（`Session._evidence`），引擎代码不用改。实验中 `feedback` 为空、只用了 `details`（基准评分规则固定），所以这是比实验多给的一项信息。
 

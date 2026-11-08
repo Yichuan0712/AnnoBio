@@ -1,8 +1,7 @@
 """
 Registry of pluggable review methods.
 
-Each method drives the Review job the same way `review_pipeline.run_review_pipeline`
-always has: given the request body and a way to emit events, it produces one or more
+Each method drives the Review job the same way the original built-in pipeline did: given the request body and a way to emit events, it produces one or more
 `{"type": "suggestions", "suggestions": [...]}` events (PromptEditSuggestion-shaped
 dicts) and finishes with `{"type": "done"}`. Everything downstream of the Review job
 (suggestion accept/revert, prompt-edit application) only depends on that converged
@@ -35,7 +34,6 @@ from review_copro import run_copro
 from review_gepa import run_gepa
 from review_miprov2 import run_miprov2
 from review_engine_v2 import run_engine_v2
-from review_pipeline import run_review_pipeline
 from review_simba import run_simba
 from safe_stdio import safe_print as _print
 
@@ -81,15 +79,16 @@ class ReviewMethodSpec:
         }
 
 
-# Engine v2 is the default since 2026-11-07 (user decision; python/ENGINE_V2_DESIGN.md 6.0l). The previous
-# built-in method stays registered under its id, so projects and settings that name it keep working.
+# The AnnoBio Optimizer (engine v2) is the built-in method since 2026-11-07 (user decision; python/ENGINE_V2_DESIGN.md
+# 6.0l). The previous built-in method ("issue_analysis_suggestions", Thompson Prompt Search) was removed at the
+# user's request; a project or setting that still names it gets the default (get_review_method). review_pipeline.py
+# stays for the helpers the other methods share (PromptEditSuggestion, _sanitize_prompt_edits).
 DEFAULT_REVIEW_METHOD_ID = "annobio_engine_v2"
-THOMPSON_REVIEW_METHOD_ID = "issue_analysis_suggestions"
 
 _ALL_METHODS: list[tuple[str, ReviewMethodSpec | None]] = [
     (DEFAULT_REVIEW_METHOD_ID, ReviewMethodSpec(
         id=DEFAULT_REVIEW_METHOD_ID,
-        label="AnnoBio engine (issue diagnosis + whole-prompt rewrites)",
+        label="AnnoBio Optimizer",
         stages=[
             ReviewMethodStage(id="analysis", label="Issue analysis"),
             ReviewMethodStage(id="suggestions", label="Suggested changes"),
@@ -97,16 +96,6 @@ _ALL_METHODS: list[tuple[str, ReviewMethodSpec | None]] = [
         run=run_engine_v2,
         # "Click to Optimize" stays available on its cards (user decision 2026-11-07: useful with a person in the
         # loop); the compositional search handles whole-prompt cards (docs/design/SCORING_BACKEND_PLAN.md step 3).
-        supports_segment_optimization=True,
-    )),
-    (THOMPSON_REVIEW_METHOD_ID, ReviewMethodSpec(
-        id=THOMPSON_REVIEW_METHOD_ID,
-        label="Thompson Prompt Search (issue-guided local search)",
-        stages=[
-            ReviewMethodStage(id="analysis", label="Issue analysis"),
-            ReviewMethodStage(id="suggestions", label="Suggested changes"),
-        ],
-        run=run_review_pipeline,
         supports_segment_optimization=True,
     )),
     ("gepa", ReviewMethodSpec(

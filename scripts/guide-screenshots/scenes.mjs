@@ -44,7 +44,7 @@ async function addEvaluate({ evaluate, wait }, at = { reference: [380, 430], eva
   await evaluate(`
     const s = window.app.state();
     s.nodes.push({ type: 'dataset', nodeId: 'reference', name: 'Reviewed pairs', note: 'Expected pairs, checked by a curator.', left: ${at.reference[0]}, top: ${at.reference[1]}, colorIndex: 3, datasetContent: window.fixture.reference });
-    s.nodes.push({ type: 'score', nodeId: 'evaluate', scoreName: 'Evaluate pairs', left: ${at.evaluate[0]}, top: ${at.evaluate[1]}, scoreGroundTruthId: 'reference', scoreMapping: JSON.stringify(window.fixture.SCORE_MAPPING), reviewMethod: 'issue_analysis_suggestions', reviewCredentialId: 'cred-demo' });
+    s.nodes.push({ type: 'score', nodeId: 'evaluate', scoreName: 'Evaluate pairs', left: ${at.evaluate[0]}, top: ${at.evaluate[1]}, scoreGroundTruthId: 'reference', scoreMapping: JSON.stringify(window.fixture.SCORE_MAPPING), reviewMethod: 'annobio_engine_v2', reviewCredentialId: 'cred-demo' });
     s.connections.push({ type: 'run-to-score', fromId: 'generate', toId: 'evaluate' });
     await window.app.load(s);
     return true;`);
@@ -272,7 +272,7 @@ export const scenes = [
         const v2 = s.nodes.find(n => n.type === 'prompt' && n.nodeId !== 'prompt');
         v2.left = 1260; v2.top = 110;
         s.nodes.push({ type: 'run', nodeId: 'generate2', runName: 'Generate', left: 1260, top: 290, runCredentialId: 'cred-demo', runInputToColumn: JSON.stringify({ title: 'Title', abstract: 'Abstract' }) });
-        s.nodes.push({ type: 'score', nodeId: 'evaluate2', scoreName: 'Evaluate pairs v2', left: 1570, top: 290, scoreGroundTruthId: 'reference', scoreMapping: JSON.stringify(window.fixture.SCORE_MAPPING), reviewMethod: 'issue_analysis_suggestions', reviewCredentialId: 'cred-demo' });
+        s.nodes.push({ type: 'score', nodeId: 'evaluate2', scoreName: 'Evaluate pairs v2', left: 1570, top: 290, scoreGroundTruthId: 'reference', scoreMapping: JSON.stringify(window.fixture.SCORE_MAPPING), reviewMethod: 'annobio_engine_v2', reviewCredentialId: 'cred-demo' });
         s.connections.push({ type: 'prompt-to-run', fromId: v2.nodeId, toId: 'generate2' });
         s.connections.push({ type: 'data', fromId: 'abstracts', fromPort: 'result', toId: 'generate2' });
         s.connections.push({ type: 'run-to-score', fromId: 'generate2', toId: 'evaluate2' });
@@ -301,7 +301,7 @@ export const scenes = [
             { type: 'run', nodeId: 'generate', runName: 'Extract relations', left: 365, top: 205, runCredentialId: 'cred-demo', runInputToColumn: JSON.stringify({ title: 'Title', abstract: 'Abstract' }) },
             { type: 'process', nodeId: 'process', name: 'Tidy extracted pairs', left: 735, top: 205, activeMode: 'df', dfCode: f.PROCESS_CODE },
             { type: 'dataset', nodeId: 'reference', name: 'Reviewed pairs', note: 'Curator-checked reference data', left: 365, top: 500, colorIndex: 3, datasetContent: f.reference },
-            { type: 'score', nodeId: 'evaluate', scoreName: 'Evaluate extraction', left: 735, top: 460, scoreGroundTruthId: 'reference', scoreMapping: JSON.stringify(f.SCORE_MAPPING), reviewMethod: 'issue_analysis_suggestions', reviewCredentialId: 'cred-demo' },
+            { type: 'score', nodeId: 'evaluate', scoreName: 'Evaluate extraction', left: 735, top: 460, scoreGroundTruthId: 'reference', scoreMapping: JSON.stringify(f.SCORE_MAPPING), reviewMethod: 'annobio_engine_v2', reviewCredentialId: 'cred-demo' },
           ],
           connections: [
             { type: 'prompt-to-run', fromId: 'prompt', toId: 'generate' },
@@ -511,7 +511,7 @@ scenes.push({
       const v2 = s.nodes.find(n => n.type === 'prompt' && n.nodeId !== 'prompt');
       window.app.v2Id = v2.nodeId;
       s.nodes.push({ type: 'run', nodeId: 'generate2', runName: 'Generate v2', left: 0, top: 0, runCredentialId: 'cred-demo', runInputToColumn: JSON.stringify({ title: 'Title', abstract: 'Abstract' }) });
-      s.nodes.push({ type: 'score', nodeId: 'evaluate2', scoreName: 'Evaluate v2', left: 0, top: 0, scoreGroundTruthId: 'reference', scoreMapping: JSON.stringify(window.fixture.SCORE_MAPPING), reviewMethod: 'issue_analysis_suggestions', reviewCredentialId: 'cred-demo' });
+      s.nodes.push({ type: 'score', nodeId: 'evaluate2', scoreName: 'Evaluate v2', left: 0, top: 0, scoreGroundTruthId: 'reference', scoreMapping: JSON.stringify(window.fixture.SCORE_MAPPING), reviewMethod: 'annobio_engine_v2', reviewCredentialId: 'cred-demo' });
       s.connections.push({ type: 'prompt-to-run', fromId: v2.nodeId, toId: 'generate2' });
       s.connections.push({ type: 'data', fromId: 'abstracts', fromPort: 'result', toId: 'generate2' });
       s.connections.push({ type: 'run-to-score', fromId: 'generate2', toId: 'evaluate2' });

@@ -205,7 +205,13 @@ async function previewReview(job, ctx) {
   if (!credential) fail('No usable Optimize model: set a default Optimize model in Settings.');
   const rows = existing ? JSON.parse(existing.reviewResult || '{}').comparison_rows || [] : await ctx.getScoreComparisonRows(score.nodeId);
   const failingInputs = new Set(rows.filter((r) => r?.matched !== true).map((r) => r?.input_row_index ?? r?.row_index)).size;
-  const cap = Number(ctx.settings.review_max_failed_rows) || 30;
+  // The AnnoBio Optimizer (the default, also for a removed method id) diagnoses as many failed inputs as its
+  // exploration intensity allows; the other methods use "Max failed inputs per Optimize".
+  const methodId = String(score.reviewMethod || ctx.settings.default_review_method || '').trim();
+  const otherMethod = ['gepa', 'miprov2', 'bootstrap_fewshot', 'textgrad', 'copro', 'simba'].includes(methodId);
+  const cap = otherMethod
+    ? (Number(ctx.settings.review_max_failed_rows) || 30)
+    : ({ low: 4, medium: 8, high: 16 }[ctx.settings.engine_exploration] || 4);
   const analysed = Math.min(failingInputs, cap);
   const lines = [
     `${existing ? 'Resumes the existing Optimize' : 'Adds an Optimize node'} on Evaluate "${nodeTitle(score)}" (method: ${score.reviewMethod || ctx.settings.default_review_method || 'default'})`,

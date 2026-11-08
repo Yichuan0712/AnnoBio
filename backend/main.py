@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 import uuid
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 from urllib.parse import unquote
 
 import httpx
@@ -181,11 +181,11 @@ DEFAULT_SETTINGS = {
     "review_max_failed_rows": 30,
     # Thompson-sampling trials per optimization run (4–200).
     "optimization_max_trials": 40,
-    # AnnoBio engine (default review method, review_engine_v2.py): failed inputs diagnosed per Optimize (1-200),
-    # whole-prompt rewrite proposals per Optimize (1-10), and whether to also offer the worked-examples card.
-    "engine_failed_inputs": 10,
-    "engine_num_proposals": 3,
-    "engine_offer_examples": True,
+    # AnnoBio Optimizer (default review method, review_engine_v2.py): exploration intensity low / medium / high
+    # (failed inputs diagnosed and whole-prompt rewrites proposed per Optimize: 4/1, 8/2, 16/4; low = the formal
+    # experiments), and whether to also optimize few-shot examples (the worked-example card).
+    "engine_exploration": "low",
+    "engine_few_shot": True,
     # GEPA reflective-evolution max iterations (4-200); kept separate from optimization_max_trials because
     # each GEPA iteration runs the task model against every targeted input, not just a suggestion's rows.
     "gepa_max_iterations": 15,
@@ -272,12 +272,9 @@ class SettingsPatch(BaseModel):
         le=200,
         description="Maximum Thompson-sampling trials per compositional optimization run (4–200).",
     )
-    engine_failed_inputs: int | None = Field(default=None, ge=1, le=200,
-                                             description="AnnoBio engine: failed inputs diagnosed per Optimize.")
-    engine_num_proposals: int | None = Field(default=None, ge=1, le=10,
-                                             description="AnnoBio engine: whole-prompt rewrite proposals per Optimize.")
-    engine_offer_examples: bool | None = Field(default=None,
-                                               description="AnnoBio engine: also offer a worked-examples card.")
+    engine_exploration: Literal["low", "medium", "high"] | None = Field(
+        default=None, description="AnnoBio Optimizer exploration intensity (failed inputs / rewrites: 4/1, 8/2, 16/4).")
+    engine_few_shot: bool | None = Field(default=None, description="AnnoBio Optimizer: also optimize few-shot examples.")
     gepa_max_iterations: int | None = Field(
         default=None,
         ge=4,
@@ -498,7 +495,7 @@ class ReviewRequest(BaseModel):
     review_method: str | None = Field(default=None, description="Registered review method id (backend/review_methods.py); defaults to the legacy issue-analysis + suggested-changes pipeline")
     score_mapping: str | None = Field(default=None, description="Serialized Score rule-tree bundle (scoreMappingBundle.js) from the upstream Score node; only methods that self-score candidates (e.g. gepa) need this")
     settings_overrides: dict | None = Field(default=None, description="Per-Score-node Review settings (REVIEW_SETTINGS_OVERRIDE_KEYS)")
-    # What Verify already uses, for methods that run and score candidates in the backend (the AnnoBio engine's
+    # What Verify already uses, for methods that run and score candidates in the backend (the AnnoBio Optimizer's
     # worked-example card; review_engine_hooks.py). All optional: without them that card is simply not offered.
     run_credential_id: str | None = Field(default=None, description="The upstream Generate node's model credential")
     run_settings: dict | None = Field(default=None, description="The Generate node's run settings (RUN_SETTINGS_OVERRIDE_KEYS)")
@@ -2029,7 +2026,7 @@ def list_review_methods_endpoint():
 
 @app.post("/api/review/analyze")
 def review_analyze(body: ReviewRequest):
-    """Start review job in background; returns 202 with review_id. Poll GET /api/review/result/{review_id}. Pipeline: review_pipeline.py (per-row analysis → localized prompt edits)."""
+    """Start review job in background; returns 202 with review_id. Poll GET /api/review/result/{review_id}. Methods: review_methods.py (default: the AnnoBio Optimizer, review_engine_v2.py)."""
     from review_methods import get_review_method
 
     review_id = str(uuid.uuid4())
@@ -3649,7 +3646,7 @@ def cancel_process_df_run(job_id: str):
     return {"ok": True, "status": "cancelling"}
 
 
-# ---------- Review analyze worker (delegates to review_pipeline.py) ----------
+# ---------- Review analyze worker (delegates to the registered review method) ----------
 def _review_is_cancelled(review_id: str | None) -> bool:
     """Check if client requested cancellation for this review job."""
     if not review_id:
@@ -3686,7 +3683,7 @@ def _engine_task_hooks(body: ReviewRequest, st: dict) -> dict:
 
 
 def _do_review_work(review_id: str, body: ReviewRequest) -> None:
-    """Validate credential; run review_pipeline.run_review_pipeline; finalize job status."""
+    """Validate credential; run the registered review method; finalize job status."""
 
     def append_event(ev: dict) -> None:
         with _review_jobs_lock:
@@ -3737,7 +3734,7 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
             max_failed = DEFAULT_SETTINGS["review_max_failed_rows"]
         max_failed = max(1, min(200, max_failed))
 
-        if review_method.id == "annobio_engine_v2" and st.get("engine_offer_examples", True):
+        if review_method.id == "annobio_engine_v2" and st.get("engine_few_shot", True):
             try:
                 st = {**st, **_engine_task_hooks(body, st)}
             except Exception as e:  # the rewrites still come; only the worked-example card is left out
@@ -3784,6 +3781,7 @@ class OptimizationSegmentsRequest(BaseModel):
     new_sentence: str = Field(..., description="Improved sentence to split into segments")
     improvement_rationale: str = Field(default="", description="Why this change was proposed")
     max_segments: int = Field(default=5, ge=1, le=8, description="Max number of segments (1–8)")
+    whole_prompt: bool = Field(default=False, description="The card replaces the whole prompt (split locally, whitespace kept)")
 
 
 class OptimizationCandidatesRequest(BaseModel):
@@ -3829,6 +3827,7 @@ def optimization_segments(body: OptimizationSegmentsRequest):
             new_sentence=body.new_sentence,
             improvement_rationale=body.improvement_rationale,
             max_segments=body.max_segments,
+            whole_prompt=body.whole_prompt,
         )
     except Exception as e:
         _safe_print(_HL + "[Optimization] /segments ERROR" + _R + f"  {e}")

@@ -8,10 +8,11 @@ What the engine does with the evaluation the user already ran (no task-model cal
     Score node's verdicts; the input passes only when every scoring row matched (the app's rule);
   * the user's matching rules (comparison_types: per-field rule labels or the custom match() code) go to the
     optimization model in Evaluation.feedback, the per-row verdicts in Evaluation.details;
-  * diagnosis of up to `engine_failed_inputs` failed inputs (每次分析的错题数), then `engine_num_proposals`
-    whole-prompt rewrite cards (每次给出的修改方案数) - the rewrite the formal experiments used;
-  * the worked-example card (提供例子方案; engine.search_demos) needs the task model and backend scoring and is
-    added in a later step (docs/design/SCORING_BACKEND_PLAN.md step 3).
+  * exploration intensity (`engine_exploration`, 探索强度): low / medium / high diagnoses 4 / 8 / 16 failed inputs
+    and proposes 1 / 2 / 4 whole-prompt rewrite cards - the rewrite the formal experiments used (low = their
+    settings: four failed inputs per rewrite, one rewrite per round);
+  * few-shot optimization (`engine_few_shot`, 启用 few-shot 优化): the worked-example card (engine.search_demos),
+    when the request carries the task model and the Evaluate's scoring (review_engine_hooks.py).
 """
 from __future__ import annotations
 
@@ -24,8 +25,8 @@ from annobio_optimize import Evaluation, Example, Observation
 from annobio_optimize.engine import EngineConfig, EngineStopped, Session
 from llm import run_structured as llm_run_structured
 
-DEFAULT_FAILED_INPUTS = 10
-DEFAULT_PROPOSALS = 3
+EXPLORATION = {"low": (4, 1), "medium": (8, 2), "high": (16, 4)}  # failed inputs diagnosed, rewrites proposed
+DEFAULT_EXPLORATION = "low"
 EVIDENCE_EXAMPLES = 4  # full evidence shown per rewrite (the formal experiments' max_evidence_examples)
 
 
@@ -124,8 +125,8 @@ def run_engine_v2(*, provider: str, model: str, api_key: str, base_url: str, bod
                   max_failed_inputs: int, is_cancelled: Callable[[], bool], append_event: Callable[[dict], None],
                   settings: dict | None = None, llm_call=None) -> None:
     settings = settings or {}
-    failed_cap = int(settings.get("engine_failed_inputs", DEFAULT_FAILED_INPUTS))
-    proposals = int(settings.get("engine_num_proposals", DEFAULT_PROPOSALS))
+    failed_cap, proposals = EXPLORATION.get(str(settings.get("engine_exploration") or DEFAULT_EXPLORATION),
+                                            EXPLORATION[DEFAULT_EXPLORATION])
     examples, observations, rows_of, number_of = build_inputs(list(body.comparison_rows or []))
     prompt = body.prompt or ""
     if not examples or not prompt.strip():
@@ -175,7 +176,7 @@ def run_engine_v2(*, provider: str, model: str, api_key: str, base_url: str, bod
         if suggestions:
             append_event({"type": "suggestions", "suggestions": suggestions})
         run_row, score_input = settings.get("_run_row"), settings.get("_score_input")
-        if settings.get("engine_offer_examples", True) and run_row is not None and score_input is not None:
+        if settings.get("engine_few_shot", True) and run_row is not None and score_input is not None:
             card = example_card(prompt=prompt, examples=examples, observations=observations, rows_of=rows_of,
                                 model_call=model_call, run_row=run_row, score_input=score_input,
                                 is_cancelled=is_cancelled)
@@ -287,9 +288,10 @@ def example_card(*, prompt: str, examples: list[Example], observations: list[Obs
               "bootstrapped": "inputs the prompt already got right"}[best.source]
     with_notes = ", with explanations" if best.explained else ""
     base = result.base_full_score if result.base_full_score is not None else 0.0
+    count = len(best.example_ids)
     reason = (f"Best of {len(result.candidates)} worked-example sets on {len(scoring_ex)} held-out inputs: "
-              f"{best.full_score:.2f} with these examples vs {base:.2f} without. Examples: {len(best.example_ids)} "
-              f"{source}{with_notes}.")
+              f"{best.full_score:.2f} with these examples vs {base:.2f} without. "
+              f"{count} example{'s' if count != 1 else ''} from {source}{with_notes}.")
     return {"name": "Add worked examples", "phase1_addresses": [f"Worked examples from {source}"[:500]],
             "old_sentence": anchor, "new_sentence": anchor + block, "reason": reason,
             "target_score_row_indices": targets, "row_indices": targets, "engine_card_kind": "demos",

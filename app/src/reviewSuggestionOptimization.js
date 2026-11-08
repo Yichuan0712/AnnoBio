@@ -239,6 +239,8 @@ export async function runSuggestionOptimizationCompositional(options) {
         new_sentence: proposal,
         improvement_rationale: improvementRationale,
         max_segments: Math.min(8, Math.max(1, Number(maxSegments) || 5)),
+        // A whole-prompt card (its old text is the entire prompt) is split locally with its whitespace kept.
+        whole_prompt: String(oldSentence || '').trim() !== '' && String(oldSentence || '').trim() === String(originalText || '').trim(),
       }),
     });
     const segData = await segRes.json().catch(() => ({}));

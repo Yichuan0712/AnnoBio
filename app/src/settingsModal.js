@@ -55,12 +55,11 @@ const MODEL_SETTINGS_DEFAULTS = {
   review_max_failed_rows: 30,
   /** Thompson-sampling trials per compositional optimization run (4–200). */
   optimization_max_trials: 40,
-  /** AnnoBio engine (default method): failed inputs diagnosed per Optimize (1–200). */
-  engine_failed_inputs: 10,
-  /** AnnoBio engine: whole-prompt rewrite proposals per Optimize (1–10). */
-  engine_num_proposals: 3,
-  /** AnnoBio engine: also offer a worked-examples card (the example search). */
-  engine_offer_examples: true,
+  /** AnnoBio Optimizer: exploration intensity — failed inputs diagnosed / rewrites proposed per Optimize:
+   * low 4/1 (the formal experiments), medium 8/2, high 16/4. */
+  engine_exploration: 'low',
+  /** AnnoBio Optimizer: also optimize few-shot examples (a worked-examples card). */
+  engine_few_shot: true,
   /** Show Reset & Debug buttons on suggestion cards. */
   debug_mode: false,
 };
@@ -853,27 +852,27 @@ export function openSettingsModal() {
                               <label class="dataset-meta-label" for="settings-review-max-tokens">Max tokens (256–131072)</label>
                               <input type="number" id="settings-review-max-tokens" class="dataset-meta-input" min="256" max="131072" value="32768" aria-label="Optimize max tokens" />
                             </div>
-                            <div class="defaults-field settings-review-method-specific" data-method-settings="issue_analysis_suggestions gepa miprov2 bootstrap_fewshot textgrad copro simba" hidden>
+                            <div class="defaults-field settings-review-method-specific" data-method-settings="gepa miprov2 bootstrap_fewshot textgrad copro simba" hidden>
                               <label class="dataset-meta-label" for="settings-review-max-failed-rows">Max failed inputs per Optimize (1–200)</label>
                               <input type="number" id="settings-review-max-failed-rows" class="dataset-meta-input" min="1" max="200" value="30" aria-label="Max inputs with failures analyzed per Optimize" />
                             </div>
                             <div class="defaults-field settings-review-method-specific" data-method-settings="annobio_engine_v2" hidden>
-                              <label class="dataset-meta-label" for="settings-engine-failed-inputs">Failed inputs analyzed per Optimize (1–200)</label>
-                              <input type="number" id="settings-engine-failed-inputs" class="dataset-meta-input" min="1" max="200" value="10" aria-label="Failed inputs analyzed per Optimize" />
-                            </div>
-                            <div class="defaults-field settings-review-method-specific" data-method-settings="annobio_engine_v2" hidden>
-                              <label class="dataset-meta-label" for="settings-engine-num-proposals">Rewrite proposals per Optimize (1–10)</label>
-                              <input type="number" id="settings-engine-num-proposals" class="dataset-meta-input" min="1" max="10" value="3" aria-label="Rewrite proposals per Optimize" />
+                              <label class="dataset-meta-label" for="settings-engine-exploration">Exploration intensity</label>
+                              <select id="settings-engine-exploration" class="dataset-meta-input" aria-label="Exploration intensity">
+                                <option value="low">Low — 4 failed inputs, 1 proposal</option>
+                                <option value="medium">Medium — 8 failed inputs, 2 proposals</option>
+                                <option value="high">High — 16 failed inputs, 4 proposals</option>
+                              </select>
                             </div>
                             <div class="defaults-field settings-review-method-specific" data-method-settings="annobio_engine_v2" hidden>
                               <label class="dataset-meta-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-                                <input type="checkbox" id="settings-engine-offer-examples" aria-label="Offer worked examples" />
-                                Offer worked examples
+                                <input type="checkbox" id="settings-engine-few-shot" aria-label="Enable few-shot optimization" />
+                                Enable few-shot optimization
                               </label>
                             </div>
-                            <div class="defaults-field settings-review-method-specific" data-method-settings="issue_analysis_suggestions annobio_engine_v2" hidden>
+                            <div class="defaults-field settings-review-method-specific" data-method-settings="annobio_engine_v2" hidden>
                               <label class="dataset-meta-label" for="settings-optimization-max-trials">Max trials per optimization run (4–200)</label>
-                              <input type="number" id="settings-optimization-max-trials" class="dataset-meta-input" min="4" max="200" value="40" aria-label="Optimization max Thompson-sampling trials" title="Used by the suggestion-card 'Optimize' pill (Thompson-sampling segment search) of the AnnoBio engine and Thompson Prompt Search." />
+                              <input type="number" id="settings-optimization-max-trials" class="dataset-meta-input" min="4" max="200" value="40" aria-label="Optimization max Thompson-sampling trials" title="Used by the suggestion-card 'Optimize' pill (Thompson-sampling segment search) of the AnnoBio Optimizer." />
                             </div>
                             <!-- Hidden: a developer switch. Its saved value still applies (Restore defaults turns it off). -->
                             <div class="defaults-field defaults-field--full" style="margin-top:0.5rem;" hidden>
@@ -957,9 +956,8 @@ export function openSettingsModal() {
   const runMaxRetriesInp = overlay.querySelector('#settings-run-max-retries');
   const runConcurrencyInp = overlay.querySelector('#settings-run-concurrency');
   const optimizationMaxTrialsInp = overlay.querySelector('#settings-optimization-max-trials');
-  const engineFailedInputsInp = overlay.querySelector('#settings-engine-failed-inputs');
-  const engineNumProposalsInp = overlay.querySelector('#settings-engine-num-proposals');
-  const engineOfferExamplesChk = overlay.querySelector('#settings-engine-offer-examples');
+  const engineExplorationSel = overlay.querySelector('#settings-engine-exploration');
+  const engineFewShotChk = overlay.querySelector('#settings-engine-few-shot');
   const debugModeChk = overlay.querySelector('#settings-debug-mode');
   const tabBar = overlay.querySelector('.model-settings-view-switch');
   const tabs = tabBar ? tabBar.querySelectorAll('.review-detail-tab[data-tab]') : [];
@@ -1374,9 +1372,8 @@ export function openSettingsModal() {
     runMaxRetriesInp.value = String(settings.run_max_retries ?? MODEL_SETTINGS_DEFAULTS.run_max_retries);
     runConcurrencyInp.value = String(settings.run_concurrency ?? MODEL_SETTINGS_DEFAULTS.run_concurrency);
     optimizationMaxTrialsInp.value = String(settings.optimization_max_trials ?? MODEL_SETTINGS_DEFAULTS.optimization_max_trials);
-    engineFailedInputsInp.value = String(settings.engine_failed_inputs ?? MODEL_SETTINGS_DEFAULTS.engine_failed_inputs);
-    engineNumProposalsInp.value = String(settings.engine_num_proposals ?? MODEL_SETTINGS_DEFAULTS.engine_num_proposals);
-    engineOfferExamplesChk.checked = settings.engine_offer_examples ?? MODEL_SETTINGS_DEFAULTS.engine_offer_examples;
+    engineExplorationSel.value = ['low', 'medium', 'high'].includes(settings.engine_exploration) ? settings.engine_exploration : MODEL_SETTINGS_DEFAULTS.engine_exploration;
+    engineFewShotChk.checked = settings.engine_few_shot ?? MODEL_SETTINGS_DEFAULTS.engine_few_shot;
     debugModeChk.checked = settings.debug_mode ?? MODEL_SETTINGS_DEFAULTS.debug_mode;
     // A loaded settings object (not Restore defaults) replaces what the model fields edit.
     if (settings.model_settings) {
@@ -1458,10 +1455,7 @@ export function openSettingsModal() {
     );
     const optimizationMaxTrialsParsed = parseInt(optimizationMaxTrialsInp.value, 10);
     const optimizationMaxTrials = Math.min(200, Math.max(4, Number.isNaN(optimizationMaxTrialsParsed) ? MODEL_SETTINGS_DEFAULTS.optimization_max_trials : optimizationMaxTrialsParsed));
-    const engineFailedInputsParsed = parseInt(engineFailedInputsInp.value, 10);
-    const engineFailedInputs = Math.min(200, Math.max(1, Number.isNaN(engineFailedInputsParsed) ? MODEL_SETTINGS_DEFAULTS.engine_failed_inputs : engineFailedInputsParsed));
-    const engineNumProposalsParsed = parseInt(engineNumProposalsInp.value, 10);
-    const engineNumProposals = Math.min(10, Math.max(1, Number.isNaN(engineNumProposalsParsed) ? MODEL_SETTINGS_DEFAULTS.engine_num_proposals : engineNumProposalsParsed));
+    const engineExploration = ['low', 'medium', 'high'].includes(engineExplorationSel.value) ? engineExplorationSel.value : MODEL_SETTINGS_DEFAULTS.engine_exploration;
     const gepaMaxIterationsParsed = parseInt(gepaMaxIterationsInp?.value, 10);
     const gepaMaxIterations = Math.min(200, Math.max(4, Number.isNaN(gepaMaxIterationsParsed) ? MODEL_SETTINGS_DEFAULTS.gepa_max_iterations : gepaMaxIterationsParsed));
     const miprov2NumTrialsParsed = parseInt(miprov2NumTrialsInp?.value, 10);
@@ -1498,9 +1492,8 @@ export function openSettingsModal() {
       run_max_retries: runMaxRetries,
       run_concurrency: runConcurrency,
       optimization_max_trials: optimizationMaxTrials,
-      engine_failed_inputs: engineFailedInputs,
-      engine_num_proposals: engineNumProposals,
-      engine_offer_examples: engineOfferExamplesChk.checked,
+      engine_exploration: engineExploration,
+      engine_few_shot: engineFewShotChk.checked,
       debug_mode: debugModeChk.checked,
       // The model fields on the page show the chosen model's values; the shared ones come from modelState.
       ...modelState.shared,

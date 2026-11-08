@@ -74,9 +74,8 @@ researchers have published, with their Prompts, Datasets, and scores.
   ChEBI, MONDO), and you can inspect every mismatch.
 - Optimize a Prompt from its evaluation failures, review each proposed change, and compare
   versions on data not used for the search. Methods:
-  - **AnnoBio engine** (default): diagnoses failures using the Evaluate's matching rules and
-    proposes whole-prompt rewrites, optionally with a worked-examples edit.
-  - **Thompson Prompt Search**: analyzes failures and proposes local instruction edits.
+  - **AnnoBio Optimizer** (default): diagnoses failures using the Evaluate's matching rules and
+    proposes whole-prompt rewrites, optionally with a few-shot (worked-examples) edit.
   - **GEPA**: reflective evolution of candidate instructions.
   - **MIPROv2**: instruction and few-shot example search.
   - **COPRO**: instruction-only search.

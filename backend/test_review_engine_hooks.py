@@ -77,7 +77,7 @@ class HookTests(unittest.TestCase):
         body = SimpleNamespace(prompt=PROMPT, comparison_rows=comparison_rows())
         run_engine_v2(provider="", model="", api_key="", base_url="", body=body, max_tokens=100, max_failed_inputs=30,
                       is_cancelled=lambda: False, append_event=events.append,
-                      settings={"engine_num_proposals": 1, "_run_row": run_row, "_score_input": score}, llm_call=Model())
+                      settings={"_run_row": run_row, "_score_input": score}, llm_call=Model())
         cards = [s for e in events if e["type"] == "suggestions" for s in e["suggestions"]]
         demos = [c for c in cards if c.get("engine_card_kind") == "demos"]
         self.assertEqual(len(demos), 1)

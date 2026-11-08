@@ -32,8 +32,11 @@ LOCAL_SPLIT_MIN_CHARS = 1200
 
 
 def split_paragraphs(text: str, max_segments: int) -> list[str]:
-    """Contiguous segments of `text` at paragraph (or line) boundaries; "".join(result) == text."""
+    """Contiguous segments of `text` at paragraph (or line) boundaries, else at sentence ends for a one-line text;
+    "".join(result) == text (each piece keeps the whitespace that follows it)."""
     pieces = [p for p in re.split(r"(?<=\n)(?=[^\S\n]*\S)", text) if p]  # each piece ends with its own line break(s)
+    if len(pieces) <= 1:
+        pieces = [p for p in re.split(r"(?<=[.!?;:]\s)(?=\S)", text) if p]  # a sentence keeps its trailing space
     if len(pieces) <= 1:
         return [text]
     ms = max(1, max_segments)
@@ -60,13 +63,14 @@ def compositional_optimization_segments(
     new_sentence: str,
     improvement_rationale: str,
     max_segments: int = 5,
+    whole_prompt: bool = False,
 ) -> list[str]:
     new_sentence = (new_sentence or "").strip()
     if not new_sentence:
         return []
 
     ms = max(2, min(8, int(max_segments or 5)))
-    if len(new_sentence) >= LOCAL_SPLIT_MIN_CHARS or "\n" in new_sentence:
+    if whole_prompt or len(new_sentence) >= LOCAL_SPLIT_MIN_CHARS or "\n" in new_sentence:
         parts = split_paragraphs(new_sentence, ms)
         _print(f"[Optimization] ── local paragraph split: {len(parts)} segment(s) of a {len(new_sentence)}-char text")
         return parts

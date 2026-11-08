@@ -54,7 +54,7 @@ def run(settings=None, comparison_rows=None, cancelled=lambda: False):
 
 class EngineV2MethodTests(unittest.TestCase):
     def test_event_stream_and_cards(self):
-        model, events = run({"engine_num_proposals": 2})
+        model, events = run({"engine_exploration": "medium"})  # 8 failed inputs, 2 rewrites
         kinds = [e["type"] for e in events]
         self.assertEqual(kinds[0], "plan")
         self.assertEqual(kinds[-1], "done")
@@ -66,7 +66,7 @@ class EngineV2MethodTests(unittest.TestCase):
             self.assertEqual(set(d["opinion"]), {"card_title", "issue_summary", "rough_modification_opinion",
                                                  "problem_category_hint", "gt_suspect_note"})
         suggestions = next(e for e in events if e["type"] == "suggestions")["suggestions"]
-        self.assertEqual(len(suggestions), 2)  # 每次给出的修改方案数
+        self.assertEqual(len(suggestions), 2)  # medium: two rewrites
         for s in suggestions:
             self.assertEqual(s["old_sentence"], PROMPT)  # whole-prompt card
             self.assertTrue(s["new_sentence"].startswith(PROMPT))
@@ -82,10 +82,16 @@ class EngineV2MethodTests(unittest.TestCase):
         self.assertIn("drug: exact (ignore case)", diagnose.payload["evaluation"]["feedback"])
         self.assertIn("matched", json.dumps(diagnose.payload["evaluation"]["details"]))
 
-    def test_failed_input_cap(self):
-        model, events = run({"engine_failed_inputs": 1, "engine_num_proposals": 1})
-        self.assertEqual(events[0]["diagnosis_total"], 1)
-        self.assertEqual(sum(1 for c in model.calls if c.stage == "diagnose"), 1)
+    def test_exploration_levels(self):
+        many = [dict(r, row_index=i, input_row_index=i, matched=False, gt_only=False)
+                for i, r in enumerate([rows()[1]] * 20)]
+        for level, (failed, proposals) in (("low", (4, 1)), ("medium", (8, 2)), ("high", (16, 4))):
+            model, events = run({"engine_exploration": level}, comparison_rows=many)
+            self.assertEqual(events[0]["diagnosis_total"], failed, level)
+            self.assertEqual(sum(1 for c in model.calls if c.stage == "diagnose"), failed, level)
+            self.assertEqual(sum(1 for c in model.calls if c.stage == "rewrite"), proposals, level)
+        model, events = run({}, comparison_rows=many)  # default: low, the formal experiments' setting
+        self.assertEqual(events[0]["diagnosis_total"], 4)
 
     def test_nothing_failed(self):
         all_matched = [dict(r, matched=True, gt_only=False) for r in rows()]
@@ -142,7 +148,7 @@ class ExampleCardTests(unittest.TestCase):
         def score_input(example_id, outputs):
             ok = bool(outputs) and str(outputs[0].get("drug", "")).lower() == gt[example_id]
             return (1 if ok else 0, 1)
-        self.settings = {"engine_num_proposals": 1, "_run_row": run_row, "_score_input": score_input}
+        self.settings = {"_run_row": run_row, "_score_input": score_input}
 
     def run_method(self, settings, comparison_rows=None):
         model, events = ExampleModel(), []
@@ -168,11 +174,11 @@ class ExampleCardTests(unittest.TestCase):
         self.assertIn("held-out inputs", card["reason"])
 
     def test_no_example_card_when_switched_off_or_too_few_inputs(self):
-        _, events = self.run_method({**self.settings, "engine_offer_examples": False})
+        _, events = self.run_method({**self.settings, "engine_few_shot": False})
         self.assertEqual(sum(1 for e in events if e["type"] == "suggestions"), 1)
         _, events = self.run_method(self.settings, comparison_rows=many_rows()[:5])
         self.assertEqual(sum(1 for e in events if e["type"] == "suggestions"), 1)
-        _, events = self.run_method({"engine_num_proposals": 1})  # no task model or scoring wired in
+        _, events = self.run_method({})  # no task model or scoring wired in
         self.assertEqual(sum(1 for e in events if e["type"] == "suggestions"), 1)
 
 
@@ -180,12 +186,10 @@ class EngineSettingsTests(unittest.TestCase):
     def test_defaults_and_validation(self):
         from pydantic import ValidationError
         from main import DEFAULT_SETTINGS, SettingsPatch
-        self.assertEqual((DEFAULT_SETTINGS["engine_failed_inputs"], DEFAULT_SETTINGS["engine_num_proposals"],
-                          DEFAULT_SETTINGS["engine_offer_examples"]), (10, 3, True))
-        patch = SettingsPatch(engine_failed_inputs=25, engine_num_proposals=5, engine_offer_examples=False)
-        self.assertEqual(patch.model_dump(exclude_none=True),
-                         {"engine_failed_inputs": 25, "engine_num_proposals": 5, "engine_offer_examples": False})
-        for bad in ({"engine_failed_inputs": 0}, {"engine_num_proposals": 11}):
+        self.assertEqual((DEFAULT_SETTINGS["engine_exploration"], DEFAULT_SETTINGS["engine_few_shot"]), ("low", True))
+        patch = SettingsPatch(engine_exploration="high", engine_few_shot=False)
+        self.assertEqual(patch.model_dump(exclude_none=True), {"engine_exploration": "high", "engine_few_shot": False})
+        for bad in ({"engine_exploration": "extreme"}, {"engine_exploration": 3}):
             with self.assertRaises(ValidationError):
                 SettingsPatch(**bad)
 
@@ -193,7 +197,9 @@ class EngineSettingsTests(unittest.TestCase):
         import review_methods
         ids = [m["id"] for m in review_methods.list_review_methods()]
         self.assertEqual(ids[0], "annobio_engine_v2")
-        self.assertIn("issue_analysis_suggestions", ids)
+        self.assertNotIn("issue_analysis_suggestions", ids)  # the previous built-in method was removed
+        self.assertEqual(review_methods.get_review_method("issue_analysis_suggestions").id, "annobio_engine_v2")
+        self.assertEqual(review_methods.list_review_methods()[0]["label"], "AnnoBio Optimizer")
         self.assertEqual(review_methods.get_review_method(None).id, "annobio_engine_v2")
         self.assertTrue(review_methods.get_review_method(None).supports_segment_optimization)
 

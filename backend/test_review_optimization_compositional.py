@@ -42,6 +42,27 @@ class SplitTests(unittest.TestCase):
         self.assertLessEqual(len(parts), 4)
         self.assertGreater(len(parts), 1)
 
+    def test_one_line_whole_prompt_splits_at_sentences_keeping_spaces(self):
+        text = "Identify the sentiment. Review: {text} Return the label only. Use favorable or unfavorable."
+        parts = comp.split_paragraphs(text, 3)
+        self.assertEqual("".join(parts), text)
+        self.assertGreater(len(parts), 1)
+        parts, calls = self.call_whole(text)
+        self.assertEqual(calls, [])
+        self.assertEqual("".join(parts), text)
+
+    def call_whole(self, new_sentence):
+        calls = []
+        original = comp.llm_chat
+        comp.llm_chat = lambda **kw: calls.append(kw)
+        try:
+            parts = comp.compositional_optimization_segments(
+                provider="p", model="m", api_key="k", base_url="", max_tokens=8192, old_sentence="old prompt",
+                new_sentence=new_sentence, improvement_rationale="why", max_segments=4, whole_prompt=True)
+        finally:
+            comp.llm_chat = original
+        return parts, calls
+
     def test_short_sentence_keeps_the_model_split(self):
         parts, calls = self.call("Return every drug name, including brands.",
                                  '{"segments": ["Return every drug name,", " including brands."]}')

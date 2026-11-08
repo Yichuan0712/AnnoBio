@@ -298,7 +298,7 @@ window.fetch = async (url, opts = {}) => {
   else if (u.endsWith('/api/credentials')) body = window.mockState.credentials;
   else if (u.includes('/api/credentials/')) body = credential;
   else if (u.includes('/api/review/methods')) body = [
-    { id: 'issue_analysis_suggestions', label: 'Thompson Prompt Search (issue-guided local search)', name: 'Thompson Prompt Search', supports_segment_optimization: true },
+    { id: 'annobio_engine_v2', label: 'AnnoBio Optimizer', name: 'AnnoBio Optimizer', supports_segment_optimization: true },
     { id: 'gepa', label: 'GEPA (reflective evolution)', name: 'GEPA' },
     { id: 'miprov2', label: 'MIPROv2 (instructions + few-shot)', name: 'MIPROv2' },
   ];
@@ -317,7 +317,7 @@ window.fetch = async (url, opts = {}) => {
     const results = runResultsFor(lastCall('/api/run'));
     body = { status: 'done', progress: 100, completed: ABSTRACTS.length, total: ABSTRACTS.length, results, output_fields: OUTPUT_FIELDS };
   }
-  else if (u.endsWith('/api/review/analyze')) { body = { review_id: 'review-job', review_method_id: 'issue_analysis_suggestions' }; status = 202; }
+  else if (u.endsWith('/api/review/analyze')) { body = { review_id: 'review-job', review_method_id: 'annobio_engine_v2' }; status = 202; }
   else if (u.includes('/api/review/result/')) body = { status: 'done', events: reviewEvents() };
   else if (u.includes('/api/projects/') && u.endsWith('/run-records')) body = { version: 1, records: [] };
   else if (opts.method && opts.method !== 'GET') body = {};
