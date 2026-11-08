@@ -34,6 +34,7 @@ from review_copro import run_copro
 from review_gepa import run_gepa
 from review_miprov2 import run_miprov2
 from review_engine_v2 import run_engine_v2
+from review_prompt_search import run_ape, run_evoprompt
 from review_simba import run_simba
 from safe_stdio import safe_print as _print
 
@@ -100,7 +101,7 @@ _ALL_METHODS: list[tuple[str, ReviewMethodSpec | None]] = [
     )),
     ("gepa", ReviewMethodSpec(
         id="gepa",
-        label="GEPA (reflective evolution)",
+        label="GEPA",
         stages=[
             ReviewMethodStage(id="seed", label="Seed"),
             ReviewMethodStage(id="evolve", label="Evolve"),
@@ -110,7 +111,7 @@ _ALL_METHODS: list[tuple[str, ReviewMethodSpec | None]] = [
     )),
     ("miprov2", ReviewMethodSpec(
         id="miprov2",
-        label="MIPROv2 (instructions + few-shot)",
+        label="MIPROv2",
         stages=[
             ReviewMethodStage(id="prepare", label="Prepare"),
             ReviewMethodStage(id="compile", label="Compile"),
@@ -120,7 +121,7 @@ _ALL_METHODS: list[tuple[str, ReviewMethodSpec | None]] = [
     )),
     ("bootstrap_fewshot", ReviewMethodSpec(
         id="bootstrap_fewshot",
-        label="BootstrapFewShotWithRandomSearch (few-shot only)",
+        label="BootstrapRS",
         stages=[
             ReviewMethodStage(id="prepare", label="Prepare"),
             ReviewMethodStage(id="compile", label="Compile"),
@@ -130,7 +131,7 @@ _ALL_METHODS: list[tuple[str, ReviewMethodSpec | None]] = [
     )),
     ("textgrad", None if run_textgrad is None else ReviewMethodSpec(
         id="textgrad",
-        label="TextGrad (textual gradient descent)",
+        label="TextGrad",
         stages=[
             ReviewMethodStage(id="prepare", label="Prepare"),
             ReviewMethodStage(id="optimize", label="Optimize"),
@@ -138,9 +139,29 @@ _ALL_METHODS: list[tuple[str, ReviewMethodSpec | None]] = [
         ],
         run=run_textgrad,
     )),
+    ("ape", ReviewMethodSpec(
+        id="ape",
+        label="APE",
+        stages=[
+            ReviewMethodStage(id="propose", label="Propose"),
+            ReviewMethodStage(id="search", label="Search"),
+            ReviewMethodStage(id="select", label="Select"),
+        ],
+        run=run_ape,
+    )),
+    ("evoprompt", ReviewMethodSpec(
+        id="evoprompt",
+        label="EvoPrompt",
+        stages=[
+            ReviewMethodStage(id="seed", label="Seed"),
+            ReviewMethodStage(id="evolve", label="Evolve"),
+            ReviewMethodStage(id="select", label="Select"),
+        ],
+        run=run_evoprompt,
+    )),
     ("copro", ReviewMethodSpec(
         id="copro",
-        label="COPRO (coordinate ascent, instructions only)",
+        label="COPRO",
         stages=[
             ReviewMethodStage(id="prepare", label="Prepare"),
             ReviewMethodStage(id="compile", label="Compile"),
@@ -150,7 +171,7 @@ _ALL_METHODS: list[tuple[str, ReviewMethodSpec | None]] = [
     )),
     ("simba", ReviewMethodSpec(
         id="simba",
-        label="SIMBA (self-reflective rules + few-shot)",
+        label="SIMBA",
         stages=[
             ReviewMethodStage(id="prepare", label="Prepare"),
             ReviewMethodStage(id="compile", label="Compile"),

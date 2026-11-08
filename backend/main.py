@@ -202,6 +202,10 @@ DEFAULT_SETTINGS = {
     "copro_depth": 3,
     # SIMBA mini-batch introspection steps (2-40); own setting for the same reason.
     "simba_max_steps": 8,
+    # APE search rounds and EvoPrompt generations (1-50; review_prompt_search.py). Defaults are the papers' own:
+    # APE without iteration (1 round), EvoPrompt 10 generations.
+    "ape_rounds": 1,
+    "evoprompt_generations": 10,
     # Show Reset & Debug buttons on suggestion cards.
     "debug_mode": False,
     # Optional: raises PubMed E-utilities rate limit from 3/sec to 10/sec when set.
@@ -317,6 +321,8 @@ class SettingsPatch(BaseModel):
         le=40,
         description="Mini-batch introspection steps for the SIMBA review method (2–40).",
     )
+    ape_rounds: int | None = Field(default=None, ge=1, le=50, description="APE search rounds (1–50).")
+    evoprompt_generations: int | None = Field(default=None, ge=1, le=50, description="EvoPrompt generations (1–50).")
     debug_mode: bool | None = None
     ncbi_api_key: str | None = None
     ncbi_email: str | None = None
@@ -343,6 +349,8 @@ REVIEW_SETTINGS_OVERRIDE_KEYS = frozenset({
     "copro_breadth",
     "copro_depth",
     "simba_max_steps",
+    "ape_rounds",
+    "evoprompt_generations",
 })
 
 
@@ -3751,6 +3759,11 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
                 st = {**st, **_engine_task_hooks(body, st)}
             except Exception as e:  # the rewrites still come; only the worked-example card is left out
                 _safe_print(_HL + "[Review] Worked-example card unavailable: " + _R + str(e))
+        elif review_method.id in ("ape", "evoprompt"):
+            try:  # without the hooks the method reports what is missing
+                st = {**st, **_engine_task_hooks(body, st)}
+            except Exception as e:
+                _safe_print(_HL + f"[Review] {review_method.label}: Generate model or scoring unavailable: " + _R + str(e))
 
         review_method.run(
             provider=provider,

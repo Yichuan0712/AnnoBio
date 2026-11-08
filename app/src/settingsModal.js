@@ -51,6 +51,9 @@ const MODEL_SETTINGS_DEFAULTS = {
   copro_depth: 3,
   /** SIMBA mini-batch introspection steps (2-40); own setting, same reason. */
   simba_max_steps: 8,
+  /** APE search rounds and EvoPrompt generations (1-50); the papers' own defaults (APE without iteration). */
+  ape_rounds: 1,
+  evoprompt_generations: 10,
   /** Distinct inputs with ≥1 unmatched comparison row; Phase 1 analyzes at most this many. */
   review_max_failed_rows: 30,
   /** Click to Optimize on a card: wording variants tried per click (4–200); unused by a normal Optimize run. */
@@ -848,6 +851,14 @@ export function openSettingsModal() {
                               <label class="dataset-meta-label" for="settings-simba-max-steps">SIMBA steps (2–40)</label>
                               <input type="number" id="settings-simba-max-steps" class="dataset-meta-input" min="2" max="40" value="8" aria-label="SIMBA mini-batch introspection steps" title="Each step samples a mini-batch, runs several stochastic rollouts, and has the model introspect on the results — cost scales with steps × mini-batch size × candidates." />
                             </div>
+                            <div class="defaults-field settings-review-method-specific" data-method-settings="ape" hidden>
+                              <label class="dataset-meta-label" for="settings-ape-rounds">APE rounds (1–50)</label>
+                              <input type="number" id="settings-ape-rounds" class="dataset-meta-input" min="1" max="50" value="1" aria-label="APE search rounds" title="APE first drafts 50 candidate prompts, then each round scores the remaining candidates on 16 inputs with the Generate model and keeps the best 10, each with one new variation. 1 round is the paper's default APE. Cost scales with rounds × candidates × 16." />
+                            </div>
+                            <div class="defaults-field settings-review-method-specific" data-method-settings="evoprompt" hidden>
+                              <label class="dataset-meta-label" for="settings-evoprompt-generations">EvoPrompt generations (1–50)</label>
+                              <input type="number" id="settings-evoprompt-generations" class="dataset-meta-input" min="1" max="50" value="10" aria-label="EvoPrompt generations" title="Each generation creates one new prompt for each of 10 prompts in the population and scores it on up to 100 inputs with the Generate model. 10 generations is the paper's setting. Cost scales with generations × 10 × inputs." />
+                            </div>
                             <div class="defaults-field">
                               <label class="dataset-meta-label" for="settings-review-max-tokens">Max tokens (256–131072)</label>
                               <input type="number" id="settings-review-max-tokens" class="dataset-meta-input" min="256" max="131072" value="32768" aria-label="Optimize max tokens" />
@@ -859,9 +870,9 @@ export function openSettingsModal() {
                             <div class="defaults-field settings-review-method-specific" data-method-settings="annobio_engine_v2" hidden>
                               <label class="dataset-meta-label" for="settings-engine-exploration">Exploration intensity</label>
                               <select id="settings-engine-exploration" class="dataset-meta-input" aria-label="Exploration intensity">
-                                <option value="low">Low — 4 failed inputs, 1 proposal</option>
-                                <option value="medium">Medium — 8 failed inputs, 2 proposals</option>
-                                <option value="high">High — 16 failed inputs, 4 proposals</option>
+                                <option value="low">Low</option>
+                                <option value="medium">Medium</option>
+                                <option value="high">High</option>
                               </select>
                             </div>
                             <div class="defaults-field settings-review-method-specific" data-method-settings="annobio_engine_v2" hidden>
@@ -950,6 +961,8 @@ export function openSettingsModal() {
   const coproBreadthInp = overlay.querySelector('#settings-copro-breadth');
   const coproDepthInp = overlay.querySelector('#settings-copro-depth');
   const simbaMaxStepsInp = overlay.querySelector('#settings-simba-max-steps');
+  const apeRoundsInp = overlay.querySelector('#settings-ape-rounds');
+  const evopromptGenerationsInp = overlay.querySelector('#settings-evoprompt-generations');
   const runMaxTokensInp = overlay.querySelector('#settings-run-max-tokens');
   const reviewMaxTokensInp = overlay.querySelector('#settings-review-max-tokens');
   const reviewMaxFailedRowsInp = overlay.querySelector('#settings-review-max-failed-rows');
@@ -1366,6 +1379,10 @@ export function openSettingsModal() {
     if (simbaMaxStepsInp) {
       simbaMaxStepsInp.value = String(settings.simba_max_steps ?? MODEL_SETTINGS_DEFAULTS.simba_max_steps);
     }
+    if (apeRoundsInp) apeRoundsInp.value = String(settings.ape_rounds ?? MODEL_SETTINGS_DEFAULTS.ape_rounds);
+    if (evopromptGenerationsInp) {
+      evopromptGenerationsInp.value = String(settings.evoprompt_generations ?? MODEL_SETTINGS_DEFAULTS.evoprompt_generations);
+    }
     updateMethodSpecificSettingsVisibility();
     runMaxTokensInp.value = String(settings.run_max_tokens ?? MODEL_SETTINGS_DEFAULTS.run_max_tokens);
     reviewMaxTokensInp.value = String(settings.review_max_tokens ?? MODEL_SETTINGS_DEFAULTS.review_max_tokens);
@@ -1474,6 +1491,10 @@ export function openSettingsModal() {
     const agentContextTokens = Number.isNaN(agentContextParsed) ? 0 : Math.min(2000000, Math.max(4096, agentContextParsed));
     const simbaMaxStepsParsed = parseInt(simbaMaxStepsInp?.value, 10);
     const simbaMaxSteps = Math.min(40, Math.max(2, Number.isNaN(simbaMaxStepsParsed) ? MODEL_SETTINGS_DEFAULTS.simba_max_steps : simbaMaxStepsParsed));
+    const clampRounds = (input, fallback) => {
+      const parsed = parseInt(input?.value, 10);
+      return Math.min(50, Math.max(1, Number.isNaN(parsed) ? fallback : parsed));
+    };
     return {
       default_run_credential_id: (runCredSelect.value || '').trim() || '',
       default_review_credential_id: (reviewCredSelect.value || '').trim() || '',
@@ -1487,6 +1508,8 @@ export function openSettingsModal() {
       copro_breadth: coproBreadth,
       copro_depth: coproDepth,
       simba_max_steps: simbaMaxSteps,
+      ape_rounds: clampRounds(apeRoundsInp, MODEL_SETTINGS_DEFAULTS.ape_rounds),
+      evoprompt_generations: clampRounds(evopromptGenerationsInp, MODEL_SETTINGS_DEFAULTS.evoprompt_generations),
       run_max_tokens: runMaxTokens,
       review_max_tokens: reviewMaxTokens,
       review_max_failed_rows: reviewMaxFailedRows,

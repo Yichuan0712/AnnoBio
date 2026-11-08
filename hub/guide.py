@@ -464,6 +464,8 @@ cost, and use of examples fit the study design.</p>
 <tr><td>BootstrapFewShotWithRandomSearch</td><td>Few-shot example selection.</td></tr>
 <tr><td>SIMBA</td><td>Self-reflective rules and few-shot examples.</td></tr>
 <tr><td>TextGrad</td><td>Textual-gradient instruction updates; available only with its optional dependency installed.</td></tr>
+<tr><td>APE</td><td>Drafts candidate instructions from input-output examples, scores them on your inputs with the Generate model, and keeps the best (Rounds in Settings).</td></tr>
+<tr><td>EvoPrompt</td><td>Evolves a population of 10 prompts by differential evolution, scoring each new prompt on your inputs with the Generate model (Generations in Settings).</td></tr>
 </tbody></table></div>
 <p>Methods differ in search strategy, model usage, number of calls, and available suggestion actions.
 Optimization can be substantially more expensive than a single Generate run. Regardless of method,

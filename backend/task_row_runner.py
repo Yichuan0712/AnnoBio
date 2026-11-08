@@ -72,4 +72,5 @@ def make_row_runner(*, provider: str, model: str, api_key: str, base_url: str, o
             return [out if isinstance(out, dict) else {}]
         raise RuntimeError("Empty model output")
     run.output_fields = output_fields
+    run.concurrency = max(1, int(run_settings.get("run_concurrency") or 1))  # a Run's parallel requests
     return run

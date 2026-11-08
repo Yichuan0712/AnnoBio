@@ -213,17 +213,41 @@ async function previewReview(job, ctx) {
     ? (Number(ctx.settings.review_max_failed_rows) || 30)
     : ({ low: 4, medium: 8, high: 16 }[ctx.settings.engine_exploration] || 4);
   const analysed = Math.min(failingInputs, cap);
+  // APE and EvoPrompt (review_prompt_search.py) score candidate prompts on the evaluated inputs with the Generate model.
+  const inputs = new Set(rows.map((r) => r?.input_row_index ?? r?.row_index)).size;
+  const search = promptSearchPreview(methodId, inputs, ctx.settings);
   const lines = [
     `${existing ? 'Resumes the existing Optimize' : 'Adds an Optimize node'} on Evaluate "${nodeTitle(score)}" (method: ${score.reviewMethod || ctx.settings.default_review_method || 'default'})`,
     `Model: ${credentialLabel(credential)}`,
     !rows.length
       ? 'The Evaluate node has no comparison rows yet (its Run or ground truth may be incomplete), so the Optimize may find nothing to fix.'
+      : search
+      ? search.line
       : failingInputs
       ? `Analyses ${analysed} failing input${analysed === 1 ? '' : 's'}${failingInputs > cap ? ` (of ${failingInputs}, capped in Settings)` : ''}: about one model call each plus a few to group issues and draft edits; the exact number depends on the method.`
       : 'Every row currently matches, so the review has little to work with.',
   ];
-  return { kind: existing ? 'resume_review' : 'review', title: `${existing ? 'Resume Optimize' : 'Optimize prompt'} using "${nodeTitle(score)}"`, nodeIds: [existing?.nodeId || score.nodeId], lines, usd: null, calls: analysed, priced: false,
+  return { kind: existing ? 'resume_review' : 'review', title: `${existing ? 'Resume Optimize' : 'Optimize prompt'} using "${nodeTitle(score)}"`, nodeIds: [existing?.nodeId || score.nodeId], lines, usd: null, calls: search && rows.length ? search.calls : analysed, priced: false,
     ...(picked ? { credentialId: picked } : {}) };
+}
+
+/** Upper-bound model calls of an APE / EvoPrompt Optimize on `inputs` evaluated inputs (review_prompt_search.py), or null. */
+export function promptSearchPreview(methodId, inputs, settings) {
+  const clamp = (value, fallback) => Math.min(50, Math.max(1, Number(value) || fallback));
+  if (methodId === 'ape') {
+    const rounds = clamp(settings?.ape_rounds, 1);
+    const batch = Math.min(16, inputs);
+    // 50 proposals; round 1 scores up to 51 candidates, later rounds up to 20 (10 survivors + 10 variations).
+    const calls = 50 + 51 * batch + (rounds - 1) * (10 + 20 * batch);
+    return { calls, line: `APE: 50 candidate prompts from the Optimize model, then ${rounds} round${rounds === 1 ? '' : 's'} scoring candidates on ${batch} input${batch === 1 ? '' : 's'} each with the Generate model: up to about ${calls.toLocaleString('en-US')} model calls.` };
+  }
+  if (methodId === 'evoprompt') {
+    const generations = clamp(settings?.evoprompt_generations, 10);
+    const dev = Math.min(100, inputs);  // 50 for very long inputs
+    const calls = 9 + 10 * dev + generations * 10 * (1 + dev);
+    return { calls, line: `EvoPrompt: 10 prompts evolved for ${generations} generation${generations === 1 ? '' : 's'}, each new prompt scored on ${dev} input${dev === 1 ? '' : 's'} with the Generate model: up to about ${calls.toLocaleString('en-US')} model calls.` };
+  }
+  return null;
 }
 
 function previewSuggestionOptimization(job, ctx) {

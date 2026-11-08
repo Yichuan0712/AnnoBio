@@ -65,6 +65,9 @@ Optimize nodes use the review method set in Settings → Optimize:
 - MIPROv2: optimises instructions together with few-shot examples.
 - BootstrapFewShot with random search: optimises few-shot examples only.
 - TextGrad, COPRO and SIMBA: further instruction optimisers.
+- APE and EvoPrompt: search whole prompts by scoring many candidates on the evaluated inputs with the Generate
+  model (APE: 50 drafted candidates, "APE rounds"; EvoPrompt: a population of 10, "EvoPrompt generations").
+  They cost far more Generate calls than the AnnoBio Optimizer; each returns at most one whole-prompt card.
 
 ## Advising the user
 
