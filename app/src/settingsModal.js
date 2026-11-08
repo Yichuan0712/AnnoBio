@@ -865,14 +865,14 @@ export function openSettingsModal() {
                               </select>
                             </div>
                             <div class="defaults-field settings-review-method-specific" data-method-settings="annobio_engine_v2" hidden>
+                              <label class="dataset-meta-label" for="settings-optimization-max-trials">Click-to-Optimize search size (4–200)</label>
+                              <input type="number" id="settings-optimization-max-trials" class="dataset-meta-input" min="4" max="200" value="40" aria-label="Click-to-Optimize search size" title="Used only when you click 'Click to Optimize' on a card whose verification did not pass: how many wording variants it may try. A normal Optimize run does not use it." />
+                            </div>
+                            <div class="defaults-field settings-review-method-specific" data-method-settings="annobio_engine_v2" hidden>
                               <label class="dataset-meta-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
                                 <input type="checkbox" id="settings-engine-few-shot" aria-label="Enable few-shot optimization" />
                                 Enable few-shot optimization
                               </label>
-                            </div>
-                            <div class="defaults-field settings-review-method-specific" data-method-settings="annobio_engine_v2" hidden>
-                              <label class="dataset-meta-label" for="settings-optimization-max-trials">Refinement search size (4–200)</label>
-                              <input type="number" id="settings-optimization-max-trials" class="dataset-meta-input" min="4" max="200" value="40" aria-label="Refinement search size" title="Used only when you click 'Click to Optimize' on a card whose verification did not pass: how many wording variants it may try. A normal Optimize run does not use it." />
                             </div>
                             <!-- Hidden: a developer switch. Its saved value still applies (Restore defaults turns it off). -->
                             <div class="defaults-field defaults-field--full" style="margin-top:0.5rem;" hidden>
