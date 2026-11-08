@@ -1,15 +1,15 @@
 {
   "source": "python/src/annobio_optimize",
-  "source_git_head": "77b82bde2a0e5f740d52e1dcdc007602660feebc",
+  "source_git_head": "24bb15a34f325173f452697b784435031a13b093",
   "uncommitted_source": false,
   "files": {
     "__init__.py": "0fb05d5c2318c354067e28083c89b2bf03703514a1a8ebc5c4a2e0942d49ca49",
     "engine/__init__.py": "dbcc72895b69e91825d67bf93b123c43f53ba8088493f3df3cd18c93938140b8",
     "engine/demos.py": "3239f0ca6f5f3d2f17bfd7f2b2a84cbd51dc9a948b75acef7258e6d8cd49dd3e",
-    "engine/operator.py": "ebb2ac2c295a66e84450bc044c26c4d0f2bb8dfd99f1db35ca9b635a790765cd",
-    "engine/prompts.py": "3b17a460f9fb4f79b9f65033b3a383e4eb4907a91d059caa4c428287a29ba3c4",
+    "engine/operator.py": "395f36f78f1ed06e1e7cd84e0a800d942cab200a84d2474bf78a0fe19975cf15",
+    "engine/prompts.py": "9ca35755ff0878e37742ea54cc4f13e0e4413e2c5dc3d2d5e2333ad530666306",
     "engine/records.py": "950e9750373bc5f4a263e940c47da067db7b6783cf6ad125669131f5d438a97b",
-    "engine/session.py": "29a3160eacd4c30115843b43efb8e5fdc2e213b5561c777e128b450b8c3321a3",
+    "engine/session.py": "e29f6f0519ace8e5def8371ef5ab5c1cc22b2e385251d2f1c323c73f7a66d97a",
     "errors.py": "bcd21795df3e44317a5d8b2048aa887057185f71faba8afaa9b162e22a61c7d1",
     "model.py": "17d954a12ad31200c81de0389a0db6cb1917bde0eecf028ec82cdfa80714cce3",
     "optimizer.py": "48184888d7bfd2c7d0f13dd8da58139400b437981c8cf5f0b61ff97903c594ea",
@@ -19,7 +19,7 @@
     "review_types.py": "1cdb85aa03fc3f3a89f359c9766b822716961e3d2672cac0936acb187d43a22e",
     "serialization.py": "c59a42adfab1b933ae95daa32458c62e1e2390e134a838ac36b88c6d27b53fde",
     "spans.py": "c93c3da765229eaa11ee75e86f5b183a921926b6e1f8da60b9219a3598d77345",
-    "types.py": "4239f3d89fba021d4e440592214c4fdfc106d966ff9b2ac2c9143a4b7a376fea",
+    "types.py": "99c48565d04fa6e4f175883ebe28fe6cd468002e69ef5980364e3afbd4c5c428",
     "validation.py": "492739f135ae653f27504dc99fd051fab4097b859d0fd9c45ac323e891bfbe5a"
   }
 }
