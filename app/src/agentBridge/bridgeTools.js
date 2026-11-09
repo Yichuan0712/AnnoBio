@@ -118,7 +118,13 @@ function defaultActions(workspace, { credentialsById, inspectNode }) {
       proposal: (request) => proposals.previewProposal(request),
       run: (request) => previewRunRequest(request, runWorkspace),
       pipeline: (request) => previewPipelineAction(request, workspace),
-      project: (request) => previewCreateProject(request, workspace),
+      // No built-in Agent conversation moves into the project, so the card's line saying so is left out.
+      project: (request) => {
+        const preview = previewCreateProject(request, workspace);
+        return preview.ok
+          ? { ...preview, items: preview.items.map((item) => ({ ...item, lines: item.lines.filter((line) => !/conversation moves/i.test(line)) })) }
+          : preview;
+      },
     },
     execute: {
       proposal: (request, preview, options) => proposals.applyProposal(request, { ...options, importSnapshots: preview.importSnapshots }),
