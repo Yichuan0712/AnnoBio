@@ -117,8 +117,12 @@ still uses the models in your credentials.
 3. Open a project in AnnoBio and ask your agent, for example, "use annobio to look at my project".
 
 The connection is local only (`127.0.0.1`) and needs a token that is part of the copied settings; it stays valid
-across restarts, so each agent is added once. This version can read the project and try Process code; it cannot yet change the canvas
-or run nodes.
+across restarts, so each agent is added once.
+
+The agent reads the project and tries Process code directly. To change the canvas, run nodes, rename or export a
+Pipeline, or create a project, it first shows you in its chat what will happen (with the estimated cost for runs);
+nothing changes and nothing is spent until you agree. It then applies exactly that, and AnnoBio refuses if the
+project changed in the meantime.
 
 ## Shortcuts
 

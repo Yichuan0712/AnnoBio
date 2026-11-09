@@ -98,18 +98,24 @@ test('invalid JSON-RPC is rejected without calling tools', async () => {
   assert.equal(response.error.code, -32600);
 });
 
-test('bridge tools are the built-in Agent\'s read-only tools, with the same definitions', () => {
+test('bridge tools: the Agent\'s read tools as they are, its card tools as previews, plus apply', () => {
   const tools = bridgeToolDefinitions();
-  const agentNames = new Set(AGENT_TOOL_DEFINITIONS.map((d) => d.function.name));
-  assert.ok(tools.length > 0);
+  const byName = new Map(tools.map((tool) => [tool.name, tool]));
+  assert.ok(!byName.has('ask_user'), 'the coding agent asks in its own chat');
+  assert.ok(!byName.has('request_folder_access'));
   for (const tool of tools) {
-    assert.ok(agentNames.has(tool.name), tool.name);
-    assert.ok(BRIDGE_TOOL_NAMES.has(tool.name));
-    assert.ok(!USER_TOOLS.has(tool.name), `${tool.name} needs confirmation and must not be offered in B1`);
+    assert.ok(BRIDGE_TOOL_NAMES.has(tool.name), tool.name);
+    if (tool.name === 'apply') continue;
+    assert.equal(tool.annotations.readOnlyHint, true, `${tool.name} changes nothing by itself`);
+    if (tool.name === 'apply_status' || tool.name === 'create_project') continue;
     const original = AGENT_TOOL_DEFINITIONS.find((d) => d.function.name === tool.name).function;
-    assert.equal(tool.description, original.description);
     assert.deepEqual(tool.inputSchema, original.parameters);
+    if (USER_TOOLS.has(tool.name)) assert.match(tool.description, /only PREVIEWS[\s\S]*call apply with the preview_id only after they agree/);
+    else assert.equal(tool.description, original.description);
   }
+  for (const name of ['propose_changes', 'run_nodes', 'pipeline_action', 'create_project']) assert.ok(byName.has(name), name);
+  assert.equal(byName.get('apply').annotations.destructiveHint, true, 'clients ask before apply');
+  assert.deepEqual(byName.get('apply').inputSchema.required, ['preview_id']);
 });
 
 test('tool host runs allowed tools with the Agent runtime and refuses the rest', async () => {
@@ -128,7 +134,7 @@ test('tool host runs allowed tools with the Agent runtime and refuses the rest',
   const host = createBridgeToolHost(() => workspace, { fetchImpl, execute });
   assert.deepEqual(await host.callTool('read_rows', { node_id: 'n1' }), { ok: true, content: 'done' });
   assert.deepEqual(seen[0].keys, ['buildSummary', 'getCanvasState', 'getScoreComparisonRows', 'inspectNode', 'signal']);
-  const refused = await host.callTool('propose_changes', {});
+  const refused = await host.callTool('ask_user', {});
   assert.equal(refused.ok, false);
   assert.match(refused.content, /not available to external agents/);
   const noProject = createBridgeToolHost(() => ({ ...workspace, hasProject: () => false }), { fetchImpl, execute });
@@ -137,6 +143,104 @@ test('tool host runs allowed tools with the Agent runtime and refuses the rest',
   const needsProject = await noProject.callTool('read_rows', { node_id: 'n1' });
   assert.equal(needsProject.ok, false);
   assert.match(needsProject.content, /needs a project/);
+  assert.match((await noProject.callTool('run_nodes', { jobs: [] })).content, /needs a project/);
+});
+
+/** A tool host whose preview / execute functions are fakes over a mutable canvas. */
+function previewHost({ applyWaitMs = 1000, execute } = {}) {
+  const state = { canvas: 'a', project: 'p1', executed: [], open: true };
+  const workspace = {
+    hasProject: () => state.open,
+    getAssetProjectId: () => state.project,
+    getCanvasState: () => ({ nodes: [], connections: [] }),
+    inspectNode: async () => ({}),
+  };
+  const preview = async (request) => (request.bad ? { ok: false, error: 'bad request' }
+    : { ok: true, items: [{ kind: 'add', title: `Add on ${state.canvas}`, lines: ['one line'], nodeIds: ['x'] }], total: request.jobs ? 'Estimated cost: about $0.10' : undefined });
+  const actions = () => ({
+    preview: { proposal: preview, run: preview, pipeline: preview, project: preview },
+    execute: {
+      proposal: async (request, approved) => { state.executed.push(['proposal', request, approved]); return { status: 'applied', changes: ['added'] }; },
+      run: execute || (async (request) => { state.executed.push(['run', request]); return { status: 'completed', results: ['done'] }; }),
+      pipeline: async () => ({ status: 'renamed' }),
+      project: async () => ({ status: 'created', name: 'New' }),
+    },
+  });
+  const fetchImpl = async () => ({ ok: true, json: async () => [] });
+  return { state, host: createBridgeToolHost(() => workspace, { fetchImpl, actions, applyWaitMs }) };
+}
+
+test('preview changes nothing; apply does exactly the previewed request, once', async () => {
+  const { state, host } = previewHost();
+  const request = { summary: 'Add a prompt', operations: [{ op: 'add_prompt' }] };
+  const shown = await host.callTool('propose_changes', request);
+  assert.equal(shown.ok, true);
+  const body = JSON.parse(shown.content);
+  assert.match(body.preview_id, /^proposal-/);
+  assert.deepEqual(body.what_will_happen, [{ title: 'Add on a', lines: ['one line'] }]);
+  assert.equal(body.nothing_changed_yet, true);
+  assert.equal(state.executed.length, 0, 'previewing changes nothing');
+  const done = await host.callTool('apply', { preview_id: body.preview_id });
+  assert.equal(done.ok, true);
+  assert.equal(JSON.parse(done.content).status, 'applied');
+  assert.deepEqual(state.executed[0][1], request);
+  const again = await host.callTool('apply', { preview_id: body.preview_id });
+  assert.equal(again.ok, false);
+  assert.match(again.content, /already applied/);
+  assert.equal(state.executed.length, 1);
+  assert.match((await host.callTool('apply', { preview_id: 'nope' })).content, /Unknown or expired/);
+  const invalid = await host.callTool('propose_changes', { bad: true });
+  assert.equal(invalid.ok, false);
+  assert.match(invalid.content, /Not previewed: bad request/);
+  const run = JSON.parse((await host.callTool('run_nodes', { summary: 's', jobs: [{ kind: 'run', node: 'g' }] })).content);
+  assert.equal(run.estimate, 'Estimated cost: about $0.10');
+});
+
+test('apply refuses when the canvas or the open project changed since the preview', async () => {
+  const { state, host } = previewHost();
+  const first = JSON.parse((await host.callTool('propose_changes', { operations: [] })).content).preview_id;
+  state.canvas = 'b';
+  const stale = await host.callTool('apply', { preview_id: first });
+  assert.equal(stale.ok, false);
+  assert.match(stale.content, /changed since this preview/);
+  const second = JSON.parse((await host.callTool('propose_changes', { operations: [] })).content).preview_id;
+  state.project = 'p2';
+  assert.match((await host.callTool('apply', { preview_id: second })).content, /different project/);
+  assert.equal(state.executed.length, 0);
+});
+
+test('a long run answers "running"; apply_status follows it; only a stop may start meanwhile', async () => {
+  let finish;
+  const execute = (request) => (request.jobs[0].kind === 'stop'
+    ? Promise.resolve({ status: 'completed', results: ['stop requested'] })
+    : new Promise((resolve) => { finish = () => resolve({ status: 'completed', results: ['10 rows'] }); }));
+  const { host } = previewHost({ applyWaitMs: 20, execute });
+  const id = JSON.parse((await host.callTool('run_nodes', { jobs: [{ kind: 'run', node: 'g' }] })).content).preview_id;
+  const started = JSON.parse((await host.callTool('apply', { preview_id: id })).content);
+  assert.equal(started.status, 'running');
+  assert.equal(JSON.parse((await host.callTool('apply_status', {})).content).preview_id, id);
+  const other = JSON.parse((await host.callTool('propose_changes', { operations: [] })).content).preview_id;
+  assert.match((await host.callTool('apply', { preview_id: other })).content, /still running/);
+  const stop = JSON.parse((await host.callTool('run_nodes', { jobs: [{ kind: 'stop', node: 'g' }] })).content).preview_id;
+  assert.equal(JSON.parse((await host.callTool('apply', { preview_id: stop })).content).status, 'completed');
+  finish();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const ended = await host.callTool('apply_status', { preview_id: id });
+  assert.equal(ended.ok, true);
+  assert.deepEqual(JSON.parse(ended.content).results, ['10 rows']);
+  assert.equal(JSON.parse((await host.callTool('apply_status', {})).content).status, 'idle');
+});
+
+test('without a project, create_project previews and applies; other previews need a project', async () => {
+  const { state, host } = previewHost();
+  state.open = false;
+  state.project = null;
+  const id = JSON.parse((await host.callTool('create_project', { name: 'New', summary: 's' })).content).preview_id;
+  assert.match(id, /^project-/);
+  const created = await host.callTool('apply', { preview_id: id });
+  assert.equal(created.ok, true);
+  assert.equal(JSON.parse(created.content).status, 'created');
+  assert.match((await host.callTool('propose_changes', { operations: [] })).content, /needs a project/);
 });
 
 test('the dropdown offers Claude Code, Codex and Cursor, each with its own connection text', () => {

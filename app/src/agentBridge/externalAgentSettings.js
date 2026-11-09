@@ -39,7 +39,7 @@ export function externalAgentPanelHtml() {
   return `
                     <div class="review-detail-tab-panel" id="settings-panel-external-agent" role="tabpanel" aria-labelledby="settings-tab-external-agent" data-panel="external-agent">
                       <div class="defaults-page-scroll">
-                          <p class="settings-tab-intro">Let a coding agent on this computer work with the project open in AnnoBio. You chat in the coding agent; it reads the project with the same tools as the Agent Assistant, and its own thinking uses its own subscription or quota. Running nodes still uses the models in your credentials. This version can read the project and try Process code; it cannot change the canvas or run nodes.</p>
+                          <p class="settings-tab-intro">Let a coding agent on this computer work with the project open in AnnoBio. You chat in the coding agent; it reads the project with the same tools as the Agent Assistant, and its own thinking uses its own subscription or quota. Running nodes still uses the models in your credentials. To change the canvas or run nodes it first shows you what will happen, with the estimated cost, and acts only after you agree in its chat.</p>
                           <div class="defaults-row">
                             <div class="defaults-field defaults-field--full">
                               <label class="dataset-meta-label" for="settings-external-agent-client">Connect</label>
