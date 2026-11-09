@@ -147,6 +147,7 @@ test('the dropdown offers Claude Code, Codex and Cursor, each with its own conne
   assert.match(bridgeStatusText({ enabled: false, running: false }), /^Not connected/);
   assert.match(bridgeStatusText({ enabled: true, running: true, url: 'u', client: 'codex' }), /codex/);
   assert.match(bridgeStatusText({ enabled: true, running: true, url: 'u', lastTool: 'read_rows' }), /An agent is connected/);
+  assert.doesNotMatch(bridgeStatusText({ enabled: true, running: true, url: 'u', client: 'codex', lastTool: 'read_rows' }), /read_rows|Last request/);
 });
 
 test('controller persists the switch and token, and round-trips a request through the window', async () => {
