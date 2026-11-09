@@ -16,8 +16,9 @@ export const BRIDGE_TOOL_NAMES = new Set([
   'search_source', 'inspect_source', 'web_search', 'read_webpage', 'try_process',
 ]);
 
-/** Tools that work with no project open (as for the built-in Agent). */
-const NO_PROJECT_TOOLS = new Set(['list_models', 'read_guide', 'search_source', 'inspect_source', 'web_search', 'read_webpage']);
+/** Tools that work with no project open, as for the built-in Agent (get_workspace then says no project is open and
+ * lists the models). */
+const NO_PROJECT_TOOLS = new Set(['get_workspace', 'list_models', 'read_guide', 'search_source', 'inspect_source', 'web_search', 'read_webpage']);
 
 /** MCP tool descriptors for the bridge's tools, taken from the built-in Agent's definitions. */
 export function bridgeToolDefinitions(definitions = AGENT_TOOL_DEFINITIONS) {
@@ -82,7 +83,7 @@ export function createBridgeToolHost(getWorkspace, { fetchImpl = (...a) => fetch
       const workspace = getWorkspace();
       if (!workspace) return { ok: false, content: JSON.stringify({ error: 'AnnoBio is still starting; try again in a moment.' }) };
       if (workspace.hasProject?.() === false && !NO_PROJECT_TOOLS.has(name)) {
-        return { ok: false, content: JSON.stringify({ error: 'No project is open in AnnoBio. Ask the user to open or create one.' }) };
+        return { ok: false, content: JSON.stringify({ error: 'This needs a project, and none is open in AnnoBio. Ask the user to open or create one; without a project you can still use get_workspace, list_models, read_guide, search_source, inspect_source, web_search and read_webpage.' }) };
       }
       const controller = new AbortController();
       return execute(name, args && typeof args === 'object' ? args : {}, await buildRuntime(controller.signal));

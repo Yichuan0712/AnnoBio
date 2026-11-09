@@ -132,8 +132,11 @@ test('tool host runs allowed tools with the Agent runtime and refuses the rest',
   assert.equal(refused.ok, false);
   assert.match(refused.content, /not available to external agents/);
   const noProject = createBridgeToolHost(() => ({ ...workspace, hasProject: () => false }), { fetchImpl, execute });
-  assert.match((await noProject.callTool('get_workspace', {})).content, /No project is open/);
+  assert.equal((await noProject.callTool('get_workspace', {})).ok, true);  // as the built-in Agent: works without a project
   assert.equal((await noProject.callTool('read_guide', { topic: 'x' })).ok, true);
+  const needsProject = await noProject.callTool('read_rows', { node_id: 'n1' });
+  assert.equal(needsProject.ok, false);
+  assert.match(needsProject.content, /needs a project/);
 });
 
 test('the dropdown offers Claude Code, Codex and Cursor, each with its own connection text', () => {
