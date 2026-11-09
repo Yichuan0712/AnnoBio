@@ -1,5 +1,7 @@
 /**
- * Main-process side of the Local Agent Bridge: keeps the on/off state and the token in userData/agent-bridge.json,
+ * Main-process side of the Local Agent Bridge: keeps the on/off state and the token in userData/agent-bridge.json
+ * (turning the bridge off discards the token, so every registered agent must re-register; while it stays on, the
+ * token survives restarts),
  * starts and stops the MCP server, and forwards tool requests to the window, whose renderer runs the tools
  * (agentBridge/bridgeTools.js) and answers on 'agent-bridge:response'.
  */
@@ -90,6 +92,7 @@ export function createBridgeController({ ipcMain, getWindow, userDataDir, port }
     } else {
       await server.stop();
       client = '';
+      state.token = '';  // off disconnects every agent for good; on again issues a new token
     }
     await save();
     return status();
@@ -104,11 +107,6 @@ export function createBridgeController({ ipcMain, getWindow, userDataDir, port }
       if (state.enabled) await setEnabled(true);
     },
     setEnabled,
-    async resetToken() {
-      state.token = newBridgeToken();
-      await save();
-      return status();
-    },
     status,
     stop: () => server.stop(),
   };

@@ -7,7 +7,7 @@ import path from 'node:path';
 
 import { createBridgeServer, handleMcpMessage } from '../src/agentBridge/bridgeServer.js';
 import { BRIDGE_TOOL_NAMES, bridgeToolDefinitions, createBridgeToolHost } from '../src/agentBridge/bridgeTools.js';
-import { bridgeConnectionSnippets, bridgeStatusText } from '../src/agentBridge/externalAgentSettings.js';
+import { CODING_AGENTS, bridgeConnectionSnippet, bridgeStatusText } from '../src/agentBridge/externalAgentSettings.js';
 import { createBridgeController } from '../src/agentBridge/bridgeMain.js';
 import { AGENT_TOOL_DEFINITIONS, USER_TOOLS } from '../src/agent/tools/agentTools.js';
 
@@ -136,8 +136,11 @@ test('tool host runs allowed tools with the Agent runtime and refuses the rest',
   assert.equal((await noProject.callTool('read_guide', { topic: 'x' })).ok, true);
 });
 
-test('connection snippets for Claude Code, Codex and Cursor carry the URL and token', () => {
-  const s = bridgeConnectionSnippets({ url: 'http://127.0.0.1:47321/mcp', token: 'abc' });
+test('the dropdown offers Claude Code, Codex and Cursor, each with its own connection text', () => {
+  assert.deepEqual(CODING_AGENTS.map((a) => a.label), ['Claude Code', 'Codex', 'Cursor']);
+  const status = { url: 'http://127.0.0.1:47321/mcp', token: 'abc' };
+  const s = Object.fromEntries(CODING_AGENTS.map((a) => [a.id, bridgeConnectionSnippet(a.id, status)]));
+  assert.equal(bridgeConnectionSnippet('unknown', status), '');
   assert.equal(s.claude, 'claude mcp add --transport http annobio http://127.0.0.1:47321/mcp --header "Authorization: Bearer abc"');
   assert.match(s.codex, /^\[mcp_servers\.annobio\]\nurl = "http:\/\/127\.0\.0\.1:47321\/mcp"\nhttp_headers = \{ "Authorization" = "Bearer abc" \}$/);
   assert.deepEqual(JSON.parse(s.cursor), { mcpServers: { annobio: { url: 'http://127.0.0.1:47321/mcp', headers: { Authorization: 'Bearer abc' } } } });
@@ -169,11 +172,19 @@ test('controller persists the switch and token, and round-trips a request throug
   const call = await request(on.port, { token: on.token, body: { jsonrpc: '2.0', id: 1, method: 'tools/call',
     params: { name: 'get_workspace', arguments: {} } } });
   assert.equal(call.body.result.content[0].text, 'ran get_workspace');
-  const reset = await controller.resetToken();
-  assert.notEqual(reset.token, on.token);
-  assert.equal((await request(on.port, { token: on.token, body: { jsonrpc: '2.0', id: 2, method: 'ping' } })).status, 401);
   const off = await controller.setEnabled(false);
   assert.equal(off.running, false);
+  assert.equal(off.token, '');  // off discards the token
+  const again = await controller.setEnabled(true);
+  assert.notEqual(again.token, on.token);  // on again: a new token, the old one no longer works
+  assert.equal((await request(again.port, { token: on.token, body: { jsonrpc: '2.0', id: 2, method: 'ping' } })).status, 401);
+  assert.equal((await request(again.port, { token: again.token, body: { jsonrpc: '2.0', id: 3, method: 'ping' } })).status, 200);
+  const restarted = createBridgeController({ ipcMain, getWindow: () => window, userDataDir: dir, port: 0 });
+  await controller.stop();
+  await restarted.init();  // still on after a restart: same token, no re-registration
+  assert.equal(restarted.status().token, again.token);
+  assert.equal(restarted.status().running, true);
+  await restarted.stop();
   await controller.stop();
   await fs.rm(dir, { recursive: true, force: true });
 });

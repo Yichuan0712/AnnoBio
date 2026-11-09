@@ -970,7 +970,6 @@ function macDockIcon(filePath) {
 let agentBridge = null;
 ipcMain.handle('agent-bridge:status', () => agentBridge?.status() || { enabled: false, running: false });
 ipcMain.handle('agent-bridge:set-enabled', (_event, enabled) => agentBridge?.setEnabled(Boolean(enabled)));
-ipcMain.handle('agent-bridge:reset-token', () => agentBridge?.resetToken());
 
 if (gotSingleInstanceLock) app.whenReady().then(() => {
   // `npm start` launches the Electron binary, so the Dock would show Electron's

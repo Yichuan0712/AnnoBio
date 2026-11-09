@@ -1,15 +1,42 @@
 /**
- * Settings > External agent (desktop only): turn the Local Agent Bridge on or off, show its status, copy the
- * connection settings for Claude Code, Codex and Cursor, and reset the token. Changes apply at once (the tab has
- * no Save button). docs/design/LOCAL_AGENT_BRIDGE_DESIGN.md
+ * Settings > External agent (desktop only): one switch turns the Local Agent Bridge on or off (off also discards
+ * the token, so every agent must register again), and a dropdown picks the coding agent whose connection settings
+ * to copy. Changes apply at once (the tab has no Save button). docs/design/LOCAL_AGENT_BRIDGE_DESIGN.md
  */
+
+/** Coding agents in the dropdown, in order. Adding one = one entry here. */
+export const CODING_AGENTS = [
+  {
+    id: 'claude',
+    label: 'Claude Code',
+    howTo: 'Run the copied command once in a terminal.',
+    snippet: ({ url, header }) => `claude mcp add --transport http annobio ${url} --header "Authorization: ${header}"`,
+  },
+  {
+    id: 'codex',
+    label: 'Codex',
+    howTo: 'Paste the copied lines into ~/.codex/config.toml.',
+    snippet: ({ url, header }) => ['[mcp_servers.annobio]', `url = "${url}"`, `http_headers = { "Authorization" = "${header}" }`].join('\n'),
+  },
+  {
+    id: 'cursor',
+    label: 'Cursor',
+    howTo: 'Paste the copied JSON into Cursor Settings > MCP (mcp.json).',
+    snippet: ({ url, header }) => JSON.stringify({ mcpServers: { annobio: { url, headers: { Authorization: header } } } }, null, 2),
+  },
+];
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
 
 /** The panel's markup; settingsModal includes it only on the desktop app. */
 export function externalAgentPanelHtml() {
+  const options = CODING_AGENTS.map((agent) => `<option value="${agent.id}">${escapeHtml(agent.label)}</option>`).join('');
   return `
                     <div class="review-detail-tab-panel" id="settings-panel-external-agent" role="tabpanel" aria-labelledby="settings-tab-external-agent" data-panel="external-agent">
                       <div class="defaults-page-scroll">
-                          <p class="settings-tab-intro">Let a coding agent on this computer (Claude Code, Codex or Cursor) work with the project open in AnnoBio. You chat in the coding agent; it reads the project with the same tools as the Agent Assistant, and its own thinking uses its own subscription or quota. Running nodes still uses the models in your credentials. This version can read the project and try Process code; it cannot change the canvas or run nodes. Only programs on this computer that have the token can connect, and AnnoBio must be open.</p>
+                          <p class="settings-tab-intro">Let a coding agent on this computer work with the project open in AnnoBio. You chat in the coding agent; it reads the project with the same tools as the Agent Assistant, and its own thinking uses its own subscription or quota. Running nodes still uses the models in your credentials. This version can read the project and try Process code; it cannot change the canvas or run nodes.</p>
                           <div class="defaults-row">
                             <div class="defaults-field defaults-field--full">
                               <label class="dataset-meta-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
@@ -23,14 +50,12 @@ export function externalAgentPanelHtml() {
                           </div>
                           <div class="defaults-row">
                             <div class="defaults-field defaults-field--full">
-                              <span class="dataset-meta-label">Connect a coding agent (once per agent)</span>
-                              <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;">
-                                <button type="button" class="btn btn-secondary" data-external-agent-copy="claude">Copy Claude Code command</button>
-                                <button type="button" class="btn btn-secondary" data-external-agent-copy="codex">Copy Codex config</button>
-                                <button type="button" class="btn btn-secondary" data-external-agent-copy="cursor">Copy Cursor config</button>
-                                <button type="button" class="btn btn-secondary" id="settings-external-agent-reset">Reset token</button>
+                              <label class="dataset-meta-label" for="settings-external-agent-client">Connect</label>
+                              <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+                                <select id="settings-external-agent-client" class="credentials-select dataset-meta-input" style="max-width:220px;" aria-label="Coding agent to connect">${options}</select>
+                                <button type="button" class="btn btn-secondary" id="settings-external-agent-copy">Copy connection settings</button>
                               </div>
-                              <p class="settings-tab-intro" style="margin-top:8px;">Claude Code: run the copied command in a terminal. Codex: paste the copied lines into ~/.codex/config.toml. Cursor: paste the copied JSON into Settings &gt; MCP (mcp.json). Then open a project here and ask your agent, for example, "use annobio to look at my project". Resetting the token disconnects every agent until you copy the new settings.</p>
+                              <p class="settings-tab-intro" id="settings-external-agent-howto" style="margin-top:8px;"></p>
                             </div>
                           </div>
                       </div>
@@ -38,26 +63,22 @@ export function externalAgentPanelHtml() {
 }
 
 /**
- * The text each coding agent needs to connect, for the bridge's current URL and token.
+ * The text a coding agent needs to connect, for the bridge's current URL and token.
+ * @param {string} agentId one of CODING_AGENTS
  * @param {{url: string, token: string}} status
- * @returns {{claude: string, codex: string, cursor: string}}
  */
-export function bridgeConnectionSnippets({ url, token }) {
-  const header = `Bearer ${token}`;
-  return {
-    claude: `claude mcp add --transport http annobio ${url} --header "Authorization: ${header}"`,
-    codex: ['[mcp_servers.annobio]', `url = "${url}"`, `http_headers = { "Authorization" = "${header}" }`].join('\n'),
-    cursor: JSON.stringify({ mcpServers: { annobio: { url, headers: { Authorization: header } } } }, null, 2),
-  };
+export function bridgeConnectionSnippet(agentId, { url, token }) {
+  const agent = CODING_AGENTS.find((item) => item.id === agentId);
+  return agent ? agent.snippet({ url, header: `Bearer ${token}` }) : '';
 }
 
 /** One line for the status area. */
 export function bridgeStatusText(status) {
   if (!status) return 'Not available in this version.';
   if (status.error) return `Could not start: ${status.error}`;
-  if (!status.enabled || !status.running) return 'Off. Coding agents cannot connect.';
+  if (!status.enabled || !status.running) return 'Off. Coding agents cannot connect. Turning it on issues a new connection, so register your agent again.';
   const last = status.lastTool ? ` Last request: ${status.lastTool}.` : '';
-  const who = status.client ? ` Connected client: ${status.client}.` : ' No agent has connected yet.';
+  const who = status.client ? ` Connected: ${status.client}.` : ' No agent has connected yet.';
   return `On at ${status.url}.${who}${last}`;
 }
 
@@ -69,17 +90,23 @@ export function bridgeStatusText(status) {
 export function mountExternalAgentSettings(overlay, api = window.electronAPI) {
   const checkbox = overlay.querySelector('#settings-external-agent-enabled');
   const statusText = overlay.querySelector('#settings-external-agent-status .settings-agent-model-status__text');
-  const resetButton = overlay.querySelector('#settings-external-agent-reset');
-  const copyButtons = overlay.querySelectorAll('[data-external-agent-copy]');
-  if (!checkbox || !api?.getAgentBridgeStatus) return;
+  const select = overlay.querySelector('#settings-external-agent-client');
+  const copyButton = overlay.querySelector('#settings-external-agent-copy');
+  const howTo = overlay.querySelector('#settings-external-agent-howto');
+  if (!checkbox || !select || !copyButton || !api?.getAgentBridgeStatus) return;
   let status = null;
 
   function render() {
-    checkbox.checked = Boolean(status?.enabled && status?.running);
+    const on = Boolean(status?.enabled && status?.running);
+    checkbox.checked = on;
     if (statusText) statusText.textContent = bridgeStatusText(status);
-    const usable = Boolean(status?.running && status?.token);
-    copyButtons.forEach((button) => { button.disabled = !usable; });
-    if (resetButton) resetButton.disabled = !status?.token;
+    copyButton.disabled = !(on && status?.token);
+    const agent = CODING_AGENTS.find((item) => item.id === select.value) || CODING_AGENTS[0];
+    if (howTo) {
+      howTo.textContent = on
+        ? `${agent.howTo} Then open a project here and ask your agent, for example, "use annobio to look at my project".`
+        : 'Turn on the switch above first.';
+    }
   }
 
   async function refresh() {
@@ -100,23 +127,17 @@ export function mountExternalAgentSettings(overlay, api = window.electronAPI) {
       render();
     }
   });
-  resetButton?.addEventListener('click', async () => {
-    status = await api.resetAgentBridgeToken();
-    render();
-  });
-  copyButtons.forEach((button) => {
-    button.addEventListener('click', async () => {
-      if (!status?.running) return;
-      const text = bridgeConnectionSnippets(status)[button.dataset.externalAgentCopy];
-      try {
-        await navigator.clipboard.writeText(text);
-        const label = button.textContent;
-        button.textContent = 'Copied';
-        setTimeout(() => { button.textContent = label; }, 1500);
-      } catch (_) {
-        window.prompt('Copy this:', text);
-      }
-    });
+  select.addEventListener('change', render);
+  copyButton.addEventListener('click', async () => {
+    if (!status?.running || !status?.token) return;
+    const text = bridgeConnectionSnippet(select.value, status);
+    try {
+      await navigator.clipboard.writeText(text);
+      copyButton.textContent = 'Copied';
+      setTimeout(() => { copyButton.textContent = 'Copy connection settings'; }, 1500);
+    } catch (_) {
+      window.prompt('Copy this:', text);
+    }
   });
   void refresh();
   return { refresh };

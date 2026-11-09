@@ -111,14 +111,15 @@ Assistant. You chat in the coding agent, and its own thinking uses its own subsc
 still uses the models in your credentials.
 
 1. In AnnoBio, open **Settings > External agent** and turn on **Allow coding agents on this computer to connect**.
-2. Copy the settings for your agent and add them once:
-   - Claude Code: run the copied `claude mcp add --transport http annobio ...` command.
-   - Codex: paste the copied `[mcp_servers.annobio]` lines into `~/.codex/config.toml`.
-   - Cursor: paste the copied JSON into Settings > MCP (`mcp.json`).
+2. Under **Connect**, choose your agent (Claude Code, Codex or Cursor), click **Copy connection settings**, and add
+   them once as the page explains (Claude Code: run the command; Codex: paste into `~/.codex/config.toml`; Cursor:
+   paste into Settings > MCP).
 3. Open a project in AnnoBio and ask your agent, for example, "use annobio to look at my project".
 
-The connection is local only (`127.0.0.1`) and needs the token shown in Settings. **Reset token** disconnects every
-agent. This version can read the project and try Process code; it cannot yet change the canvas or run nodes.
+The connection is local only (`127.0.0.1`) and needs a token that is part of the copied settings. Turning the switch
+off disconnects every agent; turning it on again issues a new token, so register your agents again. While the switch
+stays on, the token survives restarts. This version can read the project and try Process code; it cannot yet change
+the canvas or run nodes.
 
 ## Shortcuts
 

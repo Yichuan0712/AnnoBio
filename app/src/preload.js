@@ -5,7 +5,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Local Agent Bridge (Settings > External agent)
   getAgentBridgeStatus: () => ipcRenderer.invoke('agent-bridge:status'),
   setAgentBridgeEnabled: (enabled) => ipcRenderer.invoke('agent-bridge:set-enabled', enabled),
-  resetAgentBridgeToken: () => ipcRenderer.invoke('agent-bridge:reset-token'),
   onAgentBridgeRequest: (callback) => {
     const listener = (_event, request) => callback(request);
     ipcRenderer.on('agent-bridge:request', listener);
