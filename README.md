@@ -102,6 +102,23 @@ researchers have published, with their Prompts, Datasets, and scores.
 | Models | Free AnnoBio AI allowance, or your OpenRouter account | Any LiteLLM provider with your own keys (OpenAI, Anthropic, Gemini, DeepSeek, Mistral, Bedrock, OpenRouter, ...) |
 | Data sources | PubMed + 41 online sources | PubMed + 41 online sources + 28 snapshot groups |
 | Agent attachments and local folders | No | Yes |
+| Connect a local coding agent (Claude Code, Codex, Cursor) | No | Yes |
+
+### Connecting a Local Coding Agent (Desktop)
+
+A coding agent on your computer can work with the project open in AnnoBio, through the same tools as the Agent
+Assistant. You chat in the coding agent, and its own thinking uses its own subscription or quota. Running nodes
+still uses the models in your credentials.
+
+1. In AnnoBio, open **Settings > External agent** and turn on **Allow coding agents on this computer to connect**.
+2. Copy the settings for your agent and add them once:
+   - Claude Code: run the copied `claude mcp add --transport http annobio ...` command.
+   - Codex: paste the copied `[mcp_servers.annobio]` lines into `~/.codex/config.toml`.
+   - Cursor: paste the copied JSON into Settings > MCP (`mcp.json`).
+3. Open a project in AnnoBio and ask your agent, for example, "use annobio to look at my project".
+
+The connection is local only (`127.0.0.1`) and needs the token shown in Settings. **Reset token** disconnects every
+agent. This version can read the project and try Process code; it cannot yet change the canvas or run nodes.
 
 ## Shortcuts
 

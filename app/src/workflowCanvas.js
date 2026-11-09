@@ -112,6 +112,7 @@ import { runTo } from './runTo.js';
 import { openRunPlanDialog } from './runPlanDialog.js';
 import { endInterruptedRecords, executionResumeOptions, loadExecutionRecords, newExecutionRecord, saveExecutionRecords, updateExecutionRecord } from './executionRecords.js';
 import { mountExecutionsPanel } from './executionsPanel.js';
+import { installAgentBridge } from './agentBridge/bridgeTools.js';
 
 /** Same backend as Run/Review (embeddings API). */
 const SCORE_BACKEND_BASE = BACKEND_API_BASE;
@@ -3407,16 +3408,9 @@ export function buildWorkflowCanvas(root, options = {}) {
       source: 'default',
     }));
   }
-  function mountAgentPanel() {
-    if (pendingAgentMount || workspacePanels.agentHost.querySelector('.agent-window-overlay')) return;
-    pendingAgentMount = true;
-    const generation = agentMountGeneration;
-    openAgentWindowModal({
-      projectPath: getCurrentProjectPath(),
-      host: workspacePanels.agentHost,
-      onClose: () => { workspacePanels.collapse('agent'); agentAssistantBtn.focus(); },
-      isCurrent: () => generation === agentMountGeneration,
-      workspace: {
+  /** The canvas as the Agent's tools see it: the built-in Agent panel and the Local Agent Bridge share it. */
+  function agentWorkspace() {
+    return {
         hasProject: () => Boolean(getCurrentProjectPath()),
         projectStorage: isElectron ? 'file' : 'server',
         getCurrentProjectPath,
@@ -3483,7 +3477,21 @@ export function buildWorkflowCanvas(root, options = {}) {
           : pendingReviews.get(nodeId) ? `review:${pendingReviews.get(nodeId)}` : null),
         stopReviewNode,
         verifyReviewSuggestions,
-      },
+    };
+  }
+  // Local Agent Bridge (desktop only): local coding agents call the Agent's tools on this canvas
+  // (docs/design/LOCAL_AGENT_BRIDGE_DESIGN.md). Off until the user enables it in Settings > External agent.
+  if (isElectron) installAgentBridge(agentWorkspace);
+  function mountAgentPanel() {
+    if (pendingAgentMount || workspacePanels.agentHost.querySelector('.agent-window-overlay')) return;
+    pendingAgentMount = true;
+    const generation = agentMountGeneration;
+    openAgentWindowModal({
+      projectPath: getCurrentProjectPath(),
+      host: workspacePanels.agentHost,
+      onClose: () => { workspacePanels.collapse('agent'); agentAssistantBtn.focus(); },
+      isCurrent: () => generation === agentMountGeneration,
+      workspace: agentWorkspace(),
     }).catch((error) => {
       if (generation === agentMountGeneration) {
         showAlert(error?.message || 'Could not open Agent Assistant.', { title: 'Agent Assistant' });

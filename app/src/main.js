@@ -17,6 +17,7 @@ import { APP_NAME, WINDOWS_APP_ID, windowsTaskbarDetails } from './appIdentity.j
 import { IMAGE_FILE_EXTENSIONS } from './fileTypes.js';
 import { allowedExternalUrl, allowedWebSourceUrl } from './externalLinks.js';
 import { formatAppInfo } from './aboutInfo.js';
+import { createBridgeController } from './agentBridge/bridgeMain.js';
 
 if (process.platform === 'win32') app.setAppUserModelId(WINDOWS_APP_ID);
 
@@ -966,6 +967,11 @@ function macDockIcon(filePath) {
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
+let agentBridge = null;
+ipcMain.handle('agent-bridge:status', () => agentBridge?.status() || { enabled: false, running: false });
+ipcMain.handle('agent-bridge:set-enabled', (_event, enabled) => agentBridge?.setEnabled(Boolean(enabled)));
+ipcMain.handle('agent-bridge:reset-token', () => agentBridge?.resetToken());
+
 if (gotSingleInstanceLock) app.whenReady().then(() => {
   // `npm start` launches the Electron binary, so the Dock would show Electron's
   // icon. Packaged builds already get assets/icon.icns from the app bundle.
@@ -985,6 +991,14 @@ if (gotSingleInstanceLock) app.whenReady().then(() => {
 
   // Backend startup begins once the window's first frame is ready.
   createWindow();
+
+  // Local Agent Bridge (Settings > External agent): off unless the user turned it on.
+  agentBridge = createBridgeController({
+    ipcMain,
+    getWindow: () => BrowserWindow.getAllWindows()[0] || null,
+    userDataDir: app.getPath('userData'),
+  });
+  void agentBridge.init().catch((error) => console.error('Agent bridge:', error));
 
   // On OS X it's common to re-create a window in the app when the
   // dock icon is clicked and there are no other windows open.
@@ -1006,6 +1020,7 @@ app.on('window-all-closed', () => {
 
 // Ensure backend is stopped when quitting.
 app.on('before-quit', () => {
+  void agentBridge?.stop();
   stopPythonBackend();
   void backendLog?.close();
 });

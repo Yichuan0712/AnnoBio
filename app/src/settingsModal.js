@@ -11,6 +11,7 @@ import { mountPillSelect } from './pillSelect.js';
 import { attachModelIdAutocomplete } from './modelIdAutocomplete.js';
 import { PER_MODEL_FIELDS, bindModelFields, keepKnownModels } from './perModelSettings.js';
 import { paramLabel, paramValue, withRunParams } from './runParams.js';
+import { externalAgentPanelHtml, mountExternalAgentSettings } from './agentBridge/externalAgentSettings.js';
 
 const API_BASE = BACKEND_API_BASE;
 
@@ -731,7 +732,8 @@ export function openSettingsModal() {
                       <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab review-detail-tab--active" role="tab" aria-selected="true" aria-controls="settings-panel-credentials" id="settings-tab-credentials" data-tab="credentials">New credential</button>
                       <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-run" id="settings-tab-run" data-tab="run">Generate</button>
                       <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-review" id="settings-tab-review" data-tab="review">Optimize</button>
-                      <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-agent" id="settings-tab-agent" data-tab="agent">Agent</button>
+                      <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-agent" id="settings-tab-agent" data-tab="agent">Agent</button>${isDesktop ? `
+                      <button type="button" class="btn btn-secondary review-detail-view-switch__btn review-detail-tab" role="tab" aria-selected="false" aria-controls="settings-panel-external-agent" id="settings-tab-external-agent" data-tab="external-agent">External agent</button>` : ''}
                     </div>
                   </div>
                   <div class="review-detail-tab-panels model-settings-tab-panels">
@@ -920,7 +922,7 @@ export function openSettingsModal() {
                             </div>
                           </div>
                       </div>
-                    </div>
+                    </div>${isDesktop ? externalAgentPanelHtml() : ''}
                   </div>
                 </div>
                 <div class="prompt-actions model-settings-footer">
@@ -1079,7 +1081,8 @@ export function openSettingsModal() {
   ];
 
   function activateSettingsTab(name) {
-    const n = name === 'run' || name === 'review' || name === 'agent' || name === 'credentials' ? name : 'credentials';
+    const n = name === 'run' || name === 'review' || name === 'agent' || name === 'credentials'
+      || (name === 'external-agent' && isDesktop) ? name : 'credentials';
     tabs.forEach((btn) => {
       const on = btn.dataset.tab === n;
       btn.classList.toggle('review-detail-tab--active', on);
@@ -1089,13 +1092,15 @@ export function openSettingsModal() {
       p.classList.toggle('review-detail-tab-panel--active', p.dataset.panel === n);
     });
     const isCredentials = n === 'credentials';
-    if (footerSaveRestore) footerSaveRestore.hidden = isCredentials;
+    // External agent changes apply at once, so that tab has no Save / Restore.
+    if (footerSaveRestore) footerSaveRestore.hidden = isCredentials || n === 'external-agent';
     if (footerAdd) footerAdd.hidden = !isCredentials;
   }
 
   tabs.forEach((btn) => {
     btn.addEventListener('click', () => activateSettingsTab(btn.dataset.tab));
   });
+  if (isDesktop) mountExternalAgentSettings(overlay);
 
   async function loadCredentials() {
     try {

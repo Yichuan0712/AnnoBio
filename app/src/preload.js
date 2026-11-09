@@ -2,6 +2,16 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
+  // Local Agent Bridge (Settings > External agent)
+  getAgentBridgeStatus: () => ipcRenderer.invoke('agent-bridge:status'),
+  setAgentBridgeEnabled: (enabled) => ipcRenderer.invoke('agent-bridge:set-enabled', enabled),
+  resetAgentBridgeToken: () => ipcRenderer.invoke('agent-bridge:reset-token'),
+  onAgentBridgeRequest: (callback) => {
+    const listener = (_event, request) => callback(request);
+    ipcRenderer.on('agent-bridge:request', listener);
+    return () => ipcRenderer.removeListener('agent-bridge:request', listener);
+  },
+  respondAgentBridge: (id, result) => ipcRenderer.send('agent-bridge:response', { id, result }),
   getAppInfo: () => ipcRenderer.invoke('app:info'),
   copyAppInfo: () => ipcRenderer.invoke('app:copy-info'),
   importImages: (paths) => ipcRenderer.invoke('assets:import', paths),
