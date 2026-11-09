@@ -127,7 +127,8 @@ def callback(fn, name, arity, *, optional=False):
     if fn is None and optional:
         return
     expected = {"predict": "predict(prompt, inputs)", "evaluate": "evaluate(example, prediction)",
-                "model": "model(request)", "is_cancelled": "is_cancelled()", "on_event": "on_event(event)"}[name]
+                "model": "model(request)", "is_cancelled": "is_cancelled()", "on_event": "on_event(event)",
+                "aggregate": "aggregate(observations)"}[name]
     if not callable(fn):
         raise InputTypeError(f"expected callable {expected}, received {type_name(fn)}.", path=name,
                              hint="Pass the function itself, not its result.")

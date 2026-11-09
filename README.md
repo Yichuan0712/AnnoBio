@@ -74,14 +74,16 @@ researchers have published, with their Prompts, Datasets, and scores.
   ChEBI, MONDO), and you can inspect every mismatch.
 - Optimize a Prompt from its evaluation failures, review each proposed change, and compare
   versions on data not used for the search. Methods:
-  - **Thompson Prompt Search** (default): analyzes failures and proposes local instruction
-    edits.
+  - **AnnoBio Optimizer** (default): diagnoses failures using the Evaluate's matching rules and
+    proposes whole-prompt rewrites, optionally with a few-shot (worked-examples) edit.
   - **GEPA**: reflective evolution of candidate instructions.
   - **MIPROv2**: instruction and few-shot example search.
   - **COPRO**: instruction-only search.
   - **BootstrapFewShotWithRandomSearch**: few-shot example selection.
   - **SIMBA**: self-reflective rules and few-shot examples.
   - **TextGrad**: textual-gradient instruction updates.
+  - **APE**: drafts candidate instructions from input-output examples, then keeps the best scoring ones.
+  - **EvoPrompt**: evolves a population of prompts (differential evolution), keeping better-scoring offspring.
 - Agent Assistant: describe a research task and it finds data, builds the pipeline, and
   explains results. It can also search the web. You approve each workflow change before it is
   applied.

@@ -9,9 +9,10 @@ import { runInputSource, stepSourceLabel } from './stepInputs.js';
 const nodeId = (node) => String(node?.nodeId || node?.id || '');
 
 const METHOD_NAMES = {
+  annobio_engine_v2: 'AnnoBio Optimizer',
   issue_analysis_suggestions: 'Thompson Prompt Search',
-  gepa: 'GEPA', miprov2: 'MIPROv2', bootstrap_fewshot: 'Bootstrap Few-Shot',
-  textgrad: 'TextGrad', copro: 'COPRO', simba: 'SIMBA',
+  gepa: 'GEPA', miprov2: 'MIPROv2', bootstrap_fewshot: 'BootstrapRS',
+  textgrad: 'TextGrad', copro: 'COPRO', simba: 'SIMBA', ape: 'APE', evoprompt: 'EvoPrompt',
 };
 
 const methodName = (methodId) => (methodId ? METHOD_NAMES[methodId] || methodId : '');

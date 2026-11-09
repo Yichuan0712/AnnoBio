@@ -28,6 +28,14 @@ def resolve_unique_span(content: str, old: str) -> str | None:
     original truncation, Markdown and unique-prefix logic is preserved in spans.py.
     """
     from .spans import _resolve_old_sentence_unique
+    # Whitespace-only matches are exact after normalization. Resolve these
+    # before optional fuzzy alignment, whose processed-string offsets can
+    # otherwise select a suffix of the original multiline text.
+    if old not in content:
+        segment = find_segment(content, old)
+        if segment is not None:
+            start = content.find(segment)
+            return segment if content.find(segment, start + 1) < 0 else None
     hit = _resolve_old_sentence_unique(content, old)
     if hit is not None:
         return hit

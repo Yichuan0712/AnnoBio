@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 import uuid
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 from urllib.parse import unquote
 
 import httpx
@@ -181,6 +181,11 @@ DEFAULT_SETTINGS = {
     "review_max_failed_rows": 30,
     # Thompson-sampling trials per optimization run (4–200).
     "optimization_max_trials": 40,
+    # AnnoBio Optimizer (default review method, review_engine_v2.py): exploration intensity low / medium / high
+    # (failed inputs diagnosed and whole-prompt rewrites proposed per Optimize: 4/1, 8/2, 16/4; low = the formal
+    # experiments), and whether to also optimize few-shot examples (the worked-example card).
+    "engine_exploration": "low",
+    "engine_few_shot": True,
     # GEPA reflective-evolution max iterations (4-200); kept separate from optimization_max_trials because
     # each GEPA iteration runs the task model against every targeted input, not just a suggestion's rows.
     "gepa_max_iterations": 15,
@@ -197,6 +202,10 @@ DEFAULT_SETTINGS = {
     "copro_depth": 3,
     # SIMBA mini-batch introspection steps (2-40); own setting for the same reason.
     "simba_max_steps": 8,
+    # APE search rounds and EvoPrompt generations (1-50; review_prompt_search.py). Defaults are the papers' own:
+    # APE without iteration (1 round), EvoPrompt 10 generations.
+    "ape_rounds": 1,
+    "evoprompt_generations": 10,
     # Show Reset & Debug buttons on suggestion cards.
     "debug_mode": False,
     # Optional: raises PubMed E-utilities rate limit from 3/sec to 10/sec when set.
@@ -267,6 +276,9 @@ class SettingsPatch(BaseModel):
         le=200,
         description="Maximum Thompson-sampling trials per compositional optimization run (4–200).",
     )
+    engine_exploration: Literal["low", "medium", "high"] | None = Field(
+        default=None, description="AnnoBio Optimizer exploration intensity (failed inputs / rewrites: 4/1, 8/2, 16/4).")
+    engine_few_shot: bool | None = Field(default=None, description="AnnoBio Optimizer: also optimize few-shot examples.")
     gepa_max_iterations: int | None = Field(
         default=None,
         ge=4,
@@ -309,6 +321,8 @@ class SettingsPatch(BaseModel):
         le=40,
         description="Mini-batch introspection steps for the SIMBA review method (2–40).",
     )
+    ape_rounds: int | None = Field(default=None, ge=1, le=50, description="APE search rounds (1–50).")
+    evoprompt_generations: int | None = Field(default=None, ge=1, le=50, description="EvoPrompt generations (1–50).")
     debug_mode: bool | None = None
     ncbi_api_key: str | None = None
     ncbi_email: str | None = None
@@ -335,6 +349,8 @@ REVIEW_SETTINGS_OVERRIDE_KEYS = frozenset({
     "copro_breadth",
     "copro_depth",
     "simba_max_steps",
+    "ape_rounds",
+    "evoprompt_generations",
 })
 
 
@@ -487,11 +503,22 @@ class ReviewRequest(BaseModel):
     review_method: str | None = Field(default=None, description="Registered review method id (backend/review_methods.py); defaults to the legacy issue-analysis + suggested-changes pipeline")
     score_mapping: str | None = Field(default=None, description="Serialized Score rule-tree bundle (scoreMappingBundle.js) from the upstream Score node; only methods that self-score candidates (e.g. gepa) need this")
     settings_overrides: dict | None = Field(default=None, description="Per-Score-node Review settings (REVIEW_SETTINGS_OVERRIDE_KEYS)")
+    # What Verify already uses, for methods that run and score candidates in the backend (the AnnoBio Optimizer's
+    # worked-example card; review_engine_hooks.py). All optional: without them that card is simply not offered.
+    run_credential_id: str | None = Field(default=None, description="The upstream Generate node's model credential")
+    run_settings: dict | None = Field(default=None, description="The Generate node's run settings (RUN_SETTINGS_OVERRIDE_KEYS)")
+    score_match_code: str | None = Field(default=None, description="The Score node's match() code when it is in code mode")
+    score_tables: dict | None = Field(default=None, description="{input_headers, input_rows: [[index, row]], gt_headers, gt_rows: [[index, row]]} for the rows this Optimize refers to")
 
     @field_validator("settings_overrides")
     @classmethod
     def check_settings_overrides(cls, value):
         return _validate_settings_overrides(value, REVIEW_SETTINGS_OVERRIDE_KEYS)
+
+    @field_validator("run_settings")
+    @classmethod
+    def check_run_settings(cls, value):
+        return _validate_settings_overrides(value, RUN_SETTINGS_OVERRIDE_KEYS)
 
     @model_validator(mode="after")
     def image_inputs_require_session(self):
@@ -536,6 +563,17 @@ def _ensure_data_dir():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _known_review_method(method_id) -> str:
+    """A saved default method that is no longer registered (e.g. the removed Thompson Prompt Search,
+    "issue_analysis_suggestions") reads as blank, so the registry default — the AnnoBio Optimizer — applies
+    and the Settings dropdown shows it."""
+    method_id = str(method_id or "").strip()
+    if not method_id:
+        return ""
+    from review_methods import REGISTRY
+    return method_id if method_id in REGISTRY else ""
+
+
 def _load_settings() -> dict:
     """Load settings from disk; return defaults if missing or invalid."""
     _ensure_data_dir()
@@ -549,6 +587,7 @@ def _load_settings() -> dict:
             if k in data:
                 out[k] = data[k]
         out["model_settings"] = clean_model_settings(out.get("model_settings"))
+        out["default_review_method"] = _known_review_method(out.get("default_review_method"))
         return hosted_model.settings(out, _load_credentials())
     except (json.JSONDecodeError, OSError):
         return hosted_model.settings(dict(DEFAULT_SETTINGS), _load_credentials())
@@ -2007,7 +2046,7 @@ def list_review_methods_endpoint():
 
 @app.post("/api/review/analyze")
 def review_analyze(body: ReviewRequest):
-    """Start review job in background; returns 202 with review_id. Poll GET /api/review/result/{review_id}. Pipeline: review_pipeline.py (per-row analysis → localized prompt edits)."""
+    """Start review job in background; returns 202 with review_id. Poll GET /api/review/result/{review_id}. Methods: review_methods.py (default: the AnnoBio Optimizer, review_engine_v2.py)."""
     from review_methods import get_review_method
 
     review_id = str(uuid.uuid4())
@@ -3377,6 +3416,82 @@ def cancel_match_run(job_id: str):
     return {"ok": True, "status": "cancelling"}
 
 
+# ---------- Score evaluate (the Verify verdict computed in the backend; score_engine.py) ----------
+SCORE_EVALUATE_MAX_INPUTS = 10000
+
+
+class ScoreEvaluateInput(BaseModel):
+    input_row: list[Any] = Field(default_factory=list, description="This input's row of the input table (aligned with input_headers)")
+    run_rows: list[dict[str, Any]] = Field(default_factory=list, description="The run's result rows for this input: {output, error?, row_index?}; several for a table output")
+    gt_rows: list[list[Any]] = Field(default_factory=list, description="This input's ground-truth rows (aligned with gt_headers)")
+
+
+class ScoreEvaluateRequest(BaseModel):
+    """Either `inputs` (one entry per input, the backend form) or `results` + `input_entries` + `run_ws` +
+    `gt_content` (exactly the arguments Verify passes to evaluateScoreOutputGt)."""
+    score_mapping: Any = Field(default=None, description="Serialized v2 score bundle (string or object); its output rules decide the verdict")
+    score_match_code: str = Field(default="", description="Python match(input_row, output_row, gt_row); when set, the rules are not used")
+    output_fields: list[Any] = Field(default_factory=list)
+    input_headers: list[Any] = Field(default_factory=list)
+    gt_headers: list[Any] = Field(default_factory=list)
+    inputs: list[ScoreEvaluateInput] | None = None
+    results: list[Any] | None = None
+    input_entries: list[Any] | None = None
+    run_ws: dict[str, Any] | None = None
+    gt_content: dict[str, Any] | None = None
+    embedding_cosines: list[list[Any]] | None = Field(default=None, description="Optional prefetched [run, gt, cosine] triples; otherwise computed in-process when an embedding rule needs them")
+    concepts: list[list[Any]] | None = Field(default=None, description="Optional prefetched [source, term, result] triples; otherwise resolved in-process when a concept rule needs them")
+    python_path: str | None = Field(default=None, description="Interpreter for code mode; defaults to Settings -> Python")
+    project_session_id: str | None = Field(default=None, description="Required in code mode when a row has an image/PDF cell")
+
+    @model_validator(mode="after")
+    def _check_form(self):
+        verify_form = self.results is not None or self.input_entries is not None
+        if (self.inputs is not None) == verify_form:
+            raise ValueError("Send either `inputs` or `results` + `input_entries` (+ `run_ws`, `gt_content`).")
+        if verify_form and self.input_entries is None:
+            raise ValueError("`input_entries` is required with `results`.")
+        count = len(self.inputs) if self.inputs is not None else len(self.input_entries or [])
+        if count > SCORE_EVALUATE_MAX_INPUTS:
+            raise ValueError(f"Too many inputs (max {SCORE_EVALUATE_MAX_INPUTS}).")
+        for name in ("embedding_cosines", "concepts"):
+            for i, item in enumerate(getattr(self, name) or []):
+                if len(item) != 3 or not isinstance(item[1], str) or (name == "embedding_cosines" and not isinstance(item[0], str)):
+                    raise ValueError(f"{name}[{i}] must be a [string, string, value] triple.")
+        return self
+
+
+@app.post("/api/score/evaluate")
+def score_evaluate(body: ScoreEvaluateRequest):
+    """Scores a batch of inputs exactly as Verify does (matched / not matched per run row, pairs, counts)."""
+    import score_engine
+
+    python_path = body.python_path
+    if body.score_match_code and not (python_path or "").strip():
+        python_path = str(_load_settings().get("python_path") or "")
+    shared = dict(
+        score_mapping=body.score_mapping, score_match_code=body.score_match_code, output_fields=body.output_fields,
+        embedding_cosines=body.embedding_cosines, concept_ids=body.concepts,
+        python_path=python_path, project_session_id=body.project_session_id,
+    )
+    try:
+        if body.inputs is not None:
+            return score_engine.score_inputs(
+                [item.model_dump() for item in body.inputs],
+                input_headers=body.input_headers, gt_headers=body.gt_headers, **shared,
+            )
+        return score_engine.evaluate_score_output_gt(
+            results=body.results, input_entries=body.input_entries,
+            run_ws=body.run_ws or {"headers": [], "rows": []}, gt_content=body.gt_content or {"headers": [], "rows": []},
+            **shared,
+        )
+    except (ValueError, TypeError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        _safe_print(f"[Score evaluate] {e}", file=sys.stderr)
+        raise HTTPException(status_code=503, detail=f"Scoring service unavailable: {e}") from e
+
+
 # ---------- Process (runs a user Python process(df) function once on the whole dataset, delegates
 #             to process_df_exec.py; it may return one DataFrame or named DataFrame branches) ----------
 _process_df_jobs: dict[str, dict] = {}
@@ -3551,7 +3666,7 @@ def cancel_process_df_run(job_id: str):
     return {"ok": True, "status": "cancelling"}
 
 
-# ---------- Review analyze worker (delegates to review_pipeline.py) ----------
+# ---------- Review analyze worker (delegates to the registered review method) ----------
 def _review_is_cancelled(review_id: str | None) -> bool:
     """Check if client requested cancellation for this review job."""
     if not review_id:
@@ -3560,8 +3675,35 @@ def _review_is_cancelled(review_id: str | None) -> bool:
         return review_id in _review_cancelled
 
 
+def _engine_task_hooks(body: ReviewRequest, st: dict) -> dict:
+    """The Generate model and Verify's scoring for the engine's worked-example card, or {} when the request does not
+    carry them (an older frontend or project) or the Generate credential is unusable: the card is then not offered."""
+    from review_engine_hooks import make_score_input
+    from task_row_runner import make_row_runner
+
+    if not (body.run_credential_id and body.output_schema and body.score_tables and (body.score_mapping or body.score_match_code)):
+        return {}
+    cred = next((item for item in _load_credentials() if item.get("id") == body.run_credential_id), None)
+    if not cred:
+        return {}
+    cred = _credential_for_task(cred, "generate")
+    if not cred.get("api_key"):
+        return {}
+    # The same settings a Run (and so Verify) uses: this model's settings, then the Generate node's overrides.
+    run_settings = {**settings_for_model(_load_settings(), body.run_credential_id), **(body.run_settings or {})}
+    run_row = make_row_runner(provider=_credential_provider(cred), model=_credential_model(cred) or "",
+                              api_key=cred.get("api_key", ""), base_url=_credential_base_url(cred),
+                              output_schema=body.output_schema, run_settings=run_settings,
+                              project_session_id=body.project_session_id)
+    score_input = make_score_input(comparison_rows=list(body.comparison_rows or []), score_mapping=body.score_mapping,
+                                   score_match_code=body.score_match_code or "", score_tables=body.score_tables,
+                                   output_fields=run_row.output_fields, python_path=st.get("python_path") or None,
+                                   project_session_id=body.project_session_id)
+    return {"_run_row": run_row, "_score_input": score_input}
+
+
 def _do_review_work(review_id: str, body: ReviewRequest) -> None:
-    """Validate credential; run review_pipeline.run_review_pipeline; finalize job status."""
+    """Validate credential; run the registered review method; finalize job status."""
 
     def append_event(ev: dict) -> None:
         with _review_jobs_lock:
@@ -3612,6 +3754,17 @@ def _do_review_work(review_id: str, body: ReviewRequest) -> None:
             max_failed = DEFAULT_SETTINGS["review_max_failed_rows"]
         max_failed = max(1, min(200, max_failed))
 
+        if review_method.id == "annobio_engine_v2" and st.get("engine_few_shot", True):
+            try:
+                st = {**st, **_engine_task_hooks(body, st)}
+            except Exception as e:  # the rewrites still come; only the worked-example card is left out
+                _safe_print(_HL + "[Review] Worked-example card unavailable: " + _R + str(e))
+        elif review_method.id in ("ape", "evoprompt"):
+            try:  # without the hooks the method reports what is missing
+                st = {**st, **_engine_task_hooks(body, st)}
+            except Exception as e:
+                _safe_print(_HL + f"[Review] {review_method.label}: Generate model or scoring unavailable: " + _R + str(e))
+
         review_method.run(
             provider=provider,
             model=model,
@@ -3653,6 +3806,7 @@ class OptimizationSegmentsRequest(BaseModel):
     new_sentence: str = Field(..., description="Improved sentence to split into segments")
     improvement_rationale: str = Field(default="", description="Why this change was proposed")
     max_segments: int = Field(default=5, ge=1, le=8, description="Max number of segments (1–8)")
+    whole_prompt: bool = Field(default=False, description="The card replaces the whole prompt (split locally, whitespace kept)")
 
 
 class OptimizationCandidatesRequest(BaseModel):
@@ -3698,6 +3852,7 @@ def optimization_segments(body: OptimizationSegmentsRequest):
             new_sentence=body.new_sentence,
             improvement_rationale=body.improvement_rationale,
             max_segments=body.max_segments,
+            whole_prompt=body.whole_prompt,
         )
     except Exception as e:
         _safe_print(_HL + "[Optimization] /segments ERROR" + _R + f"  {e}")

@@ -457,13 +457,15 @@ interpretable, issue-guided edits. Use another method only when its search strat
 cost, and use of examples fit the study design.</p>
 <div class="docs-table-wrap"><table>
 <thead><tr><th>Method</th><th>What it changes</th></tr></thead><tbody>
-<tr><td>Thompson Prompt Search</td><td>Analyzes failures and proposes local instruction edits; supported edits can undergo further local search.</td></tr>
+<tr><td>AnnoBio Optimizer (default)</td><td>Diagnoses failures using the Evaluate's matching rules, then proposes whole-prompt rewrites and, optionally, a few-shot (worked-examples) edit; edits can undergo further local search. Exploration intensity (low / medium / high) sets how many failed inputs it diagnoses and how many rewrites it proposes.</td></tr>
 <tr><td>GEPA</td><td>Reflective evolution of candidate instructions.</td></tr>
 <tr><td>MIPROv2</td><td>Instruction and few-shot example search.</td></tr>
 <tr><td>COPRO</td><td>Instruction-only search.</td></tr>
 <tr><td>BootstrapFewShotWithRandomSearch</td><td>Few-shot example selection.</td></tr>
 <tr><td>SIMBA</td><td>Self-reflective rules and few-shot examples.</td></tr>
 <tr><td>TextGrad</td><td>Textual-gradient instruction updates; available only with its optional dependency installed.</td></tr>
+<tr><td>APE</td><td>Drafts candidate instructions from input-output examples, scores them on your inputs with the Generate model, and keeps the best (Rounds in Settings).</td></tr>
+<tr><td>EvoPrompt</td><td>Evolves a population of 10 prompts by differential evolution, scoring each new prompt on your inputs with the Generate model (Generations in Settings).</td></tr>
 </tbody></table></div>
 <p>Methods differ in search strategy, model usage, number of calls, and available suggestion actions.
 Optimization can be substantially more expensive than a single Generate run. Regardless of method,

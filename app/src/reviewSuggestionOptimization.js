@@ -25,6 +25,20 @@ import { getCurrentProjectId } from './currentProject.js';
 
 const API_BASE = BACKEND_API_BASE;
 
+/**
+ * A candidate for one segment, carrying the segment's own leading/trailing whitespace. A whole-prompt card is
+ * split at paragraph boundaries with each segment keeping its line breaks (backend split_paragraphs), so the
+ * joined candidates keep the prompt's layout. The built-in method's segments have no edge whitespace (the
+ * backend strips them), so its candidates are unchanged. runSuggestionOptimizationCompositional inlines the
+ * same rule (python/tests/test_review.py evaluates that function's source on its own).
+ */
+export function keepSegmentWhitespace(segment, candidate) {
+  const seg = String(segment || '');
+  const lead = /^\s*/.exec(seg)[0];
+  const trail = seg.trim() ? /\s*$/.exec(seg)[0] : '';
+  return lead + String(candidate || '').trim() + trail;
+}
+
 // ─── Session management (abort on app close) ─────────────────────────────────
 
 /** @type {Set<AbortController>} */
@@ -225,6 +239,8 @@ export async function runSuggestionOptimizationCompositional(options) {
         new_sentence: proposal,
         improvement_rationale: improvementRationale,
         max_segments: Math.min(8, Math.max(1, Number(maxSegments) || 5)),
+        // A whole-prompt card (its old text is the entire prompt) is split locally with its whitespace kept.
+        whole_prompt: String(oldSentence || '').trim() !== '' && String(oldSentence || '').trim() === String(originalText || '').trim(),
       }),
     });
     const segData = await segRes.json().catch(() => ({}));
@@ -272,6 +288,7 @@ export async function runSuggestionOptimizationCompositional(options) {
       }
       const cands = Array.isArray(cData.candidates)
         ? cData.candidates.map((x) => String(x || '').trim()).filter(Boolean)
+          .map((c) => /^\s*/.exec(seg)[0] + c + (seg.trim() ? /\s*$/.exec(seg)[0] : '')) // = keepSegmentWhitespace
         : [];
       if (!cands.length) throw new Error(`No candidates returned for segment ${i}.`);
       lattice.push(cands);

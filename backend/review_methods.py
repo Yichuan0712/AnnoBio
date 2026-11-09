@@ -1,8 +1,7 @@
 """
 Registry of pluggable review methods.
 
-Each method drives the Review job the same way `review_pipeline.run_review_pipeline`
-always has: given the request body and a way to emit events, it produces one or more
+Each method drives the Review job the same way the original built-in pipeline did: given the request body and a way to emit events, it produces one or more
 `{"type": "suggestions", "suggestions": [...]}` events (PromptEditSuggestion-shaped
 dicts) and finishes with `{"type": "done"}`. Everything downstream of the Review job
 (suggestion accept/revert, prompt-edit application) only depends on that converged
@@ -34,7 +33,8 @@ from review_bootstrap_fewshot import run_bootstrap_fewshot
 from review_copro import run_copro
 from review_gepa import run_gepa
 from review_miprov2 import run_miprov2
-from review_pipeline import run_review_pipeline
+from review_engine_v2 import run_engine_v2
+from review_prompt_search import run_ape, run_evoprompt
 from review_simba import run_simba
 from safe_stdio import safe_print as _print
 
@@ -80,22 +80,28 @@ class ReviewMethodSpec:
         }
 
 
-DEFAULT_REVIEW_METHOD_ID = "issue_analysis_suggestions"
+# The AnnoBio Optimizer (engine v2) is the built-in method since 2026-11-07 (user decision; python/ENGINE_V2_DESIGN.md
+# 6.0l). The previous built-in method ("issue_analysis_suggestions", Thompson Prompt Search) was removed at the
+# user's request; a project or setting that still names it gets the default (get_review_method). review_pipeline.py
+# stays for the helpers the other methods share (PromptEditSuggestion, _sanitize_prompt_edits).
+DEFAULT_REVIEW_METHOD_ID = "annobio_engine_v2"
 
 _ALL_METHODS: list[tuple[str, ReviewMethodSpec | None]] = [
     (DEFAULT_REVIEW_METHOD_ID, ReviewMethodSpec(
         id=DEFAULT_REVIEW_METHOD_ID,
-        label="Thompson Prompt Search (issue-guided local search)",
+        label="AnnoBio Optimizer",
         stages=[
             ReviewMethodStage(id="analysis", label="Issue analysis"),
             ReviewMethodStage(id="suggestions", label="Suggested changes"),
         ],
-        run=run_review_pipeline,
+        run=run_engine_v2,
+        # "Click to Optimize" stays available on its cards (user decision 2026-11-07: useful with a person in the
+        # loop); the compositional search handles whole-prompt cards (docs/design/SCORING_BACKEND_PLAN.md step 3).
         supports_segment_optimization=True,
     )),
     ("gepa", ReviewMethodSpec(
         id="gepa",
-        label="GEPA (reflective evolution)",
+        label="GEPA",
         stages=[
             ReviewMethodStage(id="seed", label="Seed"),
             ReviewMethodStage(id="evolve", label="Evolve"),
@@ -105,7 +111,7 @@ _ALL_METHODS: list[tuple[str, ReviewMethodSpec | None]] = [
     )),
     ("miprov2", ReviewMethodSpec(
         id="miprov2",
-        label="MIPROv2 (instructions + few-shot)",
+        label="MIPROv2",
         stages=[
             ReviewMethodStage(id="prepare", label="Prepare"),
             ReviewMethodStage(id="compile", label="Compile"),
@@ -115,7 +121,7 @@ _ALL_METHODS: list[tuple[str, ReviewMethodSpec | None]] = [
     )),
     ("bootstrap_fewshot", ReviewMethodSpec(
         id="bootstrap_fewshot",
-        label="BootstrapFewShotWithRandomSearch (few-shot only)",
+        label="BootstrapRS",
         stages=[
             ReviewMethodStage(id="prepare", label="Prepare"),
             ReviewMethodStage(id="compile", label="Compile"),
@@ -125,7 +131,7 @@ _ALL_METHODS: list[tuple[str, ReviewMethodSpec | None]] = [
     )),
     ("textgrad", None if run_textgrad is None else ReviewMethodSpec(
         id="textgrad",
-        label="TextGrad (textual gradient descent)",
+        label="TextGrad",
         stages=[
             ReviewMethodStage(id="prepare", label="Prepare"),
             ReviewMethodStage(id="optimize", label="Optimize"),
@@ -133,9 +139,29 @@ _ALL_METHODS: list[tuple[str, ReviewMethodSpec | None]] = [
         ],
         run=run_textgrad,
     )),
+    ("ape", ReviewMethodSpec(
+        id="ape",
+        label="APE",
+        stages=[
+            ReviewMethodStage(id="propose", label="Propose"),
+            ReviewMethodStage(id="search", label="Search"),
+            ReviewMethodStage(id="select", label="Select"),
+        ],
+        run=run_ape,
+    )),
+    ("evoprompt", ReviewMethodSpec(
+        id="evoprompt",
+        label="EvoPrompt",
+        stages=[
+            ReviewMethodStage(id="seed", label="Seed"),
+            ReviewMethodStage(id="evolve", label="Evolve"),
+            ReviewMethodStage(id="select", label="Select"),
+        ],
+        run=run_evoprompt,
+    )),
     ("copro", ReviewMethodSpec(
         id="copro",
-        label="COPRO (coordinate ascent, instructions only)",
+        label="COPRO",
         stages=[
             ReviewMethodStage(id="prepare", label="Prepare"),
             ReviewMethodStage(id="compile", label="Compile"),
@@ -145,7 +171,7 @@ _ALL_METHODS: list[tuple[str, ReviewMethodSpec | None]] = [
     )),
     ("simba", ReviewMethodSpec(
         id="simba",
-        label="SIMBA (self-reflective rules + few-shot)",
+        label="SIMBA",
         stages=[
             ReviewMethodStage(id="prepare", label="Prepare"),
             ReviewMethodStage(id="compile", label="Compile"),
