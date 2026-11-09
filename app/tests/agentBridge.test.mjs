@@ -144,7 +144,7 @@ test('the dropdown offers Claude Code, Codex and Cursor, each with its own conne
   assert.equal(s.claude, 'claude mcp add --transport http annobio http://127.0.0.1:47321/mcp --header "Authorization: Bearer abc"');
   assert.match(s.codex, /^\[mcp_servers\.annobio\]\nurl = "http:\/\/127\.0\.0\.1:47321\/mcp"\nhttp_headers = \{ "Authorization" = "Bearer abc" \}$/);
   assert.deepEqual(JSON.parse(s.cursor), { mcpServers: { annobio: { url: 'http://127.0.0.1:47321/mcp', headers: { Authorization: 'Bearer abc' } } } });
-  assert.match(bridgeStatusText({ enabled: false, running: false }), /^Off/);
+  assert.match(bridgeStatusText({ enabled: false, running: false }), /^Not connected/);
   assert.match(bridgeStatusText({ enabled: true, running: true, url: 'u', client: 'codex' }), /codex/);
 });
 
@@ -187,4 +187,41 @@ test('controller persists the switch and token, and round-trips a request throug
   await restarted.stop();
   await controller.stop();
   await fs.rm(dir, { recursive: true, force: true });
+});
+
+test('settings panel: the first copy opens the connection; Disconnect all agents closes it', async () => {
+  const { externalAgentPanelHtml, mountExternalAgentSettings } = await import('../src/agentBridge/externalAgentSettings.js');
+  const html = externalAgentPanelHtml();
+  assert.ok(!html.includes('type="checkbox"'), 'no on/off switch');
+  assert.match(html, /Copy connection settings/);
+  assert.match(html, /Disconnect all agents/);
+  // A minimal DOM stand-in for the elements the panel wires.
+  const make = () => ({ hidden: false, disabled: false, textContent: '', value: 'claude', listeners: {},
+    addEventListener(type, fn) { this.listeners[type] = fn; } });
+  const els = { '#settings-external-agent-status .settings-agent-model-status__text': make(),
+    '#settings-external-agent-client': make(), '#settings-external-agent-copy': make(),
+    '#settings-external-agent-howto': make(), '#settings-external-agent-disconnect': make() };
+  const overlay = { querySelector: (sel) => els[sel] || null };
+  let state = { enabled: false, running: false, token: '' };
+  const calls = [];
+  const api = {
+    getAgentBridgeStatus: async () => state,
+    setAgentBridgeEnabled: async (on) => {
+      calls.push(on);
+      state = on ? { enabled: true, running: true, token: 't', url: 'http://127.0.0.1:47321/mcp' } : { enabled: false, running: false, token: '' };
+      return state;
+    },
+  };
+  const copied = [];
+  Object.defineProperty(globalThis, 'navigator', { value: { clipboard: { writeText: async (t) => { copied.push(t); } } }, configurable: true });
+  mountExternalAgentSettings(overlay, api);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(els['#settings-external-agent-disconnect'].hidden, true);
+  await els['#settings-external-agent-copy'].listeners.click();
+  assert.deepEqual(calls, [true]);
+  assert.match(copied[0], /^claude mcp add --transport http annobio http:\/\/127\.0\.0\.1:47321\/mcp/);
+  assert.equal(els['#settings-external-agent-disconnect'].hidden, false);
+  await els['#settings-external-agent-disconnect'].listeners.click();
+  assert.deepEqual(calls, [true, false]);
+  assert.equal(els['#settings-external-agent-disconnect'].hidden, true);
 });

@@ -1,7 +1,8 @@
 /**
- * Settings > External agent (desktop only): one switch turns the Local Agent Bridge on or off (off also discards
- * the token, so every agent must register again), and a dropdown picks the coding agent whose connection settings
- * to copy. Changes apply at once (the tab has no Save button). docs/design/LOCAL_AGENT_BRIDGE_DESIGN.md
+ * Settings > External agent (desktop only): a dropdown picks the coding agent and "Copy connection settings" copies
+ * its settings, turning the Local Agent Bridge on the first time. "Disconnect all agents" turns it off and discards
+ * the token, so every agent must register again. No other control (user decision 2026-11-08). Changes apply at once
+ * (the tab has no Save button). docs/design/LOCAL_AGENT_BRIDGE_DESIGN.md
  */
 
 /** Coding agents in the dropdown, in order. Adding one = one entry here. */
@@ -39,21 +40,14 @@ export function externalAgentPanelHtml() {
                           <p class="settings-tab-intro">Let a coding agent on this computer work with the project open in AnnoBio. You chat in the coding agent; it reads the project with the same tools as the Agent Assistant, and its own thinking uses its own subscription or quota. Running nodes still uses the models in your credentials. This version can read the project and try Process code; it cannot change the canvas or run nodes.</p>
                           <div class="defaults-row">
                             <div class="defaults-field defaults-field--full">
-                              <label class="dataset-meta-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-                                <input type="checkbox" id="settings-external-agent-enabled" aria-label="Allow coding agents on this computer to connect" />
-                                Allow coding agents on this computer to connect
-                              </label>
-                              <div class="settings-agent-model-status" id="settings-external-agent-status" aria-live="polite">
-                                <span class="settings-agent-model-status__text"></span>
-                              </div>
-                            </div>
-                          </div>
-                          <div class="defaults-row">
-                            <div class="defaults-field defaults-field--full">
                               <label class="dataset-meta-label" for="settings-external-agent-client">Connect</label>
                               <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
                                 <select id="settings-external-agent-client" class="credentials-select dataset-meta-input" style="max-width:220px;" aria-label="Coding agent to connect">${options}</select>
                                 <button type="button" class="btn btn-secondary" id="settings-external-agent-copy">Copy connection settings</button>
+                                <button type="button" class="btn btn-secondary" id="settings-external-agent-disconnect" hidden>Disconnect all agents</button>
+                              </div>
+                              <div class="settings-agent-model-status" id="settings-external-agent-status" aria-live="polite" style="margin-top:6px;">
+                                <span class="settings-agent-model-status__text"></span>
                               </div>
                               <p class="settings-tab-intro" id="settings-external-agent-howto" style="margin-top:8px;"></p>
                             </div>
@@ -76,7 +70,7 @@ export function bridgeConnectionSnippet(agentId, { url, token }) {
 export function bridgeStatusText(status) {
   if (!status) return 'Not available in this version.';
   if (status.error) return `Could not start: ${status.error}`;
-  if (!status.enabled || !status.running) return 'Off. Coding agents cannot connect. Turning it on issues a new connection, so register your agent again.';
+  if (!status.enabled || !status.running) return 'Not connected. Copy connection settings to let a coding agent connect.';
   const last = status.lastTool ? ` Last request: ${status.lastTool}.` : '';
   const who = status.client ? ` Connected: ${status.client}.` : ' No agent has connected yet.';
   return `On at ${status.url}.${who}${last}`;
@@ -88,24 +82,23 @@ export function bridgeStatusText(status) {
  * @param {object} [api] window.electronAPI
  */
 export function mountExternalAgentSettings(overlay, api = window.electronAPI) {
-  const checkbox = overlay.querySelector('#settings-external-agent-enabled');
   const statusText = overlay.querySelector('#settings-external-agent-status .settings-agent-model-status__text');
   const select = overlay.querySelector('#settings-external-agent-client');
   const copyButton = overlay.querySelector('#settings-external-agent-copy');
   const howTo = overlay.querySelector('#settings-external-agent-howto');
-  if (!checkbox || !select || !copyButton || !api?.getAgentBridgeStatus) return;
+  const disconnectButton = overlay.querySelector('#settings-external-agent-disconnect');
+  if (!select || !copyButton || !api?.getAgentBridgeStatus) return;
   let status = null;
 
   function render() {
     const on = Boolean(status?.enabled && status?.running);
-    checkbox.checked = on;
     if (statusText) statusText.textContent = bridgeStatusText(status);
-    copyButton.disabled = !(on && status?.token);
+    if (disconnectButton) disconnectButton.hidden = !on;
     const agent = CODING_AGENTS.find((item) => item.id === select.value) || CODING_AGENTS[0];
     if (howTo) {
-      howTo.textContent = on
-        ? `${agent.howTo} Then open a project here and ask your agent, for example, "use annobio to look at my project".`
-        : 'Turn on the switch above first.';
+      howTo.textContent = `${agent.howTo} Then open a project here and ask your agent, for example, "use annobio to look `
+        + 'at my project". Only programs on this computer with these settings can connect; Disconnect all agents '
+        + 'cuts every agent off, and the next copy gives new settings to register again.';
     }
   }
 
@@ -118,18 +111,27 @@ export function mountExternalAgentSettings(overlay, api = window.electronAPI) {
     render();
   }
 
-  checkbox.addEventListener('change', async () => {
-    checkbox.disabled = true;
+  disconnectButton?.addEventListener('click', async () => {
+    disconnectButton.disabled = true;
     try {
-      status = await api.setAgentBridgeEnabled(checkbox.checked);
+      status = await api.setAgentBridgeEnabled(false);
     } finally {
-      checkbox.disabled = false;
+      disconnectButton.disabled = false;
       render();
     }
   });
   select.addEventListener('change', render);
   copyButton.addEventListener('click', async () => {
-    if (!status?.running || !status?.token) return;
+    if (!status?.running || !status?.token) {
+      copyButton.disabled = true;
+      try {
+        status = await api.setAgentBridgeEnabled(true);  // the first copy opens the connection
+      } finally {
+        copyButton.disabled = false;
+        render();
+      }
+      if (!status?.running || !status?.token) return;
+    }
     const text = bridgeConnectionSnippet(select.value, status);
     try {
       await navigator.clipboard.writeText(text);
