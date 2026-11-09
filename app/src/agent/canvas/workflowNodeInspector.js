@@ -664,7 +664,7 @@ export function readNodeRows(canvasState, nodeId, options = {}) {
   if (node.type === 'process') {
     const outputs = processOutputsOf(node);
     const names = Object.keys(outputs);
-    if (!names.length) return { title: nodeTitle(node), error: 'The Process has no saved output. Run it with run_nodes (kind: process) or from its detail view first.' };
+    if (!names.length) return { title: nodeTitle(node), error: 'The Process has no saved output. Run it with run_nodes (kind: run_to) or from its detail view first.' };
     if (options.branch && !outputs[options.branch]) return { title: nodeTitle(node), error: `Unknown Process output "${options.branch}". Branches: ${names.join(', ')}.` };
     const branch = options.branch && outputs[options.branch] ? options.branch : names[0];
     const content = normalizeDatasetContent(outputs[branch]);

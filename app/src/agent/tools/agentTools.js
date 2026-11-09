@@ -229,10 +229,12 @@ Sources: pubmed, clinicaltrials, chembl; europepmc (literature with abstracts, i
     RUN_NODES_TOOL,
     `Ask to run jobs that spend model calls or run code. The user sees each job with its row count, model and estimated cost, and starts or cancels them; the result reports what each job produced. Run one stage at a time, then report and ask before the next (for example run, then review, then verify).
 
+To run a Generate or Process, use run_to, also for a single node (resume-node continues only that node; only reruns it from the beginning): run_to runs are listed in the Executions panel like the user's right-click runs. run and process are not listed there; use them only when the user asks for the Run button's behaviour.
+
 Jobs ("kind" plus):
-- run: node (a Generate). Runs the rows it has not processed yet.
+- run: node (a Generate). Runs the rows it has not processed yet, like the Run button in its window. Not listed in Executions; prefer run_to.
 - run_to: node (a Generate or Process), mode? (resume, restart, only, resume-node). resume (default) is Resume pipeline to here: reuse current completed results, continue compatible partial Generate results, and run missing or outdated steps up to this node. If everything is current, nothing runs. restart is Restart pipeline to here: run every required upstream step and the target from the beginning without reusing results or partial progress; keep all old History. only is Run only this node: start this node from the beginning using its current upstream results. resume-node continues only this node's compatible partial results. only_this: true is a legacy alias for mode: only. Fails when required inputs, model, mappings or branches are unavailable. Stops at the target; unrelated branches and its downstream are excluded.
-- process: node (a Process). Runs its saved code and stores its output branches on the node.
+- process: node (a Process). Runs its saved code and stores its output branches on the node. Not listed in Executions; prefer run_to.
 - score: node (an Evaluate node using rules or custom match code). Explicitly runs Evaluate and saves a new immutable History record. Run it again after changing rules, code, ground truth or exclusions before creating Optimize. Each Optimize is permanently bound to the completed Evaluate record it starts from; Verify, Resume and suggestion optimization use that saved evidence.
 - review: score, name?, model?. Adds an Optimize node to that score and runs it. model is the id of a tested model from the workspace summary's Models list, like the picker beside Optimize prompt; it also becomes that Evaluate's Optimize model. Without it the Evaluate's Optimize model or the default Optimize model is used. Ask the user which model to use unless they already said or only one model is tested.
 - resume_review: review. Resumes that existing interrupted Optimize node; does not create another node.
