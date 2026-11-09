@@ -131,7 +131,12 @@ function defaultActions(workspace, { credentialsById, inspectNode }) {
       run: (request, preview, options) => executeRunRequest(request, runWorkspace, { ...options, approvedPreview: preview }),
       pipeline: (request, preview) => executePipelineAction(request, preview, workspace),
       // '': no built-in Agent conversation moves into the new project.
-      project: (request) => executeCreateProject(request, workspace, ''),
+      project: async (request) => {
+        const result = await executeCreateProject(request, workspace, '');
+        return result?.status === 'created'
+          ? { ...result, note: 'The project is open in AnnoBio and empty. Every tool works on it now; call get_workspace to see it.' }
+          : result;
+      },
     },
   };
 }
