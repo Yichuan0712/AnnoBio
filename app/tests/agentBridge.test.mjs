@@ -191,18 +191,17 @@ test('controller persists the switch and token, and round-trips a request throug
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('settings panel: the first copy opens the connection; Disconnect all agents closes it', async () => {
+test('settings panel: only a dropdown and a copy button; the first copy opens the connection', async () => {
   const { externalAgentPanelHtml, mountExternalAgentSettings } = await import('../src/agentBridge/externalAgentSettings.js');
   const html = externalAgentPanelHtml();
   assert.ok(!html.includes('type="checkbox"'), 'no on/off switch');
+  assert.ok(!/Disconnect|Reset token/.test(html), 'no disconnect or reset button');
   assert.match(html, /Copy connection settings/);
-  assert.match(html, /Disconnect all agents/);
-  // A minimal DOM stand-in for the elements the panel wires.
   const make = () => ({ hidden: false, disabled: false, textContent: '', value: 'claude', listeners: {},
     addEventListener(type, fn) { this.listeners[type] = fn; } });
   const els = { '#settings-external-agent-status .settings-agent-model-status__text': make(),
     '#settings-external-agent-client': make(), '#settings-external-agent-copy': make(),
-    '#settings-external-agent-howto': make(), '#settings-external-agent-disconnect': make() };
+    '#settings-external-agent-howto': make() };
   const overlay = { querySelector: (sel) => els[sel] || null };
   let state = { enabled: false, running: false, token: '' };
   const calls = [];
@@ -210,7 +209,7 @@ test('settings panel: the first copy opens the connection; Disconnect all agents
     getAgentBridgeStatus: async () => state,
     setAgentBridgeEnabled: async (on) => {
       calls.push(on);
-      state = on ? { enabled: true, running: true, token: 't', url: 'http://127.0.0.1:47321/mcp' } : { enabled: false, running: false, token: '' };
+      state = { enabled: true, running: true, token: 't', url: 'http://127.0.0.1:47321/mcp' };
       return state;
     },
   };
@@ -218,12 +217,26 @@ test('settings panel: the first copy opens the connection; Disconnect all agents
   Object.defineProperty(globalThis, 'navigator', { value: { clipboard: { writeText: async (t) => { copied.push(t); } } }, configurable: true });
   mountExternalAgentSettings(overlay, api);
   await new Promise((r) => setImmediate(r));
-  assert.equal(els['#settings-external-agent-disconnect'].hidden, true);
   await els['#settings-external-agent-copy'].listeners.click();
-  assert.deepEqual(calls, [true]);
+  await els['#settings-external-agent-copy'].listeners.click();
+  assert.deepEqual(calls, [true]);  // opened once; the second copy only copies
+  assert.equal(copied.length, 2);
   assert.match(copied[0], /^claude mcp add --transport http annobio http:\/\/127\.0\.0\.1:47321\/mcp/);
-  assert.equal(els['#settings-external-agent-disconnect'].hidden, false);
-  await els['#settings-external-agent-disconnect'].listeners.click();
-  assert.deepEqual(calls, [true, false]);
-  assert.equal(els['#settings-external-agent-disconnect'].hidden, true);
+});
+
+test('evaluation metrics with only precision / recall / F1 read cleanly (no undefined or NaN)', async () => {
+  const { formatScoreMetrics } = await import('../src/agent/canvas/scoreComparisonPrf.js');
+  assert.equal(formatScoreMetrics({ precision: 6.6, recall: 50, f1: 11.6 }), 'precision 6.6%, recall 50%, F1 11.6%');
+  assert.equal(formatScoreMetrics({ matchedRows: 3, totalRows: 4, passRate: 0.75 }), '3/4 rows matched (75%)');
+  assert.equal(formatScoreMetrics({}), 'no comparison result yet');
+});
+
+test('the external agent\'s workspace summary leaves out the folder-permission hint', async () => {
+  const { buildWorkspaceSummary } = await import('../src/agent/context/workspaceSummary.js');
+  const options = { projectPath: 'C:/Users/me/p.yc', projectOpen: true, credentialsById: new Map(), defaultRunCredential: null,
+    extractInputFields: () => [], inspectNode: async () => ({}) };
+  const state = { nodes: [], connections: [] };
+  assert.match(await buildWorkspaceSummary(state, options), /request_folder_access/);
+  const external = await buildWorkspaceSummary(state, { ...options, folderAccessTool: false });
+  assert.doesNotMatch(external, /request_folder_access/);
 });

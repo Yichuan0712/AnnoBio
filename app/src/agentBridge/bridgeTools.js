@@ -61,6 +61,7 @@ export function createBridgeToolHost(getWorkspace, { fetchImpl = (...a) => fetch
       pipelineSelections: workspace.getPipelineSelections?.() || [],
       projectOpen: workspace.hasProject?.() !== false,
       projectPath: workspace.getCurrentProjectPath?.() || '',
+      folderAccessTool: false,  // external agents have no request_folder_access
     });
     return {
       getCanvasState: workspace.getCanvasState,

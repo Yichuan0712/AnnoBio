@@ -117,8 +117,7 @@ still uses the models in your credentials.
 3. Open a project in AnnoBio and ask your agent, for example, "use annobio to look at my project".
 
 The connection is local only (`127.0.0.1`) and needs a token that is part of the copied settings; it stays valid
-across restarts. **Disconnect all agents** closes the connection and discards the token; the next copy gives new
-settings to register again. This version can read the project and try Process code; it cannot yet change the canvas
+across restarts, so each agent is added once. This version can read the project and try Process code; it cannot yet change the canvas
 or run nodes.
 
 ## Shortcuts

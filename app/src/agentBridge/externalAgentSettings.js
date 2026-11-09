@@ -1,8 +1,8 @@
 /**
  * Settings > External agent (desktop only): a dropdown picks the coding agent and "Copy connection settings" copies
- * its settings, turning the Local Agent Bridge on the first time. "Disconnect all agents" turns it off and discards
- * the token, so every agent must register again. No other control (user decision 2026-11-08). Changes apply at once
- * (the tab has no Save button). docs/design/LOCAL_AGENT_BRIDGE_DESIGN.md
+ * its settings, turning the Local Agent Bridge on the first time; it then stays on, with the same token, across
+ * restarts. No other control (user decision 2026-11-08: no switch, no reset, no disconnect button). Changes apply at
+ * once (the tab has no Save button). docs/design/LOCAL_AGENT_BRIDGE_DESIGN.md
  */
 
 const STATUS_REFRESH_MS = 2000;
@@ -46,7 +46,6 @@ export function externalAgentPanelHtml() {
                               <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
                                 <select id="settings-external-agent-client" class="credentials-select dataset-meta-input" style="max-width:220px;" aria-label="Coding agent to connect">${options}</select>
                                 <button type="button" class="btn btn-secondary" id="settings-external-agent-copy">Copy connection settings</button>
-                                <button type="button" class="btn btn-secondary" id="settings-external-agent-disconnect" hidden>Disconnect all agents</button>
                               </div>
                               <div class="settings-agent-model-status" id="settings-external-agent-status" aria-live="polite" style="margin-top:6px;">
                                 <span class="settings-agent-model-status__text"></span>
@@ -88,19 +87,15 @@ export function mountExternalAgentSettings(overlay, api = window.electronAPI) {
   const select = overlay.querySelector('#settings-external-agent-client');
   const copyButton = overlay.querySelector('#settings-external-agent-copy');
   const howTo = overlay.querySelector('#settings-external-agent-howto');
-  const disconnectButton = overlay.querySelector('#settings-external-agent-disconnect');
   if (!select || !copyButton || !api?.getAgentBridgeStatus) return;
   let status = null;
 
   function render() {
-    const on = Boolean(status?.enabled && status?.running);
     if (statusText) statusText.textContent = bridgeStatusText(status);
-    if (disconnectButton) disconnectButton.hidden = !on;
     const agent = CODING_AGENTS.find((item) => item.id === select.value) || CODING_AGENTS[0];
     if (howTo) {
       howTo.textContent = `${agent.howTo} Then open a project here and ask your agent, for example, "use annobio to look `
-        + 'at my project". Only programs on this computer with these settings can connect; Disconnect all agents '
-        + 'cuts every agent off, and the next copy gives new settings to register again.';
+        + 'at my project". Only programs on this computer that have these settings can connect.';
     }
   }
 
@@ -113,15 +108,6 @@ export function mountExternalAgentSettings(overlay, api = window.electronAPI) {
     render();
   }
 
-  disconnectButton?.addEventListener('click', async () => {
-    disconnectButton.disabled = true;
-    try {
-      status = await api.setAgentBridgeEnabled(false);
-    } finally {
-      disconnectButton.disabled = false;
-      render();
-    }
-  });
   select.addEventListener('change', render);
   copyButton.addEventListener('click', async () => {
     if (!status?.running || !status?.token) {

@@ -67,9 +67,16 @@ export function mergeScoreMetricsWithPrf(metrics, comparisonRows) {
 /** One line for the Agent, with the precision / recall / F1 of an Evaluate result. */
 export function formatScoreMetrics(metrics) {
   const percent = (value) => `${Math.round(value * 10) / 10}%`;
-  const matched = `${metrics.matchedRows}/${metrics.totalRows} rows matched (${percent(metrics.passRate * 100)})`;
-  if (![metrics.precision, metrics.recall, metrics.f1].every(Number.isFinite)) return matched;
-  return `${matched}; precision ${percent(metrics.precision)}, recall ${percent(metrics.recall)}, F1 ${percent(metrics.f1)}`;
+  const parts = [];
+  // Some results carry only precision / recall / F1 (no row counts); show only what is there.
+  if (Number.isFinite(metrics?.matchedRows) && Number.isFinite(metrics?.totalRows)) {
+    const rate = Number.isFinite(metrics.passRate) ? metrics.passRate : (metrics.totalRows ? metrics.matchedRows / metrics.totalRows : 0);
+    parts.push(`${metrics.matchedRows}/${metrics.totalRows} rows matched (${percent(rate * 100)})`);
+  }
+  if ([metrics?.precision, metrics?.recall, metrics?.f1].every(Number.isFinite)) {
+    parts.push(`precision ${percent(metrics.precision)}, recall ${percent(metrics.recall)}, F1 ${percent(metrics.f1)}`);
+  }
+  return parts.join('; ') || 'no comparison result yet';
 }
 
 /** passRate + row counts + precision / recall / f1 (same bases as inspect / snapshot). */

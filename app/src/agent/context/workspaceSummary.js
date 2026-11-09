@@ -206,13 +206,15 @@ function modelLines(options) {
  * @param {object} canvasState getCanvasState() output
  * @param {{extractInputFields: Function, inspectNode: (id: string) => Promise<object>,
  *   credentialsById: Map, defaultRunCredential: object|null, defaultReviewCredential?: object|null,
- *   selectedNodeIds?: string[], projectOpen?: boolean}} options
+ *   selectedNodeIds?: string[], projectOpen?: boolean, folderAccessTool?: boolean}} options
  *   inspectNode is the canvas's own (it adds live score metrics); projectOpen false (desktop or web
- *   before a project is open) has no canvas to describe, only the models.
+ *   before a project is open) has no canvas to describe, only the models. folderAccessTool false (an external
+ *   coding agent, which has no request_folder_access and reads files itself) leaves out the folder-permission hint.
  */
 export async function buildWorkspaceSummary(canvasState, options = {}) {
+  const folderHint = options.folderAccessTool === false ? '' : ' Reading a path the user has not written needs their permission (request_folder_access).';
   const localProject = options.projectPath && options.projectOpen !== false
-    ? [`Project file: ${options.projectPath} (folder: ${String(options.projectPath).replace(/[/\\][^/\\]*$/, '')}). Reading a path the user has not written needs their permission (request_folder_access).`]
+    ? [`Project file: ${options.projectPath} (folder: ${String(options.projectPath).replace(/[/\\][^/\\]*$/, '')}).${folderHint}`]
     : [];
   const nodes = options.projectOpen === false ? [] : Array.isArray(canvasState?.nodes) ? canvasState.nodes : [];
   const models = modelLines(options);
