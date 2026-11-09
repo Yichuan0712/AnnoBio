@@ -5,6 +5,8 @@
  * (the tab has no Save button). docs/design/LOCAL_AGENT_BRIDGE_DESIGN.md
  */
 
+const STATUS_REFRESH_MS = 2000;
+
 /** Coding agents in the dropdown, in order. Adding one = one entry here. */
 export const CODING_AGENTS = [
   {
@@ -142,5 +144,15 @@ export function mountExternalAgentSettings(overlay, api = window.electronAPI) {
     }
   });
   void refresh();
+  // Keep the status line current (a client connecting, its last request) while this tab is showing; stops once the
+  // Settings window is closed.
+  const panel = overlay.querySelector?.('#settings-panel-external-agent');
+  const timer = setInterval(() => {
+    if (!overlay.isConnected) {
+      clearInterval(timer);
+      return;
+    }
+    if (panel?.classList?.contains('review-detail-tab-panel--active')) void refresh();
+  }, STATUS_REFRESH_MS);
   return { refresh };
 }
