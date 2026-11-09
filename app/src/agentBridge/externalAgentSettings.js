@@ -74,7 +74,7 @@ export function bridgeStatusText(status) {
   if (status.error) return `Could not start: ${status.error}`;
   if (!status.enabled || !status.running) return 'Not connected. Copy connection settings to let a coding agent connect.';
   const last = status.lastTool ? ` Last request: ${status.lastTool}.` : '';
-  const who = status.client ? ` Connected: ${status.client}.` : ' No agent has connected yet.';
+  const who = status.client ? ` Connected: ${status.client}.` : status.lastTool ? ' An agent is connected.' : ' No agent has connected yet.';
   return `On at ${status.url}.${who}${last}`;
 }
 

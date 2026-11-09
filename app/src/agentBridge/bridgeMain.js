@@ -52,6 +52,7 @@ export function createBridgeController({ ipcMain, getWindow, userDataDir, port }
     getToken: () => state.token,
     onActivity: (event) => {
       if (event.client) client = event.client;
+      else if (event.userAgent && !client) client = event.userAgent;
       if (event.tool) {
         lastTool = event.tool;
         lastCallAt = new Date().toISOString();

@@ -146,6 +146,7 @@ test('the dropdown offers Claude Code, Codex and Cursor, each with its own conne
   assert.deepEqual(JSON.parse(s.cursor), { mcpServers: { annobio: { url: 'http://127.0.0.1:47321/mcp', headers: { Authorization: 'Bearer abc' } } } });
   assert.match(bridgeStatusText({ enabled: false, running: false }), /^Not connected/);
   assert.match(bridgeStatusText({ enabled: true, running: true, url: 'u', client: 'codex' }), /codex/);
+  assert.match(bridgeStatusText({ enabled: true, running: true, url: 'u', lastTool: 'read_rows' }), /An agent is connected/);
 });
 
 test('controller persists the switch and token, and round-trips a request through the window', async () => {
@@ -169,9 +170,10 @@ test('controller persists the switch and token, and round-trips a request throug
   assert.equal(on.token.length, 64);
   const saved = JSON.parse(await fs.readFile(path.join(dir, 'agent-bridge.json'), 'utf8'));
   assert.deepEqual(saved, { enabled: true, token: on.token });
-  const call = await request(on.port, { token: on.token, body: { jsonrpc: '2.0', id: 1, method: 'tools/call',
-    params: { name: 'get_workspace', arguments: {} } } });
+  const call = await request(on.port, { token: on.token, headers: { 'User-Agent': 'claude-code/2.0 (cli)' },
+    body: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'get_workspace', arguments: {} } } });
   assert.equal(call.body.result.content[0].text, 'ran get_workspace');
+  assert.equal(controller.status().client, 'claude-code/2.0');  // no initialize: named by its User-Agent
   const off = await controller.setEnabled(false);
   assert.equal(off.running, false);
   assert.equal(off.token, '');  // off discards the token

@@ -115,6 +115,9 @@ export function createBridgeServer({ dispatch, getToken, port = DEFAULT_BRIDGE_P
     if (!sameToken(auth.startsWith('Bearer ') ? auth.slice(7) : '', getToken())) {
       return send(res, 401, { error: 'Missing or wrong token. Copy the connection settings from AnnoBio > Settings > External agent.' });
     }
+    // A client that skipped initialize (or sent no clientInfo) is still named by its User-Agent.
+    const userAgent = String(req.headers['user-agent'] || '').split(' ')[0].slice(0, 80);
+    if (userAgent) onActivity({ userAgent });
     const url = new URL(req.url, `http://127.0.0.1:${boundPort}`);
     if (url.pathname !== '/mcp') return send(res, 404, { error: 'Not found' });
     if (req.method !== 'POST') return send(res, 405, { error: 'Use POST' }, { Allow: 'POST' });
